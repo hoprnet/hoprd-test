@@ -1,0 +1,41 @@
+name: HOPR Test Automation Solution (TAS)
+
+# Controls when the workflow will run
+on:
+  # Triggers the workflow on push events for all the branches
+  push:
+    branches: [ "**" ]
+
+jobs:
+  integration-test-runner:
+    runs-on: ubuntu-latest
+    strategy:
+      # You can use PyPy versions in python-version.
+      # For example, pypy2.7 and pypy3.9
+      matrix:
+        python-version: ["3.8"]
+
+    steps:
+      - uses: actions/checkout@master # THIS IS IMPORTANT
+      - uses: actions/setup-python@v3 # THIS IS IMPORTANT
+        with:
+          python-version: '3.8'
+      - name: Test
+        uses: onichandame/python-test-action@master
+        with:
+          deps_list: 'requirements.txt'
+      - name: Install Dependencies
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install -r requirements.txt
+      - name: Lint with Ruff
+        run: |
+          ruff --format=github --target-version=py38 .
+        continue-on-error: true
+      - name: Show library versions
+        run: |
+          python3 --version
+          pytest --version
+          pip show requests
+      - name: Run Integration Tests
+        run: pytest -v src/test_plans/integration/test_api.py
