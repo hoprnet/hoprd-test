@@ -91,6 +91,7 @@ class AnvilEnvironmentManager:
         """
         Starting the local anvil chain
         """
+        print("run_local_anvil", file=sys.stdout)
         if self.__port_in_use(self.ANVIL_PORT):
             print("Anvil chain already running, skipping...")
         else:
