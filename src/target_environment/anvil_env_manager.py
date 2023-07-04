@@ -1,4 +1,4 @@
-import os
+import os, sys
 import shutil
 import binascii
 import random
@@ -100,10 +100,13 @@ class AnvilEnvironmentManager:
             while True:
                 for line in self.anvil_process.stdout:
                     line_decoded = line.decode("utf-8")
+                    print(line_decoded, file=sys.stdout)
                     if f"Listening on {self.HOST}:{self.ANVIL_PORT}" in line_decoded:
+                        print(f"Anvil chain started successfully @({self.HOST}:{self.ANVIL_PORT})", file=sys.stdout)
                         print(f"Anvil chain started successfully @({self.HOST}:{self.ANVIL_PORT})")
                         break
                 else:
+                    print("Continue...", file=sys.stdout)
                     continue
                 break
 
