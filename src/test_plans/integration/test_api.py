@@ -3,6 +3,16 @@ import time
 import swagger_client
 from swagger_client.api import AccountApi
 from swagger_client.rest import ApiException
+from ...target_environment.anvil_env_manager import AnvilEnvironmentManager
+
+import logging
+
+logging.basicConfig(
+    filename='test.log',
+    filemode='w',
+    level=logging.ERROR,
+    format = '%(asctime)s - %(levelname)s: %(message)s',
+)
 
 """
 Send Messages Test Plan Implementation.
@@ -56,6 +66,9 @@ def validate_balance(node_index: int):
 
 def test_case1():
     """ """
+    anvil_env_manager = AnvilEnvironmentManager()
+    anvil_env_manager.setup_local_nodes(1)
+    logging.critical("looooggg")
     #validate_native_address(1)
     # validate_native_address(2)
     # validate_native_address(3)

@@ -80,12 +80,12 @@ class AnvilEnvironmentManager:
         self.run_local_anvil()
         self.deploy_contracts()
         #self.update_protocol_config_addresses()
-        nodes = self.generate_nodes(count)
+        #nodes = self.generate_nodes(count)
 
-        for index, node in enumerate(nodes):
-            self.setup_node(index + 1, node)
-        self.fund_nodes()
-        return nodes
+        #for index, node in enumerate(nodes):
+        #    self.setup_node(index + 1, node)
+        #self.fund_nodes()
+        #return nodes
 
     def run_local_anvil(self):
         """
@@ -110,9 +110,9 @@ class AnvilEnvironmentManager:
     def deploy_contracts(self):
         """ """
         # command = ["make", "-C", "packages/ethereum/contracts/ anvil-deploy-all"]
-        command1 = [".foundry/bin/cast", "code", "0x1820a4B7618BdE71Dce8cdc73aAB6C95905faD24"]
+        command1 = ["cast", "code", "0x1820a4B7618BdE71Dce8cdc73aAB6C95905faD24"]
         command2 = [
-            ".foundry/bin/cast",
+            "cast",
             "send",
             "0xa990077c3205cbDf861e17Fa532eeB069cE9fF96",
             "--value",
@@ -121,7 +121,7 @@ class AnvilEnvironmentManager:
             "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
         ]
         command3 = [
-            ".foundry/bin/cast",
+            "cast",
             "publish",
             "0xf90a388085174876e800830c35008080b909e560806040523480156100105760008"
             + "0fd5b506109c5806100206000396000f3fe608060405234801561001057600080fd5b"
@@ -202,7 +202,7 @@ class AnvilEnvironmentManager:
         ]
         command4 = [
             "time",
-            "../../../.foundry/bin/forge",
+            "forge",
             "script",
             "--broadcast",
             "script/DeployAll.s.sol:DeployAllContractsScript",
@@ -214,7 +214,7 @@ class AnvilEnvironmentManager:
         print("Executing command: " + str(command3))
         self.deploy_contracts_process = subprocess.run(command3)
         print("Executing command: " + str(command4))
-        self.deploy_contracts_process = subprocess.run(command4, cwd="packages/ethereum/contracts")
+        self.deploy_contracts_process = subprocess.run(command4, cwd="hoprnet/packages/ethereum/contracts")
 
     def update_protocol_config_addresses(self):
         """
@@ -407,4 +407,3 @@ if __name__ == "__main__":
     # nodes_api_as_str = " ".join(list(map(lambda x: f"\"localhost:{x['api_port']}\"", setup_nodes.values())))
     # print(nodes_api_as_str)
     env.setup_local_nodes(1)
-    time.sleep(1000000)
