@@ -397,13 +397,3 @@ class AnvilEnvironmentManager:
         Generic helper method used to set an environment variable within the OS
         """
         os.environ.setdefault(name, value)
-
-
-if __name__ == "__main__":
-    env = AnvilEnvironmentManager()
-    # print(env.generate_private_key())
-    # print(env.generate_peer_id())
-    # setup_nodes = env.generate_nodes(1)
-    # nodes_api_as_str = " ".join(list(map(lambda x: f"\"localhost:{x['api_port']}\"", setup_nodes.values())))
-    # print(nodes_api_as_str)
-    env.setup_local_nodes(1)
