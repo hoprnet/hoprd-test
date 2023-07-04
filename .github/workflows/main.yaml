@@ -1,0 +1,49 @@
+name: HOPR Test Automation Solution (TAS)
+
+on:
+  push:
+    branches: [ "**" ]
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  setup-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          path: "hoprnet"
+          repository: "hoprnet/hoprnet"
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+      - working-directory: "hoprnet/packages/hopli"
+        name: Install Hopli
+        run: |
+          cargo build --release && cargo install --path . && echo $PATH:$PWD/.cargo/bin >> $GITHUB_PATH
+      - name: Show versions
+        run: |
+          hopli --version
+          forge --version
+          anvil --version
+          cast --version
+          chisel --version
+      - uses: actions/checkout@v3
+      - uses: actions/setup-python@v3
+        with:
+          python-version: '3.8'
+      - name: Install dependencies
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install -r requirements.txt
+        continue-on-error: true
+      - name: Run tests
+        uses: onichandame/python-test-action@master
+        with:
+          deps_list: 'requirements.txt'
+      - name: Run integration tests
+        run: pytest -v src/test_plans/integration/test_api.py
