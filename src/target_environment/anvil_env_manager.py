@@ -80,12 +80,12 @@ class AnvilEnvironmentManager:
         self.run_local_anvil()
         self.deploy_contracts()
         #self.update_protocol_config_addresses()
-        #nodes = self.generate_nodes(count)
+        nodes = self.generate_nodes(count)
 
-        #for index, node in enumerate(nodes):
-        #    self.setup_node(index + 1, node)
-        #self.fund_nodes()
-        #return nodes
+        for index, node in enumerate(nodes):
+            self.setup_node(index + 1, node)
+        self.fund_nodes()
+        return nodes
 
     def run_local_anvil(self):
         """
@@ -221,7 +221,7 @@ class AnvilEnvironmentManager:
         print("Executing command: " + str(command3))
         self.deploy_contracts_process = subprocess.run(command3)
         print("Executing command: " + str(command4))
-        self.deploy_contracts_process = subprocess.run(command4, cwd="hoprnet/packages/ethereum/contracts")
+        self.deploy_contracts_process = subprocess.run(command4, cwd="/home/runner/work/hopraf/hopraf/hoprnet/packages/ethereum/contracts")
 
     def update_protocol_config_addresses(self):
         """
@@ -317,7 +317,6 @@ class AnvilEnvironmentManager:
         print("==================== " + str(command))
         time.sleep(10)
         self.funding_nodes = subprocess.call(command)
-        time.sleep(100000)
 
     def generate_nodes(self, count) -> List[Node]:
         """
