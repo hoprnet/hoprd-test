@@ -74,6 +74,7 @@ class AnvilEnvironmentManager:
         Setting up a number of local nodes
         :count: The number of local nodes to setup
         """
+        print("setup_local_nodes " + str(count))
         for port in range(1, count + 1):
             self.__ensure_port_is_free(port)
         self.__ensure_port_is_free(self.ANVIL_PORT)
@@ -262,7 +263,7 @@ class AnvilEnvironmentManager:
         :nodeIndex: The index of the node.
         :node: The node configuration
         """
-        print("node: " + node.api_port + " " + node.p2p_port + " " + node.peer_id + " " + node.private_key, file=sys.stdout)
+        print("node: " + str(node.api_port) + " " + str(node.p2p_port) + " " + node.peer_id + " " + node.private_key, file=sys.stdout)
         dir = f"test-node-{nodeIndex}"
         dir_id = f"test-node-{nodeIndex}.id"
         if not os.path.isdir(dir):
