@@ -51,7 +51,7 @@ jobs:
         working-directory: hopraf
         run: |
           python3 -m pip install --upgrade pip
-          python3 -m pip install -r requirements.txt
+          python3 -m pip install -r /home/runner/work/hopraf/hopraf/hopraf/requirements.txt
         continue-on-error: true
       - name: Run tests
         uses: onichandame/python-test-action@master
