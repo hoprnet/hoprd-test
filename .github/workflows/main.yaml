@@ -43,6 +43,7 @@ jobs:
           anvil --version
           cast --version
           chisel --version
+          ls /home/runner/work/hopraf/hopraf/hoprnet/packages/
       - uses: actions/checkout@v3
         name: Checkout hopraf
         with:
