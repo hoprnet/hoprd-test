@@ -93,11 +93,11 @@ class AnvilEnvironmentManager:
         """
         print("run_local_anvil", file=sys.stdout)
         if self.__port_in_use(self.ANVIL_PORT):
-            print("Anvil chain already running, skipping...")
+            print("Anvil chain already running, skipping...", file=sys.stdout)
         else:
-            print("Start local anvil chain...")
+            print("Start local anvil chain...", file=sys.stdout)
             command = [".foundry/bin/anvil", "--host", self.HOST, "--block-time", "2", "--config-out", ".anvil.cfg"]
-            self.anvil_process = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE)
+            self.anvil_process = subprocess.run(command)
             while True:
                 for line in self.anvil_process.stdout:
                     line_decoded = line.decode("utf-8")
