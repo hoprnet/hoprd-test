@@ -99,21 +99,21 @@ def test_case1():
     """ """
     anvil_env_manager = AnvilEnvironmentManager()
     anvil_env_manager.setup_local_nodes(1)
-    #validate_native_address(1)
+    validate_native_address(1)
     # validate_native_address(2)
     # validate_native_address(3)
     # validate_native_address(4)
     # validate_native_address(5)
 
-    #validate_balance(1)
+    validate_balance(1)
     # validate_balance(2)
     # validate_balance(3)
     # validate_balance(4)
     # validate_balance(5)
 
-    current_balance_native = get_balance(1, Currency.NATIVE)
-    current_balance_hopr = get_balance(1, Currency.HOPR)
-    print("balance: " + current_balance_native + "," + current_balance_hopr, file=sys.stdout)
+    #current_balance_native = get_balance(1, Currency.NATIVE)
+    #current_balance_hopr = get_balance(1, Currency.HOPR)
+    #print("balance: " + current_balance_native + "," + current_balance_hopr, file=sys.stdout)
 
     #withdraw(Currency.NATIVE, 10, '0x858aa354db6ae5ea1217c5018c90403bde94e09e')
     #withdraw(Currency.HOPR, 10, '0x858aa354db6ae5ea1217c5018c90403bde94e09e')

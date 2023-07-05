@@ -276,7 +276,7 @@ class AnvilEnvironmentManager:
             "node",
             "--experimental-wasm-modules",
             "--experimental-wasm-reftypes",
-            "packages/hoprd/lib/main.cjs",
+            "/home/runner/work/hopraf/hopraf/hoprnet/packages/hoprd/lib/main.cjs",
             f'--data="{dir}"',
             f"--host={self.HOST}:{node.p2p_port}",
             f'--identity="{id}"',
