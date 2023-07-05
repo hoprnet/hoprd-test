@@ -262,7 +262,7 @@ class AnvilEnvironmentManager:
         :nodeIndex: The index of the node.
         :node: The node configuration
         """
-        print("node: " + str(node), file=sys.stdout)
+        print("node: " + node.api_port + " " + node.p2p_port + " " + node.peer_id + " " + node.private_key, file=sys.stdout)
         dir = f"test-node-{nodeIndex}"
         dir_id = f"test-node-{nodeIndex}.id"
         if not os.path.isdir(dir):
