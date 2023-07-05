@@ -51,6 +51,8 @@ jobs:
           chisel --version
       - uses: actions/checkout@v3
         name: Checkout hopraf
+        with:
+          path: "hopraf"
       - run: |
           echo $PWD && ls -laht
       - run: |
