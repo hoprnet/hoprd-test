@@ -27,9 +27,10 @@ jobs:
         with:
           node-version: "16"
       - working-directory: "hoprnet/packages/hoprd"
-        name: Install Hoprd
-        run: |
-          yarn clean && yarn build:wasm && tsc -p . && chmod u+x lib/*.js
+        - name: Install Hoprd
+          uses: borales/actions-yarn@v4
+          with:
+            cmd: yarn clean && yarn build:wasm && tsc -p . && chmod u+x lib/*.js
       - working-directory: "hoprnet/packages/hopli"
         name: Install Hopli
         run: |
