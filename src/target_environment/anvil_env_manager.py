@@ -84,7 +84,7 @@ class AnvilEnvironmentManager:
 
         for index, node in enumerate(nodes):
             self.setup_node(index + 1, node)
-        self.fund_nodes()
+        # self.fund_nodes()
         return nodes
 
     def run_local_anvil(self):
@@ -262,7 +262,7 @@ class AnvilEnvironmentManager:
         :nodeIndex: The index of the node.
         :node: The node configuration
         """
-        print("node: " + str(node))
+        print("node: " + str(node), file=sys.stdout)
         dir = f"test-node-{nodeIndex}"
         dir_id = f"test-node-{nodeIndex}.id"
         if not os.path.isdir(dir):
