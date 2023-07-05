@@ -96,7 +96,7 @@ class AnvilEnvironmentManager:
             print("Anvil chain already running, skipping...", file=sys.stdout)
         else:
             print("Start local anvil chain...", file=sys.stdout)
-            command = [".foundry/bin/anvil", "--host", self.HOST, "--block-time", "2", "--config-out", ".anvil.cfg"]
+            command = ["anvil", "--host", self.HOST, "--block-time", "2", "--config-out", ".anvil.cfg"]
             self.anvil_process = subprocess.run(command)
             while True:
                 for line in self.anvil_process.stdout:
