@@ -36,6 +36,7 @@ jobs:
           python-version: '3.8'
       - name: Show versions
         run: |
+          python --version
           node --version
           hopli --version
           forge --version
