@@ -13,6 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
+        name: Checkout hoprnet
         with:
           path: "hoprnet"
           repository: "hoprnet/hoprnet"
@@ -21,21 +22,28 @@ jobs:
           toolchain: stable
       - name: Install Foundry
         uses: foundry-rs/foundry-toolchain@v1
+      - name: Install Node
+        uses: actions/setup-node@v3
+        with:
+          node-version: "16"
       - working-directory: "hoprnet/packages/hopli"
         name: Install Hopli
         run: |
           cargo build --release && cargo install --path . && echo $PATH:$PWD/.cargo/bin >> $GITHUB_PATH
+      - name: Install Python
+        uses: actions/setup-python@v3
+        with:
+          python-version: '3.8'
       - name: Show versions
         run: |
+          node --version
           hopli --version
           forge --version
           anvil --version
           cast --version
           chisel --version
       - uses: actions/checkout@v3
-      - uses: actions/setup-python@v3
-        with:
-          python-version: '3.8'
+        name: Checkout hopraf
       - name: Install dependencies
         run: |
           python3 -m pip install --upgrade pip
