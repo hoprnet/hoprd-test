@@ -17,6 +17,12 @@ jobs:
         with:
           path: "hoprnet"
           repository: "hoprnet/hoprnet"
+      - run: |
+          echo $PWD && ls -laht
+      - run: |
+          ls -laht /home/runner/work/hopraf/hopraf
+      - run: |
+          ls -laht /home/runner/work/hopraf/hopraf/hoprnet/packages/ethereum/contracts
       - uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
