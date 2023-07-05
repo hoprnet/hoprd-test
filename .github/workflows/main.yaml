@@ -17,12 +17,6 @@ jobs:
         with:
           path: "hoprnet"
           repository: "hoprnet/hoprnet"
-      - run: |
-          echo $PWD && ls -laht
-      - run: |
-          ls -laht /home/runner/work/hopraf/hopraf
-      - run: |
-          ls -laht /home/runner/work/hopraf/hopraf/hoprnet/packages/ethereum/contracts
       - uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
@@ -53,13 +47,8 @@ jobs:
         name: Checkout hopraf
         with:
           path: "hopraf"
-      - run: |
-          echo $PWD && ls -laht
-      - run: |
-          ls -laht /home/runner/work/hopraf/hopraf
-      - run: |
-          ls -laht /home/runner/work/hopraf/hopraf/hoprnet/packages/ethereum/contracts
       - name: Install dependencies
+        working-directory: hopraf
         run: |
           python3 -m pip install --upgrade pip
           python3 -m pip install -r requirements.txt
