@@ -97,7 +97,9 @@ class AnvilEnvironmentManager:
         else:
             print("Start local anvil chain...", file=sys.stdout)
             command = ["anvil", "--host", self.HOST, "--block-time", "2", "--config-out", ".anvil.cfg"]
-            self.anvil_process = subprocess.run(command)
+            self.anvil_process = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE)
+            time.sleep(10)
+            """
             while True:
                 for line in self.anvil_process.stdout:
                     line_decoded = line.decode("utf-8")
@@ -110,6 +112,7 @@ class AnvilEnvironmentManager:
                     print("Continue...", file=sys.stdout)
                     continue
                 break
+            """
 
     def deploy_contracts(self):
         """ """
