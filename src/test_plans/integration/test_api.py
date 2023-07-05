@@ -5,14 +5,6 @@ from swagger_client.api import AccountApi
 from swagger_client.rest import ApiException
 from ...target_environment.anvil_env_manager import AnvilEnvironmentManager
 
-import logging
-
-logging.basicConfig(
-    filename='test.log',
-    filemode='w',
-    level=logging.ERROR,
-    format = '%(asctime)s - %(levelname)s: %(message)s',
-)
 
 """
 Send Messages Test Plan Implementation.

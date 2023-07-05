@@ -221,7 +221,7 @@ class AnvilEnvironmentManager:
         print("Executing command: " + str(command3))
         self.deploy_contracts_process = subprocess.run(command3)
         print("Executing command: " + str(command4))
-        self.deploy_contracts_process = subprocess.run(command4, cwd="/home/runner/work/hopraf/hopraf/hoprnet/packages/ethereum/contracts")
+        self.deploy_contracts_process = subprocess.run(command4, cwd="/home/runner/work/hopraf/hopraf/hopraf/hoprnet/packages/ethereum/contracts")
 
     def update_protocol_config_addresses(self):
         """
