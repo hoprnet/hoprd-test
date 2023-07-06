@@ -301,14 +301,7 @@ class AnvilEnvironmentManager:
         # print(command)
         # self.node_process = subprocess.run(command)
         # log = open("log.txt", "w")
-        #self.node_process = subprocess.run(command)
-        self.node_process = subprocess.Popen(command, stdout=subprocess.PIPE, universal_newlines=True)
-        for stdout_line in iter(self.node_process.stdout.readline, ""):
-            yield stdout_line 
-        self.node_process.stdout.close()
-        return_code = self.node_process.wait()
-        if return_code:
-            raise subprocess.CalledProcessError(return_code, command)
+        self.node_process = subprocess.run(command)
 
     def fund_nodes(self):
         """ """
