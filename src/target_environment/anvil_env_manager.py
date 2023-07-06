@@ -81,12 +81,12 @@ class AnvilEnvironmentManager:
         self.run_local_anvil()
         self.deploy_contracts()
         #self.update_protocol_config_addresses()
-        #nodes = self.generate_nodes(count)
+        nodes = self.generate_nodes(count)
 
-        #for index, node in enumerate(nodes):
-        #    self.setup_node(index + 1, node)
+        for index, node in enumerate(nodes):
+            self.setup_node(index + 1, node)
         # self.fund_nodes()
-        #return nodes
+        return nodes
 
     def run_local_anvil(self):
         """
