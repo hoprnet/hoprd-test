@@ -283,7 +283,7 @@ class AnvilEnvironmentManager:
             f'--identity="{id}"',
             "--init",
             f"--password={self.password}",
-            "--privateKey=0x1f5b172a64947589be6e279fbcbc09aca6e623a64a92aa359fae9c6613b7e801",
+            f"--privateKey={node.private_key}",
             "--api",
             "--apiPort",
             f"{node.api_port}",
