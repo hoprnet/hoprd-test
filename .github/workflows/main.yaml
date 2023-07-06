@@ -46,7 +46,7 @@ jobs:
         run: |
           cd hoprnet
           nix develop -c make -j deps-ci
-      - name: Build
+      - name: Build hoprd
         run: |
           cd hoprnet
           nix develop -c make -j build

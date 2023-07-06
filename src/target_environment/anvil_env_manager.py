@@ -355,7 +355,7 @@ class AnvilEnvironmentManager:
         Example: 0xb0c01844be5d5deaf7514592be16594a05522ada5c0e22a24aa8a7ec7bc180b2
         :privateKey: The 64-byte random generated private key
         """
-        hex: bytes = binascii.b2a_hex(os.urandom(32))
+        hex: bytes = binascii.b2a_hex(os.urandom(64))
         privateKey: str = "0x" + hex.decode("utf-8")
         return privateKey
 
