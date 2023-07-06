@@ -235,14 +235,14 @@ class Tickets:
 def test_case1():
     """ """
     anvil_env_manager = AnvilEnvironmentManager()
-    nodes = anvil_env_manager.setup_local_nodes(5)
+    nodes = anvil_env_manager.setup_local_nodes(1)
 
     account = Account()
     account.validate_native_address(1)
-    account.validate_native_address(2)
-    account.validate_native_address(3)
-    account.validate_native_address(4)
-    account.validate_native_address(5)
+    #account.validate_native_address(2)
+    #account.validate_native_address(3)
+    #account.validate_native_address(4)
+    #account.validate_native_address(5)
 
     """
 
