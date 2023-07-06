@@ -41,14 +41,15 @@ jobs:
           python-version: '3.8'
 
       - name: Install Nix
-        working-directory: "hoprnet"
         uses: cachix/install-nix-action@v20
       - name: Install dependencies
-        working-directory: "hoprnet"
-        run: nix develop -c make -j deps-ci
+        run: |
+          cd hoprnet
+          nix develop -c make -j deps-ci
       - name: Build
-        working-directory: "hoprnet"
-        run: nix develop -c make -j build
+        run: |
+          cd hoprnet
+          nix develop -c make -j build
       
       - name: Show versions
         run: |
