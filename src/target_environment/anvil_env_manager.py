@@ -301,7 +301,8 @@ class AnvilEnvironmentManager:
         # print(command)
         # self.node_process = subprocess.run(command)
         # log = open("log.txt", "w")
-        self.node_process = subprocess.run(command)
+        self.node_process = subprocess.Popen(command)
+        time.sleep(10)
 
     def fund_nodes(self):
         """ """
