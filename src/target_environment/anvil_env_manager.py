@@ -308,16 +308,19 @@ class AnvilEnvironmentManager:
         """ """
         node_prefix = "hopr-smoke-test-node"
         command = [
-            "make",
-            "-C",
-            "fund-local-all",
-            f"id_password={password}",
-            f"id_prefix={node_prefix}",
-            f"id_dir=./tmp",
+            "hopli",
+            "faucet",
+		    "--network anvil-localhost",
+		    "--identity-prefix",
+            f"{node_prefix}",
+		    "--identity-directory",
+            "/tmp",
+		    "--contracts-root",
+            "/home/runner/work/hopraf/hopraf/hoprnet/packages/ethereum/contracts"
         ]
         # self.funding_nodes = subprocess.Popen(command)
         print("==================== " + str(command))
-        time.sleep(10)
+        #time.sleep(10)
         self.funding_nodes = subprocess.call(command)
 
     def generate_nodes(self, count) -> List[Node]:

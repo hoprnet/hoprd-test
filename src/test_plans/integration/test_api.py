@@ -235,16 +235,14 @@ class Tickets:
 def test_case1():
     """ """
     anvil_env_manager = AnvilEnvironmentManager()
-    nodes = anvil_env_manager.setup_local_nodes(1)
+    nodes = anvil_env_manager.setup_local_nodes(5)
 
     account = Account()
     account.validate_native_address(1)
-    #account.validate_native_address(2)
-    #account.validate_native_address(3)
-    #account.validate_native_address(4)
-    #account.validate_native_address(5)
-
-    """
+    account.validate_native_address(2)
+    account.validate_native_address(3)
+    account.validate_native_address(4)
+    account.validate_native_address(5)
 
     account.validate_balance(1)
     account.validate_balance(2)
@@ -252,9 +250,14 @@ def test_case1():
     account.validate_balance(4)
     account.validate_balance(5)
 
+    anvil_env_manager.fund_nodes()
+    time.sleep(20)
+
     balance_native = account.get_balance(1, Currency.NATIVE)
     balance_hopr = account.get_balance(1, Currency.HOPR)
     print("balance: " + balance_native + "," + balance_hopr, file=sys.stdout)
+
+    """
     account.withdraw(1, Currency.NATIVE, 10, '0x858aa354db6ae5ea1217c5018c90403bde94e09e')
     account.withdraw(1, Currency.HOPR, 10, '0x858aa354db6ae5ea1217c5018c90403bde94e09e')
     account.check_withdraw(1, Currency.NATIVE, balance_native)
