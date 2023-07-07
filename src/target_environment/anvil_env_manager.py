@@ -322,7 +322,12 @@ class AnvilEnvironmentManager:
         # self.funding_nodes = subprocess.Popen(command)
         print("==================== " + str(command), file=sys.stdout)
         #time.sleep(10)
-        self.funding_nodes = subprocess.call(command)
+        #self.funding_nodes = subprocess.call(command)
+        popen = subprocess.Popen(command, stdout=subprocess.PIPE, universal_newlines=True)
+        for stdout_line in iter(popen.stdout.readline, ""):
+            yield stdout_line
+            print(stdout_line, file=sys.stdout)
+        popen.stdout.close()
 
     def generate_nodes(self, count) -> List[Node]:
         """
