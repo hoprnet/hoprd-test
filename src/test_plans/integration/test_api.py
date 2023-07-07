@@ -257,6 +257,9 @@ def test_case1():
     balance_hopr = account.get_balance(1, Currency.HOPR)
     print("balance: " + balance_native + "," + balance_hopr, file=sys.stdout)
 
+    assert balance_native == "100000000"
+
+
     """
     account.withdraw(1, Currency.NATIVE, 10, '0x858aa354db6ae5ea1217c5018c90403bde94e09e')
     account.withdraw(1, Currency.HOPR, 10, '0x858aa354db6ae5ea1217c5018c90403bde94e09e')
