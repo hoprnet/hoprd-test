@@ -236,6 +236,9 @@ def test_case1():
     """ """
     anvil_env_manager = AnvilEnvironmentManager()
     nodes = anvil_env_manager.setup_local_nodes(5)
+    time.sleep(10)
+    anvil_env_manager.fund_nodes()
+    time.sleep(20)
 
     account = Account()
     account.validate_native_address(1)
@@ -249,9 +252,6 @@ def test_case1():
     account.validate_balance(3)
     account.validate_balance(4)
     account.validate_balance(5)
-
-    anvil_env_manager.fund_nodes()
-    time.sleep(20)
 
     balance_native = account.get_balance(1, Currency.NATIVE)
     balance_hopr = account.get_balance(1, Currency.HOPR)
