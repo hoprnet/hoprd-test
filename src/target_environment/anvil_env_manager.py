@@ -310,7 +310,8 @@ class AnvilEnvironmentManager:
         command = [
             "hopli",
             "faucet",
-		    "--network anvil-localhost",
+		    "--network",
+            "anvil-localhost",
 		    "--identity-prefix",
             f"{node_prefix}",
 		    "--identity-directory",
@@ -319,7 +320,7 @@ class AnvilEnvironmentManager:
             "/home/runner/work/hopraf/hopraf/hoprnet/packages/ethereum/contracts"
         ]
         # self.funding_nodes = subprocess.Popen(command)
-        print("==================== " + str(command))
+        print("==================== " + str(command), file=sys.stdout)
         #time.sleep(10)
         self.funding_nodes = subprocess.call(command)
 
