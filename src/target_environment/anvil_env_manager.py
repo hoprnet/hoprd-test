@@ -308,7 +308,8 @@ class AnvilEnvironmentManager:
         # self.funding_nodes = subprocess.Popen(command)
         print("==================== " + str(command), file=sys.stdout)
         #time.sleep(10)
-        self.capture_subprocess_output(command, "STARTED NODE")
+        self.capture_subprocess_output(command, "Successfully changed working directory")
+        time.sleep(300)
 
     def generate_nodes(self, count) -> List[Node]:
         """
@@ -427,6 +428,7 @@ class AnvilEnvironmentManager:
                 line = key.fileobj.readline()
                 print(line, file=sys.stdout)
                 if wait_message in line:
+                    print("-------------- message found")
                     exit = True
             if exit:
                 break
