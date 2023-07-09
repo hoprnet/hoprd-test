@@ -1,4 +1,4 @@
-import os, sys
+import os, sys, io, selectors
 import shutil
 import binascii
 import random
@@ -98,22 +98,8 @@ class AnvilEnvironmentManager:
         else:
             print("Start local anvil chain...", file=sys.stdout)
             command = ["anvil", "--host", self.HOST, "--block-time", "2", "--config-out", ".anvil.cfg"]
-            self.anvil_process = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE)
-            time.sleep(10)
-            """
-            while True:
-                for line in self.anvil_process.stdout:
-                    line_decoded = line.decode("utf-8")
-                    print(line_decoded, file=sys.stdout)
-                    if f"Listening on {self.HOST}:{self.ANVIL_PORT}" in line_decoded:
-                        print(f"Anvil chain started successfully @({self.HOST}:{self.ANVIL_PORT})", file=sys.stdout)
-                        print(f"Anvil chain started successfully @({self.HOST}:{self.ANVIL_PORT})")
-                        break
-                else:
-                    print("Continue...", file=sys.stdout)
-                    continue
-                break
-            """
+            self.capture_subprocess_output(command, "Listening on 127.0.0.1:8545")
+            print("Local anvil successfully started", file=sys.stdout)
 
     def deploy_contracts(self):
         """ """
@@ -315,19 +301,14 @@ class AnvilEnvironmentManager:
 		    "--identity-prefix",
             f"{node_prefix}",
 		    "--identity-directory",
-            "/tmp",
+            "/tmp/",
 		    "--contracts-root",
             "/home/runner/work/hopraf/hopraf/hoprnet/packages/ethereum/contracts"
         ]
         # self.funding_nodes = subprocess.Popen(command)
         print("==================== " + str(command), file=sys.stdout)
         #time.sleep(10)
-        #self.funding_nodes = subprocess.call(command)
-        popen = subprocess.Popen(command, stdout=subprocess.PIPE, universal_newlines=True)
-        for stdout_line in iter(popen.stdout.readline, ""):
-            yield stdout_line
-            print(stdout_line, file=sys.stdout)
-        popen.stdout.close()
+        self.capture_subprocess_output(command, "STARTED NODE")
 
     def generate_nodes(self, count) -> List[Node]:
         """
@@ -414,3 +395,55 @@ class AnvilEnvironmentManager:
         Generic helper method used to set an environment variable within the OS
         """
         os.environ.setdefault(name, value)
+    
+    def capture_subprocess_output(self, subprocess_args, wait_message: str):
+        # Start subprocess
+        # bufsize = 1 means output is line buffered
+        # universal_newlines = True is required for line buffering
+        process = subprocess.Popen(
+            subprocess_args, bufsize=1, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True
+        )
+
+        # Create callback function for process output
+        buf = io.StringIO()
+
+        def handle_output(stream, mask):
+            # Because the process' output is line buffered, there's only ever one
+            # line to read when this function is called
+            line = stream.readline()
+            buf.write(line)
+            sys.stdout.write(line)
+
+        # Register callback for an "available for read" event from subprocess' stdout stream
+        selector = selectors.DefaultSelector()
+        selector.register(process.stdout, selectors.EVENT_READ, handle_output)
+
+        # Loop until subprocess is terminated
+        while process.poll() is None:
+            # Wait for events and handle them with their registered callbacks
+            events = selector.select()
+            exit = False
+            for key, mask in events:
+                line = key.fileobj.readline()
+                print(line, file=sys.stdout)
+                if wait_message in line:
+                    exit = True
+            if exit:
+                break
+
+        selector.close()
+        # Store buffered output
+        output = buf.getvalue()
+        buf.close()
+
+        return output
+
+if __name__ == "__main__":
+    env = AnvilEnvironmentManager()
+    # print(env.generate_private_key())
+    # print(env.generate_peer_id())
+    # setup_nodes = env.generate_nodes(1)
+    # nodes_api_as_str = " ".join(list(map(lambda x: f"\"localhost:{x['api_port']}\"", setup_nodes.values())))
+    # print(nodes_api_as_str)
+    env.setup_local_nodes(1)
+    time.sleep(1000000)
