@@ -1,4 +1,4 @@
-name: HOPR Test Automation Solution (TAS)
+name: Test
 
 on:
   push:
