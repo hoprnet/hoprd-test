@@ -7,4 +7,4 @@ pytest-asyncio==0.21.0
 waiting==1.4.1
 websockets==11.0.1
 websocket-client==1.5.1
-git+https://github.com/hoprnet/hoprd-api-python@main
+git+https://github.com/hoprnet/hoprd-sdk-python@main
