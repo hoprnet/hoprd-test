@@ -264,9 +264,9 @@ class AnvilEnvironmentManager:
             "--experimental-wasm-modules",
             "--experimental-wasm-reftypes",
             "/home/runner/work/hopraf/hopraf/hoprnet/packages/hoprd/lib/main.cjs",
-            f'--data="{dir}"',
+            f'--data={dir}',
             f"--host={self.HOST}:{node.p2p_port}",
-            f'--identity="{id}"',
+            f'--identity={id}',
             "--init",
             f"--password={self.password}",
             f"--privateKey={node.private_key}",
@@ -290,18 +290,16 @@ class AnvilEnvironmentManager:
         self.node_process = subprocess.Popen(command)
         time.sleep(10)
 
-    def fund_nodes(self):
+    def fund_node(self, node_index: int):
         """ """
-        node_prefix = "hopr-smoke-test-node"
+        id_file = f"test-node-{node_index}.id"
         command = [
             "hopli",
             "faucet",
 		    "--network",
             "anvil-localhost",
-		    "--identity-prefix",
-            f"{node_prefix}",
-		    "--identity-directory",
-            "/tmp/",
+		    "--identity-from-path",
+            f"{id_file}",
 		    "--contracts-root",
             "/home/runner/work/hopraf/hopraf/hoprnet/packages/ethereum/contracts"
         ]
@@ -309,7 +307,7 @@ class AnvilEnvironmentManager:
         print("==================== " + str(command), file=sys.stdout)
         #time.sleep(10)
         self.capture_subprocess_output(command, "Successfully changed working directory")
-        time.sleep(300)
+        time.sleep(100)
 
     def generate_nodes(self, count) -> List[Node]:
         """
