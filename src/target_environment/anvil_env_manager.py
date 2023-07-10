@@ -264,9 +264,9 @@ class AnvilEnvironmentManager:
             "--experimental-wasm-modules",
             "--experimental-wasm-reftypes",
             "/home/runner/work/hopraf/hopraf/hoprnet/packages/hoprd/lib/main.cjs",
-            f'--data={dir}',
+            f'--data="{dir}"',
             f"--host={self.HOST}:{node.p2p_port}",
-            f'--identity={id}',
+            f'--identity="{id}"',
             "--init",
             f"--password={self.password}",
             f"--privateKey={node.private_key}",
@@ -299,7 +299,7 @@ class AnvilEnvironmentManager:
 		    "--network",
             "anvil-localhost",
 		    "--identity-from-path",
-            f"{id_file}",
+            f'"{id_file}"',
 		    "--contracts-root",
             "/home/runner/work/hopraf/hopraf/hoprnet/packages/ethereum/contracts"
         ]
