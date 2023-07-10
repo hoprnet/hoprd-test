@@ -237,7 +237,7 @@ def test_case1():
     anvil_env_manager = AnvilEnvironmentManager()
     nodes = anvil_env_manager.setup_local_nodes(5)
     time.sleep(10)
-    anvil_env_manager.fund_nodes()
+    anvil_env_manager.fund_node(1)
     time.sleep(20)
 
     account = Account()
