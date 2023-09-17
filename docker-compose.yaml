@@ -1,0 +1,54 @@
+---
+version: '3.8'
+
+services:
+  pluto:
+    image: europe-west3-docker.pkg.dev/hoprassociation/docker-images/hopr-pluto:2.0.0-alpha-pr.5219
+    container_name: pluto
+    hostname: pluto
+    ports:
+      - 8545:8545
+      - 13301:13301
+      - 13302:13302
+      - 13303:13303
+      - 13304:13304
+      - 13305:13305
+      - 19091:19091
+      - 19092:19092
+      - 19093:19093
+      - 19094:19094
+      - 19095:19095
+      - 18081:18081
+      - 18082:18082
+      - 18083:18083
+      - 18084:18084
+      - 18085:18085
+    # extra_hosts:
+    #   - 'host.docker.internal:host-gateway'
+    # deploy:
+    #   resources:
+    #     limits:
+    #       memory: 256M
+    # privileged: true
+    volumes:
+      - /tmp/pluto:/tmp
+    expose:
+      - 8545
+      - 13301
+      - 13302
+      - 13303
+      - 13304
+      - 13305
+      - 19091
+      - 19092
+      - 19093
+      - 19094
+      - 19095
+      - 18081
+      - 18082
+      - 18083
+      - 18084
+      - 18085
+    environment:
+      - DEBUG=hopr*
+      - NODE_OPTIONS="--experimental-wasm-modules --experimental-wasm-reftypes"
