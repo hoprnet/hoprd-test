@@ -1,0 +1,1 @@
+{"version":3,"file":"{peerid}.d.ts","sourceRoot":"","sources":["../../../../../src/api/v2/paths/peerInfo/{peerid}.ts"],"names":[],"mappings":"AAAA,OAAO,KAAK,IAAI,MAAM,oBAAoB,CAAA;AAC1C,OAAO,KAAK,EAAE,SAAS,EAAE,MAAM,iBAAiB,CAAA;AAChD,OAAO,KAAK,EAAE,MAAM,EAAE,MAAM,2BAA2B,CAAA;AAIvD,eAAO,MAAM,WAAW,SAAgB,IAAI,UAAU,MAAM;;;EAQ3D,CAAA;AAED,eAAO,MAAM,GAAG,EAAE,SAcjB,CAAA"}

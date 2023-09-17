@@ -1,0 +1,81 @@
+name: Test
+
+on:
+  push:
+    branches: [ "**" ]
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  setup-and-test:
+    #timeout-minutes: 20
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+        name: Checkout hoprnet
+        with:
+          path: "hoprnet"
+          repository: "hoprnet/hoprnet"
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+      - name: Install Node
+        uses: actions/setup-node@v3
+        with:
+          node-version: "16"
+      #- working-directory: "hoprnet/packages/hoprd"
+      #  name: Install Hoprd
+      #  uses: borales/actions-yarn@v4
+      #  with:
+      #    cmd: yarn clean && yarn build:wasm && tsc -p . && chmod u+x lib/*.js
+      - working-directory: "hoprnet/packages/hopli"
+        name: Install Hopli
+        run: |
+          cargo build --release && cargo install --path . && echo $PATH:$PWD/.cargo/bin >> $GITHUB_PATH
+      - name: Install Python
+        uses: actions/setup-python@v3
+        with:
+          python-version: '3.8'
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v20
+      - name: Install dependencies
+        run: |
+          cd hoprnet
+          nix develop -c make -j deps-ci
+      - name: Build hoprd
+        run: |
+          cd hoprnet
+          nix develop -c make -j build
+      
+      - name: Show versions
+        run: |
+          python --version
+          node --version
+          hopli --version
+          forge --version
+          anvil --version
+          cast --version
+          chisel --version
+          ls /home/runner/work/hopraf/hopraf/hoprnet/packages/hoprd/
+      - uses: actions/checkout@v3
+        name: Checkout hopraf
+        with:
+          path: "hopraf"
+      - name: Install dependencies
+        working-directory: hopraf
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install -r requirements.txt
+        continue-on-error: true
+      - name: Run tests
+        uses: onichandame/python-test-action@master
+        with:
+          deps_list: 'hopraf/requirements.txt'
+      - name: Run integration tests
+        working-directory: hopraf
+        run: pytest -v src/test_plans/integration/test_api.py
