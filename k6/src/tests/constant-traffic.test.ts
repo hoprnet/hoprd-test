@@ -79,8 +79,8 @@ export function multipleHopMessage (dataPool: { senders: HoprdNode[], nodes: Hop
   let recipientHoprdNode = dataPool.nodes
     .filter((node: HoprdNode) => node.name != senderHoprdNode.name)
     [recipientLength]
+  console.log(`[VU:${nodeIndex}][Scenario:${execution.scenario.name}] - Sending ${hops} hops message from ${senderHoprdNode.name} [${senderHoprdNode.peerId}] to ${recipientHoprdNode.name} [${recipientHoprdNode.peerId}]`)  
   const messageApi = new MesssagesApi(senderHoprdNode.url, senderHoprdNode.httpParams)
-  console.log(`[VU:${nodeIndex}][Scenario:${execution.scenario.name}] - Sending ${hops} hops message from ${senderHoprdNode.name} [${senderHoprdNode.peerId}] to ${recipientHoprdNode.name} [${recipientHoprdNode.peerId}]`)
   messageApi.sendMessage(JSON.stringify({ tag: nodeIndex, body: randomString(15), peerId: recipientHoprdNode.peerId, hops }), numberOfMessagesSuccessfullySent, numberOfSentMessagesFailed)
 }
 

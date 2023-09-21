@@ -16,7 +16,8 @@
       },
       "exec": "multipleHopMessage",
       "tags": { 
-        "scenario_name": "one_hop"
+        "scenario_name": "one_hop",
+        "testid": "constant-traffic"
       }
     },
     "two_hop": {
@@ -34,7 +35,8 @@
       },
       "exec": "multipleHopMessage",
       "tags": { 
-        "scenario_name": "two_hop"
+        "scenario_name": "two_hop",
+        "testid": "constant-traffic"
       }
     },
     "trhee_hop": {
@@ -52,7 +54,8 @@
       },
       "exec": "multipleHopMessage",
       "tags": { 
-        "scenario_name": "three_hop"
+        "scenario_name": "three_hop",
+        "testid": "constant-traffic"
       }
     }
 

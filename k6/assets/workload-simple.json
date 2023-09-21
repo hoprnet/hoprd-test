@@ -16,7 +16,8 @@
       },
       "exec": "multipleHopMessage",
       "tags": { 
-        "scenario_name": "one_hop"
+        "scenario_name": "one_hop",
+        "testid": "constant-traffic"
       }
     }
   },

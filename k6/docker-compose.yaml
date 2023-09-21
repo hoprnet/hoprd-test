@@ -4,27 +4,6 @@ networks:
   k6:
 
 services:
-  # influxdb:
-  #   image: influxdb:latest
-  #   networks:
-  #     - k6
-  #     - grafana
-  #   ports:
-  #     - "8086:8086"
-  #   environment:
-  #     - INFLUXDB_DB=k6
-  # grafana:
-  #   image: grafana/grafana:latest
-  #   networks:
-  #     - k6
-  #   ports:
-  #     - "3003:3000"
-  #   environment:
-  #     - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
-  #     - GF_AUTH_ANONYMOUS_ENABLED=true
-  #     - GF_AUTH_BASIC_ENABLED=false
-  #   volumes:
-  #     - $PWD/grafana-datasource.yaml:/etc/grafana/provisioning/datasources/datasource.yaml
   pluto:
     image: europe-west3-docker.pkg.dev/hoprassociation/docker-images/hopr-pluto:${HOPRD_DOCKER_IMAGE}
     hostname: pluto
@@ -75,4 +54,3 @@ services:
       - K6_PROMETHEUS_RW_SERVER_URL=https://prometheus.stage.hoprtech.net/api/v1/write
       - K6_PROMETHEUS_RW_TREND_AS_NATIVE_HISTOGRAM=true
       - K6_OUT=xk6-prometheus-rw
-      # - K6_OUT=influxdb=http://influxdb:8086/k6

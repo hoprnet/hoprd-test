@@ -30,5 +30,6 @@ Here are the most useful commands:
 
 ## Building
 
-- `docker build --tag europe-west3-docker.pkg.dev/hoprassociation/docker-images/hoprd-k6:latest .`: Build Docker image
+- `docker build --platform linux/amd64 --tag europe-west3-docker.pkg.dev/hoprassociation/docker-images/hoprd-k6:latest .`: Build Docker image
+- `docker push europe-west3-docker.pkg.dev/hoprassociation/docker-images/hoprd-k6:latest`: Push image
 - `docker run --rm -it -e GOOS=darwin -u "$(id -u):$(id -g)" -v "${PWD}:/xk6" grafana/xk6 build v0.42.0 --with github.com/grafana/xk6-output-prometheus-remote`: Install xK6: https://github.com/grafana/xk6
