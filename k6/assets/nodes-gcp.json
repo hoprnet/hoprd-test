@@ -1,0 +1,66 @@
+{
+  "nodes": [
+    {
+      "name": "rotsee1",
+      "url": "http://34.147.56.22:3001/api/v3",
+      "isSender": "true",
+      "routes": [{
+        "name": "rotsee2"
+      },{
+        "name": "rotsee4"
+      },{
+        "name": "rotsee5"
+      }]
+    },
+    {
+      "name": "rotsee2",
+      "url": "http://34.91.138.30:3001/api/v3",
+      "isSender": "true",
+      "routes": [{
+        "name": "rotsee1"
+      },{
+        "name": "rotsee3"
+      },{
+        "name": "rotsee5"
+      }]
+    },
+    {
+      "name": "rotsee3",
+      "url": "http://34.147.43.65:3001/api/v3",
+      "isSender": "true",
+      "routes": [{
+        "name": "rotsee2"
+      },{
+        "name": "rotsee4"
+      },{
+        "name": "rotsee5"
+      }]
+    },
+    {
+      "name": "rotsee4",
+      "url": "http://34.91.51.33:3001/api/v3",
+      "isSender": "true",
+      "routes": [{
+        "name": "rotsee1"
+      },{
+        "name": "rotsee3"
+      },{
+        "name": "rotsee5"
+      }]
+    },
+    {
+      "name": "rotsee5",
+      "url": "http://34.90.247.241:3001/api/v3",
+      "isSender": "true",
+      "routes": [{
+        "name": "rotsee1"
+      },{
+        "name": "rotsee2"
+      },{
+        "name": "rotsee3"
+      },{
+        "name": "rotsee4"
+      }]
+    }
+  ]
+}

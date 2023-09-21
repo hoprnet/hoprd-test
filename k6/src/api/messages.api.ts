@@ -1,32 +1,37 @@
-import http, { RefinedResponse } from 'k6/http'
-
-import { SendMessageRequest } from './hoprd.types'
-import { HoprNode } from './hoprd.types'
-import { HoprEntityApi } from './hopr-entity-api'
+import http, { RefinedParams, RefinedResponse, ResponseType } from 'k6/http'
+import { check } from 'k6'
+import { Counter } from 'k6/metrics'
 
 /**
- * Wrap actions on hopr messages
+ * Wrap Message API
  */
-export class MesssagesApi extends HoprEntityApi {
-  public constructor(node: HoprNode) {
-    super(node)
-    this.addRequestHeader('entity', 'messages')
+export class MesssagesApi{
+
+  private url: string
+  private httpParams: RefinedParams<ResponseType>
+
+  public constructor(url: string, httpParams: RefinedParams<ResponseType>) {
+    this.url = url
+    this.httpParams = httpParams
   }
 
   /**
    * Invoke API Rest call for sending a message
-   * @returns HTTP response in text mode
    */
-  public sendMessage(messageRequest: SendMessageRequest): RefinedResponse<'text'> {
-    this.addRequestHeader('action', 'messages')
+  public sendMessage(requestPayload: string, successCounter: Counter, failedCounter: Counter): boolean {
     // console.log(`Sending message ${JSON.stringify(messageRequest)}`)
-    const response: RefinedResponse<'text'> = http.post(
-      `${this.node.url}/messages`,
-      JSON.stringify(messageRequest),
-      this.params
+    const messageResponse: RefinedResponse<'text'> = http.post(
+      `${this.url}/messages`, requestPayload,     
+      this.httpParams
     )
 
-    this.sleep(this.node.sleepTime.defaultMin, this.node.sleepTime.defaultMax)
-    return response
+    if (check(messageResponse, { 'Message sent': () => messageResponse.status === 202 })) {
+      successCounter.add(1)
+      return true
+    } else {
+      console.error(`Failed to send message. Details: ${JSON.stringify(messageResponse)}`)
+      failedCounter.add(1,{ request: requestPayload, response: JSON.stringify(messageResponse) });
+      return false
+    }
   }
 }

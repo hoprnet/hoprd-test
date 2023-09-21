@@ -1,53 +1,87 @@
 import { Options } from 'k6/options'
-
-import { HoprNode, Peer } from '../api/hoprd.types'
+import { randomString } from 'https://jslib.k6.io/k6-utils/1.4.0/index.js'
 import execution from 'k6/execution'
-import { ConstantTrafficNode } from './constant-traffic-node'
 import { Counter } from 'k6/metrics'
-import { Addresses } from '../api/hoprd.types'
+import { HoprdNode } from '../types'
+import { MesssagesApi } from '../api'
 
-const environmentName = __ENV.ENVIRONMENT_NAME
-const testData = JSON.parse(open(`./constant-traffic-${environmentName}.json`))
+// 1. Begin Init section
+const environmentName = __ENV.ENVIRONMENT_NAME || 'local'
 
-const hoprNodes = testData.nodes as HoprNode[]
+// Load nodes
+const nodesData = JSON.parse(open(`./nodes-${environmentName}.json`))
+const sendersLength = nodesData.nodes.filter((node: any) => node.isSender != undefined && node.isSender ).length
+
+// Override API Token
+if (__ENV.HOPRD_API_TOKEN) {
+  nodesData.nodes.forEach((node: any) => {
+    node.apiToken = __ENV.HOPRD_API_TOKEN
+  });
+}
 
 // Test Options https://docs.k6.io/docs/options
-export let options: Partial<Options> = {
-  stages: [
-    { target: 1, duration: testData.workload.warmup }, // Warmup stage
-    { target: hoprNodes.length, duration: testData.workload.execution }, // Test execution stage
-    { target: 0, duration: testData.workload.teardown } // Teardown stage
-  ],
-  setupTimeout: '3600000', // Timeout for the setup function
-  // test thresholds https://docs.k6.io/docs/thresholds
-  thresholds: testData.thresholds
+const workloadName = __ENV.WORKLOAD_NAME || 'simple'
+const optionsData = JSON.parse(open(`./workload-${workloadName}.json`))
+let scenario: keyof typeof optionsData.scenarios;
+let scenariosLength = 0;
+for (scenario in optionsData.scenarios) {
+  optionsData.scenarios[scenario].stages[0].target = sendersLength * optionsData.scenarios[scenario].stages[0].target
+  optionsData.scenarios[scenario].stages[1].target = sendersLength * optionsData.scenarios[scenario].stages[1].target
+  optionsData.scenarios[scenario].preAllocatedVUs = sendersLength
+  scenariosLength++
 }
+//console.log(JSON.stringify(optionsData))
+export let options: Partial<Options> = optionsData
+
 
 let numberOfMessagesSuccessfullySent = new Counter('NumberOfMessagesSuccessfullySent')
 let numberOfSentMessagesFailed = new Counter('NumberOfSentMessagesFailed')
 
+// 1. End Init section
+
 // The Setup Function is run once before the Load Test https://docs.k6.io/docs/test-life-cycle
 export function setup() {
-  let peers: { [key: string]: Peer[] } = {}
-  let addresses: { [key: string]: Addresses } = {}
-  hoprNodes.forEach((node: HoprNode) => {
-    const hoprNode = new ConstantTrafficNode(node)
-    hoprNode.checkHealth()
-    peers[node.alias] = hoprNode.getQualityPeers('announced')
-    addresses[node.alias] = hoprNode.addresses
+  const senders: HoprdNode[] = []
+  const nodes: HoprdNode[] = []
+  nodesData.nodes.forEach((node: any) => {
+      let hoprdNode: HoprdNode = new HoprdNode(node)
+      if (hoprdNode.isSender){
+        senders.push(hoprdNode)
+      }
+      nodes.push(hoprdNode)
+  })
+  const getPeerAddressByNodeName = (nodeName: string): string => { return nodes.find((node: HoprdNode) => node.name == nodeName)?.peerAddress || ''}
+  nodes.forEach((node: HoprdNode) => {
+    node.routes.forEach((route: {name: string}) => {
+      const routePeerAddress = getPeerAddressByNodeName(route.name)
+      //let incommingChannels: string[] = node.channels.incoming.map((channel) => channel.peerAddress)
+      //console.log(`Comparing peerId[${peerAddress}] with current incommingChannels[${incommingChannels}]`)
+      const channel = node.channels.incoming.find((channel) => channel.status == 'Open' && channel.peerAddress == routePeerAddress )
+      if (! channel) {
+        console.log(`[Setup] Openning incomming channel from ${node.name} [${node.peerAddress}] to ${route.name} [${routePeerAddress}]`)
+        node.openChannel(routePeerAddress)
+      }
+    })
   })
 
   // anything returned here can be imported into the default function https://docs.k6.io/docs/test-life-cycle
-  return { peers, addresses }
+  return { senders, nodes }
 }
 
 // This function is executed for each iteration
 // default function imports the return data from the setup function https://docs.k6.io/docs/test-life-cycle
-export default (dataPool: { addresses: { [key: string]: Addresses }; peers: { [key: string]: Peer[] } }) => {
-  const hoprNode = new ConstantTrafficNode(hoprNodes[execution.vu.idInInstance - 1], dataPool)
-
-  const hops = Math.floor(Math.random() * 3 + 1)
-  hoprNode.sendHopMessage(hops, numberOfMessagesSuccessfullySent, numberOfSentMessagesFailed)
+export function multipleHopMessage (dataPool: { senders: HoprdNode[], nodes: HoprdNode[]}) {
+  const nodeIndex = Math.ceil(execution.vu.idInInstance / scenariosLength) - 1
+  //console.log(`idInstance: ${execution.vu.idInInstance} having index : ${nodeIndex} from scenario[${execution.scenario.name}]`)
+  const senderHoprdNode = dataPool.senders[nodeIndex]
+  const hops = Number(__ENV.HOPS) || 1
+  let recipientLength = Math.floor(Math.random() * (dataPool.nodes.length -1))
+  let recipientHoprdNode = dataPool.nodes
+    .filter((node: HoprdNode) => node.name != senderHoprdNode.name)
+    [recipientLength]
+  const messageApi = new MesssagesApi(senderHoprdNode.url, senderHoprdNode.httpParams)
+  console.log(`[VU:${nodeIndex}][Scenario:${execution.scenario.name}] - Sending ${hops} hops message from ${senderHoprdNode.name} [${senderHoprdNode.peerId}] to ${recipientHoprdNode.name} [${recipientHoprdNode.peerId}]`)
+  messageApi.sendMessage(JSON.stringify({ tag: nodeIndex, body: randomString(15), peerId: recipientHoprdNode.peerId, hops }), numberOfMessagesSuccessfullySent, numberOfSentMessagesFailed)
 }
 
 export function teardown() {

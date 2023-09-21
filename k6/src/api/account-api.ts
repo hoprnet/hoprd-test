@@ -1,53 +1,52 @@
 import http, { RefinedResponse } from 'k6/http'
 
-import { Addresses, NodeBalance } from './hoprd.types'
-import { HoprNode } from './hoprd.types'
-import { HoprEntityApi } from './hopr-entity-api'
+import { HoprdNode } from '../types/hoprd-node'
+import { fail } from 'k6'
+import { GetAddressesResponseType, GetBalancesResponseType } from '@hoprnet/hopr-sdk'
+
 
 /**
- * Wrap actions on hopr account
+ * Wrap Account API
  */
-export class AccountApi extends HoprEntityApi {
-  public constructor(node: HoprNode) {
-    super(node)
-    this.addRequestHeader('entity', 'account')
+export class AccountApi {
+
+  protected node: HoprdNode
+
+  public constructor(node: HoprdNode) {
+    this.node = node
   }
 
   /**
    * Invoke API Rest call for getting node addresses
-   * @returns HTTP response in text mode
+   * @returns addresses
    */
-  public getAddresses(): RefinedResponse<'text'> {
-    this.addRequestHeader('action', 'addresses')
-
-    const response: RefinedResponse<'text'> = http.get(`${this.node.url}/account/addresses`, this.params)
-
+  public getAddresses(): GetAddressesResponseType  {
+    const response: RefinedResponse<'text'> = http.get(`${this.node.url}/account/addresses`, this.node.httpParams)
     if (response.status === 200) {
-      const addresses: Addresses = JSON.parse(response.body)
-      console.log(`Hopr address for node '${this.node.alias} is' ${addresses.hopr}`)
-      console.log(`Native address for node '${this.node.alias} is' ${addresses.native}`)
-    }
-
-    this.sleep(this.node.sleepTime.defaultMin, this.node.sleepTime.defaultMax)
-    return response
+      const addresses: GetAddressesResponseType = JSON.parse(response.body)
+      //console.log(`Hopr address for node '${this.node.name} is' ${addresses.hopr}`)
+      //console.log(`Native address for node '${this.node.name} is' ${addresses.native}`)
+      return addresses
+    } else {
+      fail(`Unable to get node addresses for '${this.node.name}'`)
+    } 
   }
 
   /**
    * Invoke API Rest call for getting node balance
-   * @returns HTTP response in text mode
+   * @returns balance
    */
-  public getBalance(): RefinedResponse<'text'> {
-    this.addRequestHeader('action', 'balances')
-
-    const response: RefinedResponse<'text'> = http.get(`${this.node.url}/account/balances`, this.params)
-
+  public getBalance(): GetBalancesResponseType {
+    const response: RefinedResponse<'text'> = http.get(`${this.node.url}/account/balances`, this.node.httpParams)
     if (response.status === 200) {
-      const balance: NodeBalance = new NodeBalance(JSON.parse(response.body))
-      console.log(`Hopr balance for node '${this.node.alias} is' ${balance.hopr}`)
-      console.log(`Native balance for node '${this.node.alias} is' ${balance.native}`)
+      const balance: GetBalancesResponseType = JSON.parse(response.body);
+      //console.log(`Hopr balance for node '${this.node.name} is' ${balance.hopr}`)
+      //console.log(`Native balance for node '${this.node.name} is' ${balance.native}`)
+      return balance;
+    } else {
+      console.error(response.body)
+      fail(`Unable to get node balance for '${this.node.name}'`)
     }
-
-    this.sleep(this.node.sleepTime.defaultMin, this.node.sleepTime.defaultMax)
-    return response
   }
+    
 }

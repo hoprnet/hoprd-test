@@ -1,44 +1,32 @@
 import http, { RefinedResponse } from 'k6/http'
 
-import { HoprNode, PeerResponse } from './hoprd.types'
-import { HoprEntityApi } from './hopr-entity-api'
+import { HoprdNode } from '../types/hoprd-node'
+import { fail } from 'k6'
+import { GetInfoResponseType } from '@hoprnet/hopr-sdk'
 
 /**
- * Wrap actions on hopr nodes
+ * Wrap Node API
  */
-export class NodeApi extends HoprEntityApi {
-  public constructor(node: HoprNode) {
-    super(node)
-    this.addRequestHeader('entity', 'node')
+export class NodeApi {
+  protected node: HoprdNode
+
+  public constructor(node: HoprdNode) {
+    this.node = node
   }
 
   /**
    * Invoke API Rest call for getting the current status of the node
-   * @returns HTTP response in text mode
+   * @returns NodeInfo
    */
-  public getInfo(): RefinedResponse<'text'> {
-    this.addRequestHeader('action', 'info')
-
-    const response: RefinedResponse<'text'> = http.get(`${this.node.url}/node/info`, this.params)
-
-    this.sleep(this.node.sleepTime.defaultMin, this.node.sleepTime.defaultMax)
-    return response
-  }
-
-  /**
-   * Invoke API Rest call for getting node peers
-   * @returns HTTP response in text mode
-   */
-  public getPeers(): RefinedResponse<'text'> {
-    this.addRequestHeader('action', 'peers')
-
-    const response: RefinedResponse<'text'> = http.get(`${this.node.url}/node/peers`, this.params)
+  public getInfo(): GetInfoResponseType {
+    const response: RefinedResponse<'text'> = http.get(`${this.node.url}/node/info`, this.node.httpParams)
     if (response.status === 200) {
-      const peersResponse: PeerResponse = JSON.parse(response.body)
-      console.log(`Node ${this.node.alias} got ${peersResponse.announced.length} announced peers`)
+      const nodeInfo: GetInfoResponseType = JSON.parse(response.body)
+      return nodeInfo
+    } else {
+      fail(`Unable to get node info for '${this.node.name}'s`)
     }
-
-    this.sleep(this.node.sleepTime.defaultMin, this.node.sleepTime.defaultMax)
-    return response
+    
   }
+
 }

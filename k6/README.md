@@ -26,3 +26,9 @@ Here are the most useful commands:
 - `npm run cluster:stop`: Stops the local cluster
 - `npm run admin:start`: Starts the Admin UI container
 - `npm run admin:stop`: Stops the Admin UI container
+
+
+## Building
+
+- `docker build --tag europe-west3-docker.pkg.dev/hoprassociation/docker-images/hoprd-k6:latest .`: Build Docker image
+- `docker run --rm -it -e GOOS=darwin -u "$(id -u):$(id -g)" -v "${PWD}:/xk6" grafana/xk6 build v0.42.0 --with github.com/grafana/xk6-output-prometheus-remote`: Install xK6: https://github.com/grafana/xk6
