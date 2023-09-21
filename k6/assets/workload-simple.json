@@ -1,0 +1,30 @@
+
+{
+  "scenarios": {
+    "one_hop": {
+      "executor": "ramping-arrival-rate",
+      "startTime": "0s",
+      "timeUnit": "5s",
+      "stages": [
+        { "target": 1, "duration": "10s" },
+        { "target": 1, "duration": "1m" },
+        { "target": 0, "duration": "10s" }
+      ],
+      "preAllocatedVUs": 1,
+      "env": {
+        "HOPS": "1"
+      },
+      "exec": "multipleHopMessage",
+      "tags": { 
+        "scenario_name": "one_hop"
+      }
+    }
+  },
+  "setupTimeout": "3600000",
+  "thresholds": {
+    "http_req_duration": ["avg<500", "p(95)<1500"],
+    "http_req_failed": ["rate<0.05"],
+    "NumberOfMessagesSuccessfullySent": ["rate<0.96"],
+    "NumberOfSentMessagesFailed": ["count<10"]
+  }
+}
