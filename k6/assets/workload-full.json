@@ -17,7 +17,7 @@
       "exec": "multipleHopMessage",
       "tags": { 
         "scenario_name": "one_hop",
-        "testid": "constant-traffic"
+        "testid": "full-one-hop"
       }
     },
     "two_hop": {
@@ -36,7 +36,7 @@
       "exec": "multipleHopMessage",
       "tags": { 
         "scenario_name": "two_hop",
-        "testid": "constant-traffic"
+        "testid": "full-two-hop"
       }
     },
     "trhee_hop": {
@@ -55,10 +55,9 @@
       "exec": "multipleHopMessage",
       "tags": { 
         "scenario_name": "three_hop",
-        "testid": "constant-traffic"
+        "testid": "full-trhee-hop"
       }
     }
-
   },
   "setupTimeout": "3600000",
   "thresholds": {

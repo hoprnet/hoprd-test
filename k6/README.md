@@ -6,30 +6,41 @@ This package is responsible of creating a set of load testing scenarios to be us
 
 - Generate high peaks of load to test network stability at those circumstances
 - Generate high peaks of load to test hoprd node stability at those circumstances
-- Generate cover traffic on nodes while there is a better cover traffic approach implemented within the hoprd node
 - Generate constant traffic on nodes to test the network and their nodes against long running periods
-
-https://github.com/grafana/xk6-output-prometheus-remote
-https://k6.io/docs/results-output/real-time/prometheus-remote-write/
-https://k6.io/docs/get-started/results-output/
-
-https://github.com/hoprnet/hopr-network-dashboard/blob/main/be-scripts/modules/hopr-sdk.js
 
 # Setup development environment
 
-Here are the most useful commands:
+## Installing xk6
 
-- `yarn install`: Install dependencies
-- `npm run build`: Build source code
-- `npm run cluster:start`: Start local cluster
-- `npm run test`: Execute constant traffic test locally
-- `npm run cluster:stop`: Stops the local cluster
-- `npm run admin:start`: Starts the Admin UI container
-- `npm run admin:stop`: Stops the Admin UI container
+The binary [xk6](https://github.com/grafana/xk6) is used to install a binary named `k6` with certain extensions. Follow the installations guidlelines on how to install locally a `k6` binary bundled with the [xk6-output-prometheus-remote](https://github.com/grafana/xk6-output-prometheus-remote). 
 
+Here is an example to install it in MacOS systems:
+```bash
+docker run --rm -it -e GOOS=darwin -u "$(id -u):$(id -g)" -v "${PWD}:/xk6" grafana/xk6 build v0.42.0 --with github.com/grafana/xk6-output-prometheus-remote
+```
+
+## Target environment
+
+The load testing can be run against a given environment. At this moment we have identified 3 environments:
+- **Local cluster**: The local cluster environment is described in `hoprnet` repository as a development environment to run your own tests. It is not expected to receive too much load, but it is useful as it can be use to develop load testing tests 
+- **Pluto**: The pluto image is a docker packaged distribution of the local cluster, which makes it easier to run for automated tests.
+- **GCP rotsee**: The GCP rotsee environment consists of 10 nodes, not fully interconnected. Each node is running in a different VM and is expected to be used as target environment with more workloads than just developing the load testing.
 
 ## Building
 
-- `docker build --platform linux/amd64 --tag europe-west3-docker.pkg.dev/hoprassociation/docker-images/hoprd-k6:latest .`: Build Docker image
-- `docker push europe-west3-docker.pkg.dev/hoprassociation/docker-images/hoprd-k6:latest`: Push image
-- `docker run --rm -it -e GOOS=darwin -u "$(id -u):$(id -g)" -v "${PWD}:/xk6" grafana/xk6 build v0.42.0 --with github.com/grafana/xk6-output-prometheus-remote`: Install xK6: https://github.com/grafana/xk6
+
+Here are the most useful commands:
+
+- `npm install`: Install Node dependencies
+- `npm run build`: Build source code
+
+
+## Running tests
+
+
+- `npm run cluster:start`: Start local cluster
+- `npm run cluster:stop`: Stops local cluster
+- `npm run test`: Execute constant traffic test using previously started local cluster. Used for development purposes of load testing scenarios
+- `npm run test:pluto`: Executes a docker compose containing pluto and k6 scripts
+- `npm run test:gcp`: Executes constant traffic test against GCP environment
+
