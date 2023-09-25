@@ -35,7 +35,7 @@ Here are the most useful commands:
 - `npm run build`: Build source code
 
 
-## Running tests
+## Running tests
 
 
 - `npm run cluster:start`: Start local cluster
@@ -45,7 +45,7 @@ Here are the most useful commands:
 - `npm run test:gcp`: Executes constant traffic test against GCP environment
 
 
-## Running docker-compose
+## Running docker-compose
 
 
 ```
