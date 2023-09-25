@@ -25,8 +25,11 @@ const optionsData = JSON.parse(open(`./workload-${workloadName}.json`))
 let scenario: keyof typeof optionsData.scenarios;
 let scenariosLength = 0;
 for (scenario in optionsData.scenarios) {
-  optionsData.scenarios[scenario].stages[0].target = sendersLength * optionsData.scenarios[scenario].stages[0].target
-  optionsData.scenarios[scenario].stages[1].target = sendersLength * optionsData.scenarios[scenario].stages[1].target
+  optionsData.scenarios[scenario].stages[0].target = sendersLength * (__ENV.SCENARIO_ITERATIONS || optionsData.scenarios[scenario].stages[0].target)
+  optionsData.scenarios[scenario].stages[1].target = sendersLength * (__ENV.SCENARIO_ITERATIONS || optionsData.scenarios[scenario].stages[1].target)
+  if (__ENV.SCENARIO_DURATION) {
+    optionsData.scenarios[scenario].stages[1].duration = __ENV.SCENARIO_DURATION
+  }
   optionsData.scenarios[scenario].preAllocatedVUs = sendersLength
   scenariosLength++
 }

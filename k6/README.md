@@ -44,3 +44,11 @@ Here are the most useful commands:
 - `npm run test:pluto`: Executes a docker compose containing pluto and k6 scripts
 - `npm run test:gcp`: Executes constant traffic test against GCP environment
 
+
+## Running docker-compose
+
+```
+export DOCKER_DEFAULT_PLATFORM=linux/amd64
+docker-compose down ; docker-compose up 1&> /dev/null &
+
+```

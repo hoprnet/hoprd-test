@@ -5,67 +5,56 @@
       "url": "http://127.0.0.1:13301/api/v3",
       "apiToken": "^^LOCAL-testing-123^^",
       "isSender": "true",
-      "routes": [{
-        "name": "node1"
-      },{
-        "name": "node3"
-      },{
-        "name": "node4"
-      }]
+      "routes": [
+        { "name": "node1" },
+        { "name": "node3" },
+        { "name": "node4" }
+      ]
     },
     {
       "name": "node1",
       "url": "http://127.0.0.1:13302/api/v3",
       "apiToken": "^^LOCAL-testing-123^^",
       "isSender": "true",
-      "routes": [{
-        "name": "node0"
-      },{
-        "name": "node2"
-      },{
-        "name": "node4"
-      }]
+      "routes": [
+        { "name": "node0" },
+        { "name": "node2" },
+        { "name": "node4" }
+      ]
     },
     {
       "name": "node2",
       "url": "http://127.0.0.1:13303/api/v3",
       "apiToken": "^^LOCAL-testing-123^^",
       "isSender": "true",
-      "routes": [{
-        "name": "node1"
-      },{
-        "name": "node3"
-      },{
-        "name": "node4"
-      }]
+      "routes": [
+        { "name": "node1" },
+        { "name": "node3" },
+        { "name": "node4" }
+      ]
     },
     {
       "name": "node3",
       "url": "http://127.0.0.1:13304/api/v3",
       "apiToken": "^^LOCAL-testing-123^^",
       "isSender": "true",
-      "routes": [{
-        "name": "node0"
-      },{
-        "name": "node2"
-      },{
-        "name": "node4"
-      }]
+      "routes": [
+        { "name": "node0" },
+        { "name": "node2" },
+        { "name": "node4" }
+      ]
     },
     {
       "name": "node4",
       "url": "http://127.0.0.1:13305/api/v3",
       "apiToken": "^^LOCAL-testing-123^^",
       "isSender": "true",
-      "routes": [{
-        "name": "node0"
-      },{
-        "name": "node1"
-      },{
-        "name": "node2"
-      },{
-        "name": "node3"
-      }]
+      "routes": [
+        { "name": "node0" },
+        { "name": "node1" },
+        { "name": "node2" },
+        { "name": "node3" }
+      ]
     }
   ]
 }

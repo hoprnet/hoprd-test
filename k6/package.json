@@ -31,11 +31,11 @@
     "build-tsc": "tsc --build tsconfig.json",
     "build": "webpack",
     "isntall:xk6:mac": "docker run --rm -it -e GOOS=darwin -u \"$(id -u):$(id -g)\" -v \"${PWD}:/xk6\" grafana/xk6 build v0.42.0 --with github.com/grafana/xk6-output-prometheus-remote",
-    "cluster:start": "cd ../../hoprnet && ./scripts/setup-local-cluster.sh -i topologies/full_interconnected_cluster.sh",
+    "cluster:start": "cd ../../hoprnet && ./scripts/setup-local-cluster.sh -i topologies/full_interconnected_cluster.sh --listen-host 0.0.0.0",
     "cluster:stop": "pkill -f ./scripts/setup-local-cluster.sh",
     "test": "npm run test:local",
     "test:local": "npm run build && K6_PROMETHEUS_RW_TREND_AS_NATIVE_HISTOGRAM=true K6_OUT=xk6-prometheus-rw K6_PROMETHEUS_RW_SERVER_URL=https://prometheus.prod.hoprtech.net/api/v1/write ./k6 run ./dist/constant-traffic.test.js",
-    "test:pluto": "docker-compose down; docker-compose up",
+    "test:pluto": "docker-compose down; DOCKER_DEFAULT_PLATFORM=linux/amd64 docker-compose up 1&> /dev/null &",
     "test:gcp": "npm run build && ENVIRONMENT_NAME=gcp WORKLOAD_NAME=endurance K6_PROMETHEUS_RW_TREND_AS_NATIVE_HISTOGRAM=true K6_OUT=xk6-prometheus-rw K6_PROMETHEUS_RW_SERVER_URL=https://prometheus.prod.hoprtech.net/api/v1/write ./k6 run ./dist/constant-traffic.test.js"
   },
   "dependencies": {
