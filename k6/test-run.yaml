@@ -1,0 +1,36 @@
+---
+apiVersion: k6.io/v1alpha1
+kind: K6
+metadata:
+  name: k6-hoprd-test
+  namespace: k6-operator-system
+spec:
+  parallelism: 5
+  script:
+    localFile: /app/hoprnet/constant-traffic.test.js
+  runner:
+    image: europe-west3-docker.pkg.dev/hoprassociation/docker-images/hoprd-k6:latest
+    resources:
+      limits:
+        cpu: 400m
+        memory: 1500Mi
+      requests:
+        cpu: 100m
+        memory: 500Mi
+    env:
+      - name: ENVIRONMENT_NAME
+        value: gcp
+      - name: WORKLOAD_NAME
+        value: simple  # simple | full | endurance
+      - name: HOPRD_API_TOKEN
+        valueFrom: 
+          secretKeyRef: 
+            name: hoprd-api-tokens
+            key: PROVIDENCE_HOPRD_API_TOKEN
+      - name: K6_PROMETHEUS_RW_SERVER_URL
+        value: https://prometheus.stage.hoprtech.net/api/v1/write
+      - name: K6_PROMETHEUS_RW_TREND_AS_NATIVE_HISTOGRAM
+        value: 'true'
+      - name: K6_OUT
+        value: xk6-prometheus-rw
+  # arguments: --out cloud

@@ -35,7 +35,7 @@
     "cluster:stop": "pkill -f ./scripts/setup-local-cluster.sh",
     "test": "npm run test:local",
     "test:local": "npm run build && K6_PROMETHEUS_RW_TREND_AS_NATIVE_HISTOGRAM=true K6_OUT=xk6-prometheus-rw K6_PROMETHEUS_RW_SERVER_URL=https://prometheus.prod.hoprtech.net/api/v1/write ./k6 run ./dist/constant-traffic.test.js",
-    "test:pluto": "docker-compose down; DOCKER_DEFAULT_PLATFORM=linux/amd64 docker-compose up 1&> /dev/null &",
+    "test:pluto": "docker-compose down; docker-compose up 1&> /dev/null &",
     "test:gcp": "npm run build && ENVIRONMENT_NAME=gcp WORKLOAD_NAME=endurance K6_PROMETHEUS_RW_TREND_AS_NATIVE_HISTOGRAM=true K6_OUT=xk6-prometheus-rw K6_PROMETHEUS_RW_SERVER_URL=https://prometheus.prod.hoprtech.net/api/v1/write ./k6 run ./dist/constant-traffic.test.js"
   },
   "dependencies": {

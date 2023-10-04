@@ -49,7 +49,6 @@ Here are the most useful commands:
 
 
 ```
-export DOCKER_DEFAULT_PLATFORM=linux/amd64
 docker-compose down ; docker-compose up 1&> /dev/null &
 
 ```

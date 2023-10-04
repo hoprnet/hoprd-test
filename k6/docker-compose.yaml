@@ -7,6 +7,7 @@ services:
   pluto:
     image: europe-west3-docker.pkg.dev/hoprassociation/docker-images/hopr-pluto:${HOPRD_DOCKER_IMAGE}
     hostname: pluto
+    platform: linux/amd64
     container_name: pluto
     pull_policy: always
     mem_reservation: 1g
@@ -27,11 +28,10 @@ services:
       - 13303
       - 13304
       - 13305
-    command: 
-      - --listen-host
-      - 0.0.0.0
+
     environment:
       - HOPRD_API_TOKEN=${HOPRD_API_TOKEN}
+      - HOPRD_HOST=0.0.0.0
   k6:
     image: europe-west3-docker.pkg.dev/hoprassociation/docker-images/hoprd-k6:latest
     hostname: k6
