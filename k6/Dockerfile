@@ -14,7 +14,7 @@ RUN xk6 build --with github.com/grafana/xk6-output-prometheus-remote@latest --ou
 
 FROM grafana/k6:latest
 
-COPY --from=builder /k6 /usr/bin/k6
+COPY --from=xk6 /k6 /usr/bin/k6
 COPY --from=node /app/k6/dist /app/hoprnet
 
 WORKDIR /app/hoprnet
