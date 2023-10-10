@@ -28,7 +28,7 @@ class Node {
 
   // Check balance
   private async checkBalance(): Promise<boolean> {
-    const balance = await this.api.account.getBalances(this.basePayload)
+    const balance = await this.sdk.api.account.getBalances(this.basePayload)
     if ((Number(balance.native) / Math.pow(10, TOKEN_DECIMALS)) < TOKEN_NATIVE_MIN) {
       console.error(`Node '${this.data.name} does not have enough native tokens (current balance is ${balance.native})`)
       return false
@@ -38,7 +38,7 @@ class Node {
 
   private async checkConnectivity(): Promise<boolean>  {
     // Check connectivity
-    const nodeInfo: GetInfoResponseType = await this.api.node.getInfo(this.basePayload)
+    const nodeInfo: GetInfoResponseType = await this.sdk.api.node.getInfo(this.basePayload)
     if (nodeInfo.connectivityStatus !== ConnectivityStatus.Green) {
       console.error(`Node '${this.data.name} does not have high quality connectivity (${nodeInfo.connectivityStatus})`)
       return false
@@ -55,7 +55,7 @@ class Node {
       const channel = this.channels?.incoming.find((channel) => channel.status == 'Open' && channel.peerAddress == routePeerAddress )
       if (! channel) {
         console.log(`[Setup] Openning incomming channel from ${this.data.name} [${this.peerAddress}] to ${route.name} [${routePeerAddress}]`)
-        this.api.channels.openChannel(Object.assign(this.basePayload, {peerAddress: routePeerAddress, amount: "100000000000000000"}))
+        this.sdk.api.channels.openChannel(Object.assign(this.basePayload, {peerAddress: routePeerAddress, amount: "100000000000000000"}))
         .then(newChannel => pendingTransactions.push(newChannel.transactionReceipt))
       }
     })
