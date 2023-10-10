@@ -1,27 +1,27 @@
-import { RefinedParams, ResponseType } from 'k6/http'
+// import { AccountAdapter } from '@hoprnet/hopr-sdk/dist/api/account/adapter'
+import { check, fail } from 'k6'
 import { ConnectivityStatus, TOKEN_DECIMALS, TOKEN_NATIVE_MIN } from '../api/hoprd.types'
 
 import {
   AccountApi,
   ChannelsApi,
-  MesssagesApi,
   NodeApi
 } from '../api/index'
 import { GetAddressesResponseType, GetChannelsResponseType, GetInfoResponseType } from '@hoprnet/hopr-sdk'
-import { check, fail } from 'k6'
-import { Counter } from 'k6/metrics'
+import { RefinedParams } from 'k6/http'
+
 
 export class HoprdNode {
   public name: string
   public url: string
   public apiToken: string
-  public isSender: boolean
-  public peerAddress: string
-  public peerId: string
-  public routes: {name: string}[]
-  public channels: GetChannelsResponseType
+  public isSender?: boolean
+  public peerAddress?: string
+  public peerId?: string
+  public routes?: {name: string}[]
+  public channels?: GetChannelsResponseType
 
-  public httpParams: RefinedParams<ResponseType> = {}
+  // public httpParams: RefinedParams<ResponseType> = {}
 
 
 
@@ -30,34 +30,28 @@ export class HoprdNode {
     this.name = data.name
     this.url = data.url
     this.apiToken = data.apiToken
-    this.isSender = data.isSender || true
-    this.routes = data.routes
 
-    this.httpParams = {
-      headers: {
-        'x-auth-token': this.apiToken,
-        'Content-Type': 'application/json'
-      },
-      tags: {
-        node_name: this.name,
-      }
-    }
-    const addresses: GetAddressesResponseType = (new AccountApi(this)).getAddresses()
-    this.peerAddress = addresses.native
-    this.peerId = addresses.hopr
-    check(this.peerAddress, { 'Node is running' : (peerAddress) => peerAddress != undefined })
-    this.checkHealth()
-    this.channels = (new ChannelsApi(this)).getChannels()
-  }
 
-  private checkHealth() {
-    // Check the node is running by making simple API get query
-    
+    // const account: AccountAdapter = new AccountAdapter({ apiEndpoint: data.url, apiToken: data.apiToken})
 
-    // Check node balance
-    this.checkBalance()
+    // this.isSender = data.isSender || true
+    // this.routes = data.routes
 
-    this.checkConnectivity()
+    // this.httpParams = {
+    //   headers: {
+    //     'x-auth-token': this.apiToken,
+    //     'Content-Type': 'application/json'
+    //   },
+    //   tags: {
+    //     node_name: this.name,
+    //   }
+    // }
+    // const addresses: GetAddressesResponseType = (new AccountApi(this)).getAddresses()
+    // this.peerAddress = addresses.native
+    // this.peerId = addresses.hopr
+    // this.checkBalance()
+    // this.checkConnectivity()
+    // this.channels = (new ChannelsApi(this)).getChannels()
   }
 
 
@@ -84,11 +78,6 @@ export class HoprdNode {
 
   public openChannel(peerAddress: string): void {
     (new ChannelsApi(this)).openChannel(peerAddress, "100000000000000000");
-  }
-
-  public sendHopMessage(hops: number, peerId: string, successCounter: Counter, failedCounter: Counter) {
-    const messageApi = new MesssagesApi(this)
-    messageApi.sendMessage(JSON.stringify({ body: randomString(15), peerId, hops }), successCounter, failedCounter)
   }
 
 }
