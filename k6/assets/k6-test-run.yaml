@@ -2,7 +2,7 @@
 apiVersion: k6.io/v1alpha1
 kind: K6
 metadata:
-  name: k6-hoprd-test
+  name: k6-{{ environmentName }}-{{ workloadName }}
   namespace: k6-operator-system
 spec:
   parallelism: 5
@@ -19,9 +19,11 @@ spec:
         memory: 500Mi
     env:
       - name: ENVIRONMENT_NAME
-        value: gcp
+        value: {{ environmentName }}
       - name: WORKLOAD_NAME
-        value: simple  # simple | full | endurance
+        value: {{ workloadName }}
+      - name: SCENARIO_ITERATIONS
+        value: "{{ iterations }}"
       - name: HOPRD_API_TOKEN
         valueFrom:
           secretKeyRef:
@@ -33,4 +35,3 @@ spec:
         value: 'true'
       - name: K6_OUT
         value: xk6-prometheus-rw
-  # arguments: --out cloud
