@@ -6,7 +6,7 @@
     "moduleResolution": "node",
     "module": "commonjs",
     // Don't emit; allow Babel to transform files.
-    "noEmit": true,
+    "noEmit": false,
     // Process & infer types from .js files.
     "allowJs": true,
     "removeComments": true,
@@ -33,5 +33,5 @@
     "outDir": "dist",
     "skipLibCheck": true
   },
-  "include": ["src"]
+  "include": ["src/typescript"]
 }

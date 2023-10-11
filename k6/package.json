@@ -36,8 +36,10 @@
     "test": "npm run test:local",
     "test:local": "npm run build && K6_PROMETHEUS_RW_TREND_AS_NATIVE_HISTOGRAM=true K6_OUT=xk6-prometheus-rw K6_PROMETHEUS_RW_SERVER_URL=https://prometheus.prod.hoprtech.net/api/v1/write ./k6 run ./dist/constant-traffic.test.js",
     "test:pluto": "docker-compose down; docker-compose up 1&> /dev/null &",
-    "test:gcp": "npm run build && ENVIRONMENT_NAME=gcp WORKLOAD_NAME=simple K6_PROMETHEUS_RW_TREND_AS_NATIVE_HISTOGRAM=true K6_OUT=xk6-prometheus-rw K6_PROMETHEUS_RW_SERVER_URL=https://prometheus.prod.hoprtech.net/api/v1/write ./k6 run ./dist/constant-traffic.test.js",
-    "test:setup": "npm run build && ENVIRONMENT_NAME=gcp node ./dist/setup-environment.test.js"
+    "test:rotsee": "npm run build && ENVIRONMENT_NAME=rotsee WORKLOAD_NAME=simple K6_PROMETHEUS_RW_TREND_AS_NATIVE_HISTOGRAM=true K6_OUT=xk6-prometheus-rw K6_PROMETHEUS_RW_SERVER_URL=https://prometheus.prod.hoprtech.net/api/v1/write ./k6 run ./dist/constant-traffic.test.js",
+    "test:dufour": "npm run build && ENVIRONMENT_NAME=dufour WORKLOAD_NAME=simple K6_PROMETHEUS_RW_TREND_AS_NATIVE_HISTOGRAM=true K6_OUT=xk6-prometheus-rw K6_PROMETHEUS_RW_SERVER_URL=https://prometheus.prod.hoprtech.net/api/v1/write ./k6 run ./dist/constant-traffic.test.js",
+    "test:setup:rotsee": "npm run build-tsc && ENVIRONMENT_NAME=rotsee node ./dist/typescript/setup-environment.js",
+    "test:setup:dufour": "npm run build-tsc && ENVIRONMENT_NAME=dufour node ./dist/typescript/setup-environment.js"
   },
   "dependencies": {
     "@hoprnet/hopr-sdk": "^2.0.0-beta.10"

@@ -24,7 +24,7 @@
   "thresholds": {
     "http_req_duration": ["avg<500", "p(95)<1500"],
     "http_req_failed": ["rate<0.05"],
-    "NumberOfMessagesSuccessfullySent": ["rate<0.96"],
+    "NumberOfMessagesSuccessfullySent": ["rate>0.95"],
     "NumberOfSentMessagesFailed": ["count<10"]
   }
 }
