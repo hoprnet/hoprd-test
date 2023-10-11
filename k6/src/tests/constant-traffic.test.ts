@@ -62,7 +62,7 @@ export function setup() {
 // This function is executed for each iteration
 // default function imports the return data from the setup function https://docs.k6.io/docs/test-life-cycle
 export function multipleHopMessage (dataPool: { senders: HoprdNode[], nodes: HoprdNode[]}) {
-  const nodeIndex = Math.ceil((execution.vu.idInInstance % amountOfSenders) / scenariosLength)
+  const nodeIndex = Math.ceil(execution.vu.idInInstance % (amountOfSenders * scenariosLength))
   // console.log(`idInstance: ${execution.vu.idInInstance} having index : ${nodeIndex} from scenario[${execution.scenario.name}]`)
   const senderHoprdNode = dataPool.senders[nodeIndex]
   const hops = Number(__ENV.HOPS) || 1
