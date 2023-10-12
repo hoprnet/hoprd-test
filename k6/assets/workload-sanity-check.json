@@ -16,7 +16,7 @@
       "exec": "multipleHopMessage",
       "tags": { 
         "scenario_name": "one_hop",
-        "testid": "local"
+        "testid": "sanity-check"
       }
     }
   },

@@ -23,7 +23,7 @@ if (__ENV.HOPRD_API_TOKEN) {
 }
 
 // Test Options https://docs.k6.io/docs/options
-const workloadName = __ENV.WORKLOAD_NAME || 'simple'
+const workloadName = __ENV.WORKLOAD_NAME || 'sanity-check'
 const optionsData = JSON.parse(open(`./workload-${workloadName}.json`))
 let scenario: keyof typeof optionsData.scenarios;
 let scenariosLength = 0;

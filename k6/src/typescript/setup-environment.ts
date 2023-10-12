@@ -27,7 +27,7 @@ const setupEnvironment = async () => {
 
 // Main
 const environmentName = process.env.ENVIRONMENT_NAME || 'rotsee'
-const workloadName = process.env.WORKLOAD_NAME || 'simple'
+const workloadName = process.env.WORKLOAD_NAME || 'sanity-check'
 const iterations = process.env.SCENARIO_ITERATIONS || 1
 const nodesData = JSON.parse(fs.readFileSync(`assets/nodes-${environmentName}.json`).toString())
 const nodes: HoprdNode[]= nodesData.nodes.map((node: any) => new HoprdNode(node));

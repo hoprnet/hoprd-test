@@ -36,8 +36,8 @@
     "test": "npm run test:local",
     "test:local": "npm run build && K6_PROMETHEUS_RW_TREND_AS_NATIVE_HISTOGRAM=true K6_OUT=xk6-prometheus-rw K6_PROMETHEUS_RW_SERVER_URL=https://prometheus.prod.hoprtech.net/api/v1/write ./k6 run ./dist/constant-traffic.test.js",
     "test:pluto": "docker-compose down; docker-compose up 1&> /dev/null &",
-    "test:rotsee": "npm run build && ENVIRONMENT_NAME=rotsee WORKLOAD_NAME=simple K6_PROMETHEUS_RW_TREND_AS_NATIVE_HISTOGRAM=true K6_OUT=xk6-prometheus-rw K6_PROMETHEUS_RW_SERVER_URL=https://prometheus.prod.hoprtech.net/api/v1/write ./k6 run ./dist/constant-traffic.test.js",
-    "test:dufour": "npm run build && ENVIRONMENT_NAME=dufour WORKLOAD_NAME=simple K6_PROMETHEUS_RW_TREND_AS_NATIVE_HISTOGRAM=true K6_OUT=xk6-prometheus-rw K6_PROMETHEUS_RW_SERVER_URL=https://prometheus.prod.hoprtech.net/api/v1/write ./k6 run ./dist/constant-traffic.test.js",
+    "test:rotsee": "npm run build && ENVIRONMENT_NAME=rotsee WORKLOAD_NAME=sanity-check K6_PROMETHEUS_RW_TREND_AS_NATIVE_HISTOGRAM=true K6_OUT=xk6-prometheus-rw K6_PROMETHEUS_RW_SERVER_URL=https://prometheus.prod.hoprtech.net/api/v1/write ./k6 run ./dist/constant-traffic.test.js",
+    "test:dufour": "npm run build && ENVIRONMENT_NAME=dufour WORKLOAD_NAME=sanity-check K6_PROMETHEUS_RW_TREND_AS_NATIVE_HISTOGRAM=true K6_OUT=xk6-prometheus-rw K6_PROMETHEUS_RW_SERVER_URL=https://prometheus.prod.hoprtech.net/api/v1/write ./k6 run ./dist/constant-traffic.test.js",
     "test:rotsee:setup": "npm run build-tsc && ENVIRONMENT_NAME=rotsee node ./dist/setup-environment.js",
     "test:dufour:setup": "npm run build-tsc && ENVIRONMENT_NAME=dufour node ./dist/setup-environment.js"
   },

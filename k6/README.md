@@ -21,10 +21,11 @@ docker run --rm -it -e GOOS=darwin -u "$(id -u):$(id -g)" -v "${PWD}:/xk6" grafa
 
 ## Target environment
 
-The load testing can be run against a given environment. At this moment we have identified 3 environments:
+The load testing can be run against a given environment. At this moment we have identified 4 environments:
 - **Local cluster**: The local cluster environment is described in `hoprnet` repository as a development environment to run your own tests. It is not expected to receive too much load, but it is useful as it can be use to develop load testing tests 
 - **Pluto**: The pluto image is a docker packaged distribution of the local cluster, which makes it easier to run for automated tests.
 - **GCP rotsee**: The GCP rotsee environment consists of 10 nodes, not fully interconnected. Each node is running in a different VM and is expected to be used as target environment with more workloads than just developing the load testing.
+- **Dufour rotsee**: The GCP dufour environment consists of 10 nodes, not fully interconnected. Each node is running in a different VM and is expected to be used as target environment with more workloads than just developing the load testing.
 
 ## Building
 
@@ -32,7 +33,8 @@ The load testing can be run against a given environment. At this moment we have 
 Here are the most useful commands:
 
 - `npm install`: Install Node dependencies
-- `npm run build`: Build source code
+- `npm run build`: Build source code for running tests
+- `npm run build-tsc`: Build source code for setup environment
 
 
 ## Running tests
@@ -42,7 +44,10 @@ Here are the most useful commands:
 - `npm run cluster:stop`: Stops local cluster
 - `npm run test`: Execute constant traffic test using previously started local cluster. Used for development purposes of load testing scenarios
 - `npm run test:pluto`: Executes a docker compose containing pluto and k6 scripts
-- `npm run test:gcp`: Executes constant traffic test against GCP environment
+- `npm run test:rotsee`: Executes constant traffic test against rotsee environment
+- `npm run test:dufour`: Executes constant traffic test against dufour environment
+- `npm run test:rotsee:setup`: Setup the rotsee environment to check nodes healthy and open channels
+- `npm run test:dufour:setup`: Setup the dufour environment to check nodes healthy and open channels
 
 
 ## Running docker-compose
@@ -52,3 +57,16 @@ Here are the most useful commands:
 docker-compose down ; docker-compose up 1&> /dev/null &
 
 ```
+
+## Running remotely
+
+A pipeline has been created to run the load testing remotely using a manual [github workflow](https://github.com/hoprnet/hoprnet/actions/workflows/load-tests.yaml) with these parameters
+
+- Cluster of nodes
+- Type of workload
+- Number of messages per second
+
+
+## Analyse results
+
+A [grafana dashboard](https://grafana.stage.hoprtech.net/d/01npcT44k/k6-test-result?orgId=1) exists to analyse the results in real time 
