@@ -28,6 +28,7 @@ const setupEnvironment = async () => {
 // Main
 const environmentName = process.env.ENVIRONMENT_NAME || 'rotsee'
 const workloadName = process.env.WORKLOAD_NAME || 'sanity-check'
+const testid = process.env.TESTID || 'kubernetes'
 const iterations = process.env.SCENARIO_ITERATIONS || 1
 const nodesData = JSON.parse(fs.readFileSync(`assets/nodes-${environmentName}.json`).toString())
 const nodes: HoprdNode[]= nodesData.nodes.map((node: any) => new HoprdNode(node));
@@ -37,7 +38,7 @@ setupEnvironment().then(() => {
   console.log('[INFO] Environment fully setup')
   const k6TestRunTemplateData = fs.readFileSync(`assets/k6-test-run.yaml`).toString()
   const k6TestRunTemplate = Handlebars.compile(k6TestRunTemplateData);
-  const k6TestRunTemplateParsed = k6TestRunTemplate({ environmentName, workloadName, iterations });
+  const k6TestRunTemplateParsed = k6TestRunTemplate({ environmentName, workloadName, iterations, testid });
   fs.writeFileSync(`./k6-test-run.yaml`, k6TestRunTemplateParsed)
 
 }).catch((err) => console.error(err))

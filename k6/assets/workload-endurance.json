@@ -15,8 +15,7 @@
       },
       "exec": "multipleHopMessage",
       "tags": { 
-        "scenario_name": "one_hop",
-        "testid": "endurance"
+        "scenario": "one_hop"
       }
     }
   },

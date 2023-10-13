@@ -5,9 +5,11 @@ metadata:
   name: k6-{{ environmentName }}-{{ workloadName }}
   namespace: k6-operator-system
 spec:
-  parallelism: 5
+  parallelism: 2
   script:
     localFile: /app/hoprnet/constant-traffic.test.js
+  separate: true
+  arguments: --tag testid={{ testid }}
   runner:
     image: europe-west3-docker.pkg.dev/hoprassociation/docker-images/hoprd-k6:latest
     resources:
