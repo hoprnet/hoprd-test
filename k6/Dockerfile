@@ -3,7 +3,7 @@ FROM node:18-slim as node
 WORKDIR /app/k6
 COPY . .
 RUN npm install \
-  && npm run build
+  && npm run webpack
 
 
 # Build the k6 binary with the extension
