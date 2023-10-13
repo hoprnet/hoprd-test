@@ -32,7 +32,7 @@ spec:
             name: hoprd-api-tokens
             key: PROVIDENCE_HOPRD_API_TOKEN
       - name: K6_PROMETHEUS_RW_SERVER_URL
-        value: https://prometheus.stage.hoprtech.net/api/v1/write
+        value: https://prometheus.prod.hoprtech.net/api/v1/write
       - name: K6_PROMETHEUS_RW_TREND_AS_NATIVE_HISTOGRAM
         value: 'true'
       - name: K6_OUT
