@@ -2,7 +2,7 @@
 apiVersion: k6.io/v1alpha1
 kind: K6
 metadata:
-  name: k6-{{ environmentName }}-{{ workloadName }}
+  name: k6-hoprd-{{ environmentName }}-{{ workloadName }}
   namespace: k6-operator-system
 spec:
   parallelism: 2
@@ -30,9 +30,9 @@ spec:
         valueFrom:
           secretKeyRef:
             name: hoprd-api-tokens
-            key: PROVIDENCE_HOPRD_API_TOKEN
+            key: HOPRD_API_TOKEN
       - name: K6_PROMETHEUS_RW_SERVER_URL
-        value: https://prometheus.prod.hoprtech.net/api/v1/write
+        value: https://prometheus.prod.hoprnet.link/api/v1/write
       - name: K6_PROMETHEUS_RW_TREND_AS_NATIVE_HISTOGRAM
         value: 'true'
       - name: K6_OUT

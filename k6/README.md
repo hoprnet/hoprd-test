@@ -34,8 +34,6 @@ Here are the most useful commands:
 
 - `npm install`: Install Node dependencies
 - `npm run build`: Build source code for running tests
-- `npm run build-tsc`: Build source code for setup environment
-
 
 ## Running tests
 
@@ -69,4 +67,4 @@ A pipeline has been created to run the load testing remotely using a manual [git
 
 ## Analyse results
 
-A [grafana dashboard](https://grafana.stage.hoprtech.net/d/01npcT44k/k6-test-result?orgId=1) exists to analyse the results in real time 
+A [grafana dashboard](https://grafana.staging.hoprnet.link/d/01npcT44k/k6-test-result?orgId=1) exists to analyse the results in real time 

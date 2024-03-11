@@ -54,6 +54,6 @@ services:
       - ENVIRONMENT_NAME=pluto
       - WORKLOAD_NAME=simple
       - HOPRD_API_TOKEN=${HOPRD_API_TOKEN}
-      - K6_PROMETHEUS_RW_SERVER_URL=https://prometheus.prod.hoprtech.net/api/v1/write
+      - K6_PROMETHEUS_RW_SERVER_URL=https://prometheus.prod.hoprnet.link/api/v1/write
       - K6_PROMETHEUS_RW_TREND_AS_NATIVE_HISTOGRAM=true
       - K6_OUT=xk6-prometheus-rw

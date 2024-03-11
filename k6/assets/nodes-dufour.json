@@ -1,130 +1,59 @@
 {
   "nodes": [
     {
-      "name": "dufour-providence-1",
-      "url": "http://34.147.74.27:3001/",
+      "name": "hoprd-core-dufour-1",
+      "url": "https://hoprd-core-dufour-1.core-team.staging.hoprnet.link/",
       "isSender": "true",
       "routes": [
-        { "name": "dufour-providence-2" },
-        { "name": "dufour-providence-4" },
-        { "name": "dufour-providence-5" },
-        { "name": "dufour-providence-7" },
-        { "name": "dufour-providence-8" }
+        { "name": "hoprd-core-dufour-2" },
+        { "name": "hoprd-core-dufour-3" },
+        { "name": "hoprd-core-dufour-4" },
+        { "name": "hoprd-core-dufour-5" }
       ]
     },
     {
-      "name": "dufour-providence-2",
-      "url": "http://34.34.9.219:3001/",
-      "isSender": "false",
+      "name": "hoprd-core-dufour-2",
+      "url": "https://hoprd-core-dufour-2.core-team.staging.hoprnet.link/",
+      "isSender": "true",
       "routes": [
-        { "name": "dufour-providence-1" },
-        { "name": "dufour-providence-3" },
-        { "name": "dufour-providence-5" },
-        { "name": "dufour-providence-9" },
-        { "name": "dufour-providence-10"}
+        { "name": "hoprd-core-dufour-1" },
+        { "name": "hoprd-core-dufour-3" },
+        { "name": "hoprd-core-dufour-4" },
+        { "name": "hoprd-core-dufour-5" }
       ]
     },
     {
-      "name": "dufour-providence-3",
-      "url": "http://34.147.32.115:3001/",
-      "isSender": "false",
+      "name": "hoprd-core-dufour-3",
+      "url": "https://hoprd-core-dufour-3.core-team.staging.hoprnet.link/",
+      "isSender": "true",
       "routes": [
-        { "name": "dufour-providence-2" },
-        { "name": "dufour-providence-4" },
-        { "name": "dufour-providence-5" },
-        { "name": "dufour-providence-6" },
-        { "name": "dufour-providence-10"}
+        { "name": "hoprd-core-dufour-1" },
+        { "name": "hoprd-core-dufour-2" },
+        { "name": "hoprd-core-dufour-4" },
+        { "name": "hoprd-core-dufour-5" }
       ]
     },
     {
-      "name": "dufour-providence-4",
-      "url": "http://34.91.138.237:3001/",
-      "isSender": "false",
+      "name": "hoprd-core-dufour-4",
+      "url": "https://hoprd-core-dufour-4.core-team.staging.hoprnet.link/",
+      "isSender": "true",
       "routes": [
-        { "name": "dufour-providence-1" },
-        { "name": "dufour-providence-3" },
-        { "name": "dufour-providence-5" },
-        { "name": "dufour-providence-5" },
-        { "name": "dufour-providence-8" },
-        { "name": "dufour-providence-9"}
+        { "name": "hoprd-core-dufour-1" },
+        { "name": "hoprd-core-dufour-2" },
+        { "name": "hoprd-core-dufour-3" },
+        { "name": "hoprd-core-dufour-5" }
+
       ]
     },
     {
-      "name": "dufour-providence-5",
-      "url": "http://35.204.57.175:3001/",
-      "isSender": "false",
+      "name": "hoprd-core-dufour-5",
+      "url": "https://hoprd-core-dufour-5.core-team.staging.hoprnet.link/",
+      "isSender": "true",
       "routes": [
-        { "name": "dufour-providence-1" },
-        { "name": "dufour-providence-2" },
-        { "name": "dufour-providence-3" },
-        { "name": "dufour-providence-4" },
-        { "name": "dufour-providence-6" },
-        { "name": "dufour-providence-7"}
-      ]
-    },
-    {
-      "name": "dufour-providence-6",
-      "url": "http://34.32.231.243:3001/",
-      "isSender": "false",
-      "routes": [
-        { "name": "dufour-providence-3" },
-        { "name": "dufour-providence-5" },
-        { "name": "dufour-providence-7" },
-        { "name": "dufour-providence-8" },
-        { "name": "dufour-providence-9" },
-        { "name": "dufour-providence-10"}
-      ]
-    },
-    {
-      "name": "dufour-providence-7",
-      "url": "http://34.147.127.6:3001/",
-      "isSender": "false",
-      "routes": [
-        { "name": "dufour-providence-1" },
-        { "name": "dufour-providence-5" },
-        { "name": "dufour-providence-6" },
-        { "name": "dufour-providence-8" },
-        { "name": "dufour-providence-9" },
-        { "name": "dufour-providence-10"}
-      ]
-    },
-    {
-      "name": "dufour-providence-8",
-      "url": "http://35.204.217.22:3001/",
-      "isSender": "false",
-      "routes": [
-        { "name": "dufour-providence-1" },
-        { "name": "dufour-providence-4" },
-        { "name": "dufour-providence-6" },
-        { "name": "dufour-providence-5" },
-        { "name": "dufour-providence-9" },
-        { "name": "dufour-providence-10"}
-      ]
-    },
-    {
-      "name": "dufour-providence-9",
-      "url": "http://34.91.7.124:3001/",
-      "isSender": "false",
-      "routes": [
-        { "name": "dufour-providence-2" },
-        { "name": "dufour-providence-4" },
-        { "name": "dufour-providence-6" },
-        { "name": "dufour-providence-7" },
-        { "name": "dufour-providence-8" },
-        { "name": "dufour-providence-10"}
-      ]
-    },
-    {
-      "name": "dufour-providence-10",
-      "url": "http://34.147.66.185:3001/",
-      "isSender": "false",
-      "routes": [
-        { "name": "dufour-providence-2" },
-        { "name": "dufour-providence-3" },
-        { "name": "dufour-providence-6" },
-        { "name": "dufour-providence-7" },
-        { "name": "dufour-providence-8" },
-        { "name": "dufour-providence-9"}
+        { "name": "hoprd-core-dufour-1" },
+        { "name": "hoprd-core-dufour-2" },
+        { "name": "hoprd-core-dufour-3" },
+        { "name": "hoprd-core-dufour-4" }
       ]
     }
   ]
