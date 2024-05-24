@@ -5,20 +5,22 @@ metadata:
   name: k6-hoprd-{{ environmentName }}-{{ workloadName }}
   namespace: k6-operator-system
 spec:
-  parallelism: 2
+  parallelism: 1
   script:
     localFile: /app/hoprnet/constant-traffic.test.js
   separate: true
-  arguments: --tag testid={{ testid }}
+  arguments: --tag testid={{ testid }} --summary-export=/test-results/k6/test-execution-$(date +%Y%m%d-%H%M%S).json
   runner:
     image: europe-west3-docker.pkg.dev/hoprassociation/docker-images/hoprd-k6:latest
+    securityContext:
+      runAsUser: 0
     resources:
       limits:
-        cpu: 400m
-        memory: 1500Mi
+        cpu: 2
+        memory: 2Gi
       requests:
-        cpu: 100m
-        memory: 500Mi
+        cpu: 2
+        memory: 2Gi
     env:
       - name: ENVIRONMENT_NAME
         value: {{ environmentName }}
@@ -26,14 +28,25 @@ spec:
         value: {{ workloadName }}
       - name: SCENARIO_ITERATIONS
         value: "{{ iterations }}"
+      - name: SCENARIO_DURATION
+        value: "{{ duration }}"
+      - name: HOPRD_NODE_THREADS
+        value: "{{ hoprdNodeThreads }}"
       - name: HOPRD_API_TOKEN
         valueFrom:
           secretKeyRef:
             name: hoprd-api-tokens
             key: HOPRD_API_TOKEN
       - name: K6_PROMETHEUS_RW_SERVER_URL
-        value: https://prometheus.prod.hoprnet.link/api/v1/write
+        value: http://kube-prometheus-stack-prometheus.monitoring.svc:9090/api/v1/write
       - name: K6_PROMETHEUS_RW_TREND_AS_NATIVE_HISTOGRAM
         value: 'true'
       - name: K6_OUT
         value: xk6-prometheus-rw
+    volumes:
+      - name: test-results
+        persistentVolumeClaim:
+          claimName: test-results
+    volumeMounts:
+      - name: test-results
+        mountPath: /test-results/k6

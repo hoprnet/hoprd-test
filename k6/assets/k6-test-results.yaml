@@ -1,0 +1,47 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: k6-test-results-{{ environmentName }}-{{ workloadName }}
+  namespace: k6-operator-system
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      initContainers:
+      - name: parse-results
+        image: node:18
+        command: ["/bin/sh","-c"]
+        args:
+        - |
+          cd /test-results/k6/
+          ls -al
+          # sleep 1h
+          json_file=$(ls -1 test-execution-*.json | sort -r | head -1)
+          find . -type f  -name "test-execution-*.json" | grep -v ${json_file} | xargs rm 2> /dev/null
+          npm install handlebars
+          curl -s https://raw.githubusercontent.com/hoprnet/hoprd-test/main/k6/parse-results.js -o /test-results/k6/parse-results.js
+          node /test-results/k6/parse-results.js ${json_file} {{ environmentName }} {{ workloadName }} {{ iterations }} {{ testid }} {{ duration}}
+        volumeMounts:
+          - name: test-results
+            mountPath: /test-results/k6
+      containers:
+      - name: publish-results
+        image: gcr.io/google.com/cloudsdktool/google-cloud-cli:475.0.0
+        command: ["/bin/bash","-c"]
+        args:
+        - |
+          # Upload files to GCP Bucket
+          gsutil cp /test-results/k6/test-execution-*.json gs://hoprnet-k6-staging/core-team/
+          gsutil cp /test-results/k6/test-execution-*.html gs://hoprnet-k6-staging/core-team/
+          set -x
+          rm /test-results/k6/test-execution-*
+
+        volumeMounts:
+          - name: test-results
+            mountPath: /test-results/k6
+      restartPolicy: Never
+      serviceAccountName: k6-test-runner
+      volumes:
+        - name: test-results
+          persistentVolumeClaim:
+            claimName: test-results

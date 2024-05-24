@@ -1,0 +1,21 @@
+{
+  "nodes": [
+    {
+      "name": "hoprd-andrius",
+      "url": "http:/<PUBLIC_IP>/:3001/",
+      "isSender": "true",
+      "routes": [
+        { "name": "hoprd-ausias" }
+
+      ]
+    },
+    {
+      "name": "hoprd-ausias",
+      "url": "http://85.49.63.139:3009/",
+      "isSender": "true",
+      "routes": [
+        { "name": "hoprd-andrius" }
+      ]
+    }
+  ]
+}
