@@ -9,7 +9,7 @@
         { "name": "node1" },
         { "name": "node3" },
         { "name": "node4" }
-     ]
+      ]
     },
     {
       "name": "node1",
@@ -20,7 +20,7 @@
         { "name": "node0" },
         { "name": "node2" },
         { "name": "node4" }
-     ]
+      ]
     },
     {
       "name": "node2",
@@ -31,7 +31,7 @@
         { "name": "node1" },
         { "name": "node3" },
         { "name": "node4" }
-     ]
+      ]
     },
     {
       "name": "node3",
@@ -42,7 +42,7 @@
         { "name": "node0" },
         { "name": "node2" },
         { "name": "node4" }
-     ]
+      ]
     },
     {
       "name": "node4",
@@ -54,7 +54,7 @@
         { "name": "node1" },
         { "name": "node2" },
         { "name": "node3" }
-     ]
+      ]
     }
   ]
 }

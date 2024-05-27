@@ -1,5 +1,4 @@
 import { Options } from 'k6/options'
-import { randomString } from 'https://jslib.k6.io/k6-utils/1.4.0/index.js'
 import execution from 'k6/execution'
 import { Counter, Trend } from 'k6/metrics'
 import http, { RefinedParams, RefinedResponse, ResponseType } from 'k6/http'
@@ -86,7 +85,7 @@ export function multipleHopMessage(dataPool: { senders: HoprdNode[], nodes: Hopr
   }
   let pathNames = nodesPath.map((node: HoprdNode) => node.name).join(' -> ');
   let pathPeerIds = nodesPath.map((node: HoprdNode) => node.peerId);
-  let body = randomString(PACKET_PAYLOAD_SIZE);
+  let body = new Array(PACKET_PAYLOAD_SIZE).join().replace(/(.|$)/g, function(){return ((Math.random()*36)|0).toString(36)[Math.random()<.5?"toString":"toUpperCase"]();});
 
   console.log(`[VU:${execution.vu.idInInstance}] - Sending ${hops} hops message ${senderHoprdNode.name} (source) -> [${pathNames}] -> ${senderHoprdNode.name} (destination)`)
   let tags = {name: senderHoprdNode.name, hops: hops, path: pathNames}

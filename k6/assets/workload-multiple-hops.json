@@ -36,7 +36,7 @@
         "scenario_name": "two_hop"
       }
     },
-    "trhee_hop": {
+    "three_hop": {
       "executor": "ramping-arrival-rate",
       "startTime": "2m",
       "timeUnit": "1s",
