@@ -44,7 +44,8 @@
     "test:dufour": "npm run webpack && ENVIRONMENT_NAME=dufour K6_PROMETHEUS_RW_TREND_AS_NATIVE_HISTOGRAM=true K6_OUT=xk6-prometheus-rw K6_PROMETHEUS_RW_SERVER_URL=https://prometheus.staging.hoprnet.link/api/v1/write ./k6 run --summary-export=test-execution-local.json --tag testid=local ./dist/constant-traffic.test.js",
     "test:rotsee:setup": "npm run build && ENVIRONMENT_NAME=rotsee node ./dist/setup-environment.js",
     "test:team:setup": "npm run build && ENVIRONMENT_NAME=team node ./dist/setup-environment.js",
-    "test:dufour:setup": "npm run build && ENVIRONMENT_NAME=dufour node ./dist/setup-environment.js"
+    "test:dufour:setup": "npm run build && ENVIRONMENT_NAME=dufour node ./dist/setup-environment.js",
+    "parse:results": "node parse-results.js test-execution-20240522-113543.json rotsee sanity-check 1 test-2.1.0 30"
   },
   "dependencies": {
     "@hoprnet/hopr-sdk": "^2.1.0-beta.18",

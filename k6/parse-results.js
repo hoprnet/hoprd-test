@@ -67,7 +67,7 @@ const template = `
     {{#each metrics}}
       <tr style="border: 1px solid black;">
         {{#each ../keys}}
-        <td style="border: 1px solid black; padding: 10px; {{#if @first}}width: 400px;{{/if}}">{{lookup ../this this}}</td>
+        <td style="border: 1px solid black; padding: 10px; {{#if @first}}width: 400px;{{/if}}">{{{lookup ../this this}}}</td>
         {{/each}}
       </tr>
     {{/each}}
