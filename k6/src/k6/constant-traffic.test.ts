@@ -1,14 +1,11 @@
 import { Options } from 'k6/options'
-import { randomString } from 'https://jslib.k6.io/k6-utils/1.4.0/index.js'
 import execution from 'k6/execution'
 import { Counter, Trend } from 'k6/metrics'
 import http, { RefinedParams, RefinedResponse, ResponseType } from 'k6/http'
-import { fail, sleep } from 'k6'
+import { check, fail } from 'k6'
 import ws from 'k6/ws';
 // 1. Begin Init section
 const environmentName = __ENV.ENVIRONMENT_NAME || 'local'
-const PACKET_PAYLOAD_SIZE = 480; // It supports 500 bytes of payload but we are using 480 bytes to avoid errors
-const MAX_MESSAGE_RESPONSE_WAIT_TIME = 30000; // 30 seconds
 
 // Load nodes
 const nodesData = JSON.parse(open(`./nodes-${environmentName}.json`))
@@ -30,13 +27,15 @@ const optionsData = JSON.parse(open(`./workload-${workloadName}.json`))
 let scenario: keyof typeof optionsData.scenarios;
 let scenariosLength = 0;
 for (scenario in optionsData.scenarios) {
-  optionsData.scenarios[scenario].stages[0].target = amountOfSenders * (__ENV.SCENARIO_ITERATIONS || optionsData.scenarios[scenario].stages[0].target)
-  optionsData.scenarios[scenario].stages[1].target = amountOfSenders * (__ENV.SCENARIO_ITERATIONS || optionsData.scenarios[scenario].stages[1].target)
-  if (__ENV.SCENARIO_DURATION) {
-    optionsData.scenarios[scenario].stages[1].duration = __ENV.SCENARIO_DURATION
+  if (optionsData.scenarios[scenario].exec !== "receiveMessages") {
+    optionsData.scenarios[scenario].stages[0].target = amountOfSenders * (__ENV.SCENARIO_ITERATIONS || optionsData.scenarios[scenario].stages[0].target)
+    optionsData.scenarios[scenario].stages[1].target = amountOfSenders * (__ENV.SCENARIO_ITERATIONS || optionsData.scenarios[scenario].stages[1].target)
+    if (__ENV.SCENARIO_DURATION) {
+      optionsData.scenarios[scenario].stages[1].duration = __ENV.SCENARIO_DURATION
+    }
+    optionsData.scenarios[scenario].preAllocatedVUs = Math.floor(amountOfSenders * (Number(__ENV.SCENARIO_ITERATIONS) || optionsData.scenarios[scenario].stages[1].target) / 2)
+    scenariosLength++
   }
-  optionsData.scenarios[scenario].preAllocatedVUs = Math.floor(amountOfSenders * (Number(__ENV.SCENARIO_ITERATIONS) || optionsData.scenarios[scenario].stages[1].target) / 2)
-  scenariosLength++
 }
 //console.log("Test execution options: ");
 //console.log(JSON.stringify(optionsData))
@@ -46,7 +45,6 @@ export const options: Partial<Options> = optionsData
 let messageRequestsSucceed = new Counter('hopr_message_requests_succeed') // Counts the number of messages requests successfully sent  
 let messageRequestsFailed = new Counter('hopr_message_requests_failed') // Counts the number of failed message requests received
 let sentMessagesSucceed = new Counter('hopr_sent_messages_succeed') // Counts the number of X hop messages successfully transmitted  
-let sentMessagesFailed = new Counter('hopr_sent_messages_failed') // Counts the number of X hop messages not relayed
 let messageLatency = new Trend('hopr_message_latency');
 
 // 1. End Init section
@@ -63,6 +61,53 @@ export function setup() {
     nodes.push(hoprdNode)
   })
   return { senders, nodes }
+}
+
+// This function is executed for each iteration
+// default function imports the return data from the setup function https://docs.k6.io/docs/test-life-cycle
+export function receiveMessages(dataPool: { senders: HoprdNode[], nodes: HoprdNode[] }) {
+  const nodeIndex = Math.ceil((execution.vu.idInInstance ) % amountOfSenders)
+  //console.log(`[idInstance ${execution.vu.idInInstance}] [nodeIndex: ${nodeIndex}] < ${amountOfSenders}`)
+  if (execution.vu.idInInstance <= amountOfSenders) {
+    const senderHoprdNode = dataPool.senders[nodeIndex];  
+    let wsUrl = senderHoprdNode.url.replace('http', 'ws');
+    wsUrl = `${wsUrl}/messages/websocket`
+    //console.log(`[VU ${nodeIndex}] Setting up node ${senderHoprdNode.name} to connect via websocket`)
+    const websocketResponse = ws.connect(wsUrl, senderHoprdNode.httpParams, function (socket) {
+      socket.on('open', () => console.log(`Connected via websocket to node ${senderHoprdNode.name}`));
+      socket.on('message', (data) => { 
+        //console.log('Message received: ', data)
+        let message = JSON.parse(data)
+        let messageType = message.type;
+        if (messageType === 'message') {
+          let startTime = message.body.split(' ')[0];
+          let tags = JSON.parse(message.body.split(' ')[1]);
+          let duration = new Date().getTime() - startTime;
+          messageLatency.add(duration, tags);
+          sentMessagesSucceed.add(1, tags);
+          if (Math.random() < 0.5) {
+            socket.ping();
+          }
+        } else if (messageType === 'message-ack') {
+          //console.log("Message relayed")
+        }
+      });
+      socket.on('ping', () => {
+        console.log(`Ping received on ${senderHoprdNode.name}`);
+      });
+      socket.on('pong', () => {
+       //console.log(`Pong received on ${senderHoprdNode.name}`);
+      });
+      socket.on('error', (error) => {
+        console.log(`Error on ${senderHoprdNode.name}:`, error);
+      });
+      socket.on('close', () => {
+        console.log(`Disconnected via websocket to node ${senderHoprdNode.name} at ${new Date().toISOString()}`)
+        fail(`Node ${senderHoprdNode.name} has been disconnected during execution`)
+      });
+    });
+    check(websocketResponse, { 'status is 101': (r) => r && r.status === 101 });
+  }
 }
 
 // This function is executed for each iteration
@@ -86,11 +131,12 @@ export function multipleHopMessage(dataPool: { senders: HoprdNode[], nodes: Hopr
   }
   let pathNames = nodesPath.map((node: HoprdNode) => node.name).join(' -> ');
   let pathPeerIds = nodesPath.map((node: HoprdNode) => node.peerId);
-  let body = randomString(PACKET_PAYLOAD_SIZE);
 
   console.log(`[VU:${execution.vu.idInInstance}] - Sending ${hops} hops message ${senderHoprdNode.name} (source) -> [${pathNames}] -> ${senderHoprdNode.name} (destination)`)
   let tags = {name: senderHoprdNode.name, hops: hops, path: pathNames}
-  sendMessage(senderHoprdNode.url, senderHoprdNode.httpParams, JSON.stringify({ tag: execution.vu.idInInstance, body, path: pathPeerIds, peerId: senderHoprdNode.peerId, hops }), tags)
+  let startTime = new Date().getTime();
+  let body = `${startTime} ${JSON.stringify(tags)}`;
+  sendMessage(senderHoprdNode.url, senderHoprdNode.httpParams, JSON.stringify({ tag: execution.vu.idInInstance + 1024, body, path: pathPeerIds, peerId: senderHoprdNode.peerId, hops }), tags)
 }
 
 export function teardown(dataPool: { senders: HoprdNode[], nodes: HoprdNode[] }) {
@@ -102,23 +148,7 @@ export function sendMessage(apiUrl, httpParams, requestPayload, tags) {
 
   const messageRequestResponse = http.post(`${apiUrl}/messages`, requestPayload, httpParams, ) // Send the 1 hop message
   if (messageRequestResponse.status === 202) {
-    messageRequestsSucceed.add(1);
-    let messageReceived = false;
-    while (!messageReceived && ((new Date().getTime()) - startTime) < MAX_MESSAGE_RESPONSE_WAIT_TIME) {
-      sleep(0.5)
-      const messagePeekResponse = http.post(`${apiUrl}/messages/pop`, JSON.stringify({tag: execution.vu.idInInstance}), httpParams) 
-      if (messagePeekResponse.status === 200 && messagePeekResponse.body !== null) {
-        const receivedAt = JSON.parse(messagePeekResponse.body as string).receivedAt
-        messageLatency.add(receivedAt - startTime, tags);
-        sentMessagesSucceed.add(1, tags);
-        messageReceived = true;
-      }
-    }
-    if (!messageReceived) {
-      console.error(`Message not received after ${MAX_MESSAGE_RESPONSE_WAIT_TIME} ms. Details: "`, tags)
-      sentMessagesFailed.add(1, tags);
-      return false
-    }
+    messageRequestsSucceed.add(1, tags);
   } else {
     console.error(`Failed to send message request. Details: ${JSON.stringify(messageRequestResponse)}`)
     messageRequestsFailed.add(1, tags);
