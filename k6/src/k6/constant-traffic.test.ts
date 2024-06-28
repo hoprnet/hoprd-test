@@ -36,9 +36,16 @@ for (scenario in optionsData.scenarios) {
     optionsData.scenarios[scenario].preAllocatedVUs = Math.floor(amountOfSenders * (Number(__ENV.SCENARIO_ITERATIONS) || optionsData.scenarios[scenario].stages[1].target) / 2)
     scenariosLength++
   } else {
-    optionsData.scenarios[scenario].vus = amountOfSenders
+    optionsData.scenarios[scenario].vus = amountOfSenders * 2
     if (__ENV.SCENARIO_DURATION) {
-      optionsData.scenarios[scenario].maxDuration = __ENV.SCENARIO_DURATION
+      let duration = __ENV.SCENARIO_DURATION;
+      let durationInSeconds = 70;
+      if (duration.endsWith('m')) {
+        durationInSeconds += parseInt(duration.slice(0, -1)) * 60;
+      } else if (duration.endsWith('s')) {
+        durationInSeconds += parseInt(duration.slice(0, -1));
+      }
+      optionsData.scenarios[scenario].maxDuration = durationInSeconds + 's';
     }
   }
 }
@@ -78,7 +85,7 @@ export function receiveMessages(dataPool: { senders: HoprdNode[], nodes: HoprdNo
     const senderHoprdNode = dataPool.senders[nodeIndex];  
     let wsUrl = senderHoprdNode.url.replace('http', 'ws');
     wsUrl = `${wsUrl}/messages/websocket`
-
+    console.log(`Connecting to ${senderHoprdNode.name} via websocket`)
     const websocketResponse = ws.connect(wsUrl, senderHoprdNode.httpParams, function (socket) {
       socket.on('open', () => console.log(`Connected via websocket to node ${senderHoprdNode.name}`));
       socket.on('message', (data) => { 
@@ -89,11 +96,11 @@ export function receiveMessages(dataPool: { senders: HoprdNode[], nodes: HoprdNo
           let tags = JSON.parse(message.body.split(' ')[1]);
           let duration = new Date().getTime() - startTime;
           messageLatency.add(duration, tags);
-          console.log(`Message received on ${senderHoprdNode.name} with latency ${duration} ms from: ${tags.path}`)
+          console.log(`Message received on ${senderHoprdNode.name} relayed from ${tags.path} with latency ${duration} ms`)
           sentMessagesSucceed.add(1, tags);
         } else if (messageType === 'message-ack') {
           messagesRelayedSucceed.add(1, {origin: senderHoprdNode.name});
-          console.log(`Message ack received on ${senderHoprdNode.name}`)
+          //console.log(`Message ack received on ${senderHoprdNode.name}`)
         } else {
           console.log(`Unknown message type ${messageType} received on ${senderHoprdNode.name}`)
         }

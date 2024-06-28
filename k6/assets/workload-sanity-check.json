@@ -4,7 +4,7 @@
       "executor": "per-vu-iterations",
       "vus": 1,
       "iterations": 1,
-      "maxDuration": "2m5s",
+      "maxDuration": "1m7s",
       "gracefulStop": "15s",
       "exec": "receiveMessages",
       "tags": { 
@@ -17,7 +17,7 @@
       "timeUnit": "1s",
       "stages": [
         { "target": 1, "duration": "2s" },
-        { "target": 1, "duration": "2m" },
+        { "target": 1, "duration": "1m" },
         { "target": 0, "duration": "2s" }
       ],
       "preAllocatedVUs": 1,
