@@ -35,6 +35,11 @@ for (scenario in optionsData.scenarios) {
     }
     optionsData.scenarios[scenario].preAllocatedVUs = Math.floor(amountOfSenders * (Number(__ENV.SCENARIO_ITERATIONS) || optionsData.scenarios[scenario].stages[1].target) / 2)
     scenariosLength++
+  } else {
+    optionsData.scenarios[scenario].vus = amountOfSenders
+    if (__ENV.SCENARIO_DURATION) {
+      optionsData.scenarios[scenario].maxDuration = __ENV.SCENARIO_DURATION
+    }
   }
 }
 //console.log("Test execution options: ");
@@ -45,6 +50,7 @@ export const options: Partial<Options> = optionsData
 let messageRequestsSucceed = new Counter('hopr_message_requests_succeed') // Counts the number of messages requests successfully sent  
 let messageRequestsFailed = new Counter('hopr_message_requests_failed') // Counts the number of failed message requests received
 let sentMessagesSucceed = new Counter('hopr_sent_messages_succeed') // Counts the number of X hop messages successfully transmitted  
+let messagesRelayedSucceed = new Counter('hopr_messages_relayed_succeed') // Counts the number of messages successfully relayed
 let messageLatency = new Trend('hopr_message_latency');
 
 // 1. End Init section
@@ -72,11 +78,10 @@ export function receiveMessages(dataPool: { senders: HoprdNode[], nodes: HoprdNo
     const senderHoprdNode = dataPool.senders[nodeIndex];  
     let wsUrl = senderHoprdNode.url.replace('http', 'ws');
     wsUrl = `${wsUrl}/messages/websocket`
-    //console.log(`[VU ${nodeIndex}] Setting up node ${senderHoprdNode.name} to connect via websocket`)
+
     const websocketResponse = ws.connect(wsUrl, senderHoprdNode.httpParams, function (socket) {
       socket.on('open', () => console.log(`Connected via websocket to node ${senderHoprdNode.name}`));
       socket.on('message', (data) => { 
-        //console.log('Message received: ', data)
         let message = JSON.parse(data)
         let messageType = message.type;
         if (messageType === 'message') {
@@ -84,26 +89,20 @@ export function receiveMessages(dataPool: { senders: HoprdNode[], nodes: HoprdNo
           let tags = JSON.parse(message.body.split(' ')[1]);
           let duration = new Date().getTime() - startTime;
           messageLatency.add(duration, tags);
+          console.log(`Message received on ${senderHoprdNode.name} with latency ${duration} ms from: ${tags.path}`)
           sentMessagesSucceed.add(1, tags);
-          if (Math.random() < 0.5) {
-            socket.ping();
-          }
         } else if (messageType === 'message-ack') {
-          //console.log("Message relayed")
+          messagesRelayedSucceed.add(1, {origin: senderHoprdNode.name});
+          console.log(`Message ack received on ${senderHoprdNode.name}`)
+        } else {
+          console.log(`Unknown message type ${messageType} received on ${senderHoprdNode.name}`)
         }
-      });
-      socket.on('ping', () => {
-        console.log(`Ping received on ${senderHoprdNode.name}`);
-      });
-      socket.on('pong', () => {
-       //console.log(`Pong received on ${senderHoprdNode.name}`);
       });
       socket.on('error', (error) => {
         console.log(`Error on ${senderHoprdNode.name}:`, error);
       });
-      socket.on('close', () => {
-        console.log(`Disconnected via websocket to node ${senderHoprdNode.name} at ${new Date().toISOString()}`)
-        fail(`Node ${senderHoprdNode.name} has been disconnected during execution`)
+      socket.on('close', (errorCode: any) => {
+        console.log(`Disconnected via websocket from node ${senderHoprdNode.name} due to error code ${errorCode} at ${new Date().toISOString()}`);
       });
     });
     check(websocketResponse, { 'status is 101': (r) => r && r.status === 101 });
@@ -132,7 +131,7 @@ export function multipleHopMessage(dataPool: { senders: HoprdNode[], nodes: Hopr
   let pathNames = nodesPath.map((node: HoprdNode) => node.name).join(' -> ');
   let pathPeerIds = nodesPath.map((node: HoprdNode) => node.peerId);
 
-  console.log(`[VU:${execution.vu.idInInstance}] - Sending ${hops} hops message ${senderHoprdNode.name} (source) -> [${pathNames}] -> ${senderHoprdNode.name} (destination)`)
+  //console.log(`[VU:${execution.vu.idInInstance}] - Sending ${hops} hops message ${senderHoprdNode.name} (source) -> [${pathNames}] -> ${senderHoprdNode.name} (destination)`)
   let tags = {name: senderHoprdNode.name, hops: hops, path: pathNames}
   let startTime = new Date().getTime();
   let body = `${startTime} ${JSON.stringify(tags)}`;

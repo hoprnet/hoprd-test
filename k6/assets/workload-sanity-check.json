@@ -2,9 +2,9 @@
   "scenarios": {
     "receive_messages": {
       "executor": "per-vu-iterations",
-      "vus": 50,
+      "vus": 1,
       "iterations": 1,
-      "maxDuration": "1s",
+      "maxDuration": "2m5s",
       "gracefulStop": "15s",
       "exec": "receiveMessages",
       "tags": { 

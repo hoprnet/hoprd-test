@@ -48,7 +48,7 @@
     "parse:results": "node parse-results.js test-execution-20240522-113543.json rotsee sanity-check 1 test-2.1.0 30"
   },
   "dependencies": {
-    "@hoprnet/hopr-sdk": "^2.1.0-beta.18",
+    "@hoprnet/hopr-sdk": "^2.1.0-beta.30",
     "fs": "^0.0.1-security",
     "handlebars": "^4.7.8"
   }

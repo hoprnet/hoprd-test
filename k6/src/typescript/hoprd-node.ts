@@ -1,10 +1,14 @@
-import { BasePayloadType, GetChannelsResponseType, GetInfoResponseType, HoprSDK } from "@hoprnet/hopr-sdk";
+import { GetChannelsResponseType, GetInfoResponseType, HoprSDK } from "@hoprnet/hopr-sdk";
 import { ConnectivityStatus, TOKEN_DECIMALS, TOKEN_NATIVE_MIN } from "./hoprd.types";
 
 export class HoprdNode {
 
   public data: any;
-  private basePayload: BasePayloadType
+  private basePayload: {
+        apiEndpoint: string;
+        apiToken: string;
+        timeout?: number;
+    };
   private sdk: HoprSDK;
   public peerAddress?: string;
   public channels?: GetChannelsResponseType
@@ -18,14 +22,26 @@ export class HoprdNode {
         console.error('[ERROR] export HOPRD_API_TOKEN=XXXX')
         process.exit(1);
     }
-    this.basePayload = { apiEndpoint: data.url, apiToken}
+    this.basePayload = { apiEndpoint: data.url as string, apiToken}
     this.sdk = new HoprSDK(this.basePayload);
-    this.init()
+    this.init();
   }
 
-  private async init() {
-    this.peerAddress= (await this.sdk.api.account.getAddresses(this.basePayload)).native
-    this.channels = await this.sdk.api.channels.getChannels(this.basePayload)
+  public async init() {
+    await this.sdk.api.account.getAddresses(this.basePayload).then((addresses) => {
+      this.peerAddress = addresses.native;
+    }).catch((error: any) => {
+      console.error(`[ERROR] Unable to get node peerAddress for '${this.data.name}'`)
+      console.error(`[ERROR] ${error}`)
+      process.exit(1);
+    });
+    await this.sdk.api.channels.getChannels(this.basePayload).then((channels) => {
+     this.channels = channels;
+    }).catch((error: any) => {
+      console.error(`[ERROR] Unable to get node channels for '${this.data.name}'`)
+      console.error(`[ERROR] ${error}`)
+      process.exit(1);
+    });
   }
 
   public async check(): Promise<boolean> {
@@ -34,12 +50,18 @@ export class HoprdNode {
 
   // Check balance
   private async checkBalance(): Promise<boolean> {
-    const balance = await this.sdk.api.account.getBalances(this.basePayload)
+    return this.sdk.api.account.getBalances(this.basePayload).then((balance) => {
     if ((Number(balance.native) / Math.pow(10, TOKEN_DECIMALS)) < TOKEN_NATIVE_MIN) {
       console.error(`Node '${this.data.name} does not have enough native tokens (current balance is ${balance.native})`)
       return false
     }
     return true
+    }).catch((error: any) => {
+      console.error(`[ERROR] Insufficient node balance for '${this.data.name}'`)
+      console.error(`[ERROR] ${error}`)
+      return false
+
+    });
   }
 
   // Check connectivity
@@ -66,13 +88,25 @@ export class HoprdNode {
     for (let index = 0; index < this.data.routes.length; index++) {
       const route = this.data.routes[index];
       const routePeerAddress = getPeerAddressByNodeName(route.name)
+      if (routePeerAddress == '') {
+        console.error(`[ERROR] Unable to find peerAddress for node ${route.name} in routes for node ${this.data.name}`)
+        process.exit(1);
+      }
       const channel = this.channels?.outgoing.find((channel) => channel.status == 'Open' && channel.peerAddress == routePeerAddress )
       if (! channel) {
-        pendingChannels.push(this.sdk.api.channels.openChannel(Object.assign(this.basePayload, {peerAddress: routePeerAddress, amount: "100000000000000000"})).then(
+        let openChannelPayload = Object.assign(this.basePayload, {peerAddress: routePeerAddress, amount: "100000000000000000", timeout: 1000 * 60 * 3 });
+        //console.log(`[INFO] Openning outgoing channel from ${this.data.name} with payload ${JSON.stringify(openChannelPayload)}`)
+        pendingChannels.push(this.sdk.api.channels.openChannel(openChannelPayload).then(
         (newChannel: any) => {
           console.log(`[INFO] Openning outgoing channel[${newChannel.channelId}] from ${this.data.name} to ${route.name} on Tx: ${newChannel.transactionReceipt}`)
           return newChannel
-        }))
+        }).catch((error: any) => {
+          console.error(`[ERROR] Unable to open outgoing channel from ${this.data.name} to ${route.name}`)
+          console.error(`[ERROR] ${error}`)
+        })
+      )
+      } else {
+        //console.log(`[DEBUG] Channel from ${this.data.name} to ${route.name} already openened with id ${channel.id}`)
       }
     }
     let openningChannels: string[] = (await Promise.all(pendingChannels)).map(channel => channel.channelId)

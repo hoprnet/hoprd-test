@@ -2,8 +2,7 @@ import * as fs from 'fs';
 import Handlebars from "handlebars";
 import { HoprdNode } from './hoprd-node';
 
-const setupEnvironment = async () => {
-
+const setupEnvironment = async (nodes: HoprdNode[]) => {
   const maxRetries = 10;
   let retries = 0;
   let checkNodes: Promise<{node: HoprdNode, status: boolean}>[] = nodes.map((node:HoprdNode) => node.check().then(status => ({node, status})));
@@ -44,22 +43,28 @@ const iterations = process.env.SCENARIO_ITERATIONS || 1
 const duration = process.env.SCENARIO_DURATION || "10m"
 const hoprdNodeThreads = process.env.HOPRD_NODE_THREADS || 1
 const nodesData = JSON.parse(fs.readFileSync(`assets/nodes-${environmentName}.json`).toString())
-const nodes: HoprdNode[]= nodesData.nodes.map((node: any) => new HoprdNode(node));
+const promiseNodes: HoprdNode[] = nodesData.nodes.map(async (node: any) => {
+  let hoprdNode = new HoprdNode(node);
+  await hoprdNode.init();
+  return hoprdNode;
+});
 
 
-setupEnvironment().then(() => {
-  console.log('[INFO] Environment fully setup')
+Promise.all(promiseNodes).then((nodes: HoprdNode[]) => {
+  setupEnvironment(nodes).then(() => {
+    console.log('[INFO] Environment fully setup')
 
-  // Generate k6 test run file
-  const k6TestRunTemplateData = fs.readFileSync(`assets/k6-test-run.yaml`).toString()
-  const k6TestRunTemplate = Handlebars.compile(k6TestRunTemplateData);
-  const k6TestRunTemplateParsed = k6TestRunTemplate({ environmentName, workloadName, iterations, testid, duration, hoprdNodeThreads });
-  fs.writeFileSync(`./k6-test-run.yaml`, k6TestRunTemplateParsed)
+    // Generate k6 test run file
+    const k6TestRunTemplateData = fs.readFileSync(`assets/k6-test-run.yaml`).toString()
+    const k6TestRunTemplate = Handlebars.compile(k6TestRunTemplateData);
+    const k6TestRunTemplateParsed = k6TestRunTemplate({ environmentName, workloadName, iterations, testid, duration, hoprdNodeThreads });
+    fs.writeFileSync(`./k6-test-run.yaml`, k6TestRunTemplateParsed)
 
-  // Generate k6 test results file
-  const k6TestResultsTemplateData = fs.readFileSync(`assets/k6-test-results.yaml`).toString()
-  const k6TestResultsTemplate = Handlebars.compile(k6TestResultsTemplateData);
-  const k6TestResultsTemplateParsed = k6TestResultsTemplate({ environmentName, workloadName, iterations, testid, duration });
-  fs.writeFileSync(`./k6-test-results.yaml`, k6TestResultsTemplateParsed)
+    // Generate k6 test results file
+    const k6TestResultsTemplateData = fs.readFileSync(`assets/k6-test-results.yaml`).toString()
+    const k6TestResultsTemplate = Handlebars.compile(k6TestResultsTemplateData);
+    const k6TestResultsTemplateParsed = k6TestResultsTemplate({ environmentName, workloadName, iterations, testid, duration });
+    fs.writeFileSync(`./k6-test-results.yaml`, k6TestResultsTemplateParsed)
 
-}).catch((err) => console.error(err))
+  }).catch((err) => console.error(err))
+})

@@ -1,0 +1,164 @@
+{
+  "nodes": [
+    {
+      "name": "hoprd-andrius-1",
+      "url": "http://85.206.96.234:3009/",
+      "isSender": "true",
+      "routes": [
+        { "name": "hoprd-andrius-2" },
+        { "name": "hoprd-ausias" },
+        { "name": "hoprd-tino" },
+        { "name": "hoprd-michal" },
+        { "name": "hoprd-ronny" },
+        { "name": "hoprd-q" },
+        { "name": "hoprd-tibor" },
+        { "name": "hoprd-jean" },
+        { "name": "hoprd-lukas" }
+      ]
+    },
+    {
+      "name": "hoprd-andrius-2",
+      "url": "http://173.249.13.193:3009/",
+      "isSender": "true",
+      "routes": [
+        { "name": "hoprd-andrius-1" },
+        { "name": "hoprd-ausias" },
+        { "name": "hoprd-tino" },
+        { "name": "hoprd-michal" },
+        { "name": "hoprd-ronny" },
+        { "name": "hoprd-q" },
+        { "name": "hoprd-tibor" },
+        { "name": "hoprd-jean" },
+        { "name": "hoprd-lukas" }
+      ]
+    },
+    {
+      "name": "hoprd-ausias",
+      "url": "http://85.49.63.139:3009/",
+      "isSender": "true",
+      "routes": [
+        { "name": "hoprd-andrius-1" },
+        { "name": "hoprd-andrius-2" },
+        { "name": "hoprd-tino" },
+        { "name": "hoprd-michal" },
+        { "name": "hoprd-ronny" },
+        { "name": "hoprd-q" },
+        { "name": "hoprd-tibor" },
+        { "name": "hoprd-jean" },
+        { "name": "hoprd-lukas" }
+      ]
+    },
+    {
+      "name": "hoprd-ronny",
+      "url": "http://5405b69f7730f684.dyndns.dappnode.io:3011/",
+      "isSender": "true",
+      "routes": [
+        { "name": "hoprd-andrius-1"},
+        { "name": "hoprd-andrius-2" },
+        { "name": "hoprd-ausias" },
+        { "name": "hoprd-tino" },
+        { "name": "hoprd-michal" },
+        { "name": "hoprd-q" },
+        { "name": "hoprd-tibor" },
+        { "name": "hoprd-jean" },
+        { "name": "hoprd-lukas" }
+      ]
+    },
+    {
+      "name": "hoprd-tibor",
+      "url": "http://65.109.137.126:3002/",
+      "isSender": "true",
+      "routes": [
+        { "name": "hoprd-andrius-1"},
+        { "name": "hoprd-andrius-2" },
+        { "name": "hoprd-ausias" },
+        { "name": "hoprd-tino" },
+        { "name": "hoprd-michal" },
+        { "name": "hoprd-ronny" },
+        { "name": "hoprd-q" },
+        { "name": "hoprd-jean" },
+        { "name": "hoprd-lukas" }
+      ]
+    },
+    {
+      "name": "hoprd-michal",
+      "url": "http://vlabs.ddns.net:3003/",
+      "isSender": "true",
+      "routes": [
+        { "name": "hoprd-andrius-1"},
+        { "name": "hoprd-andrius-2" },
+        { "name": "hoprd-ausias" },
+        { "name": "hoprd-tino" },
+        { "name": "hoprd-ronny" },
+        { "name": "hoprd-q" },
+        { "name": "hoprd-tibor" },
+        { "name": "hoprd-jean" },
+        { "name": "hoprd-lukas" }
+      ]
+    },
+    {
+      "name": "hoprd-jean",
+      "url": "http://91.132.145.250:3101",
+      "isSender": "true",
+      "routes": [
+        { "name": "hoprd-andrius-1"},
+        { "name": "hoprd-andrius-2" },
+        { "name": "hoprd-ausias" },
+        { "name": "hoprd-tino" },
+        { "name": "hoprd-michal" },
+        { "name": "hoprd-ronny" },
+        { "name": "hoprd-q" },
+        { "name": "hoprd-tibor" },
+        { "name": "hoprd-lukas" }
+      ]
+    },
+    {
+      "name": "hoprd-q",
+      "url": "http://45.76.177.147:3101/",
+      "isSender": "true",
+      "routes": [
+        { "name": "hoprd-andrius-1"},
+        { "name": "hoprd-andrius-2" },
+        { "name": "hoprd-ausias" },
+        { "name": "hoprd-tino" },
+        { "name": "hoprd-michal" },
+        { "name": "hoprd-ronny" },
+        { "name": "hoprd-tibor" },
+        { "name": "hoprd-jean" },
+        { "name": "hoprd-lukas" }
+      ]
+    },
+    {
+      "name": "hoprd-tino",
+      "url": "http://8.8.8.8:3001/",
+      "isSender": "true",
+      "routes": [
+        { "name": "hoprd-andrius-1"},
+        { "name": "hoprd-andrius-2" },
+        { "name": "hoprd-ausias" },
+        { "name": "hoprd-michal" },
+        { "name": "hoprd-ronny" },
+        { "name": "hoprd-q" },
+        { "name": "hoprd-tibor" },
+        { "name": "hoprd-jean" },
+        { "name": "hoprd-lukas" }
+      ]
+    },
+    {
+      "name": "hoprd-lukas",
+      "url": "http://8.8.8.8:3001/",
+      "isSender": "true",
+      "routes": [
+        { "name": "hoprd-andrius-1"},
+        { "name": "hoprd-andrius-2" },
+        { "name": "hoprd-ausias" },
+        { "name": "hoprd-michal" },
+        { "name": "hoprd-ronny" },
+        { "name": "hoprd-q" },
+        { "name": "hoprd-tibor" },
+        { "name": "hoprd-jean" },
+        { "name": "hoprd-tino" }
+      ]
+    }
+  ]
+}
