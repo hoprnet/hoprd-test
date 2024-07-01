@@ -36,7 +36,7 @@ spec:
         valueFrom:
           secretKeyRef:
             name: hoprd-api-tokens
-            key: HOPRD_API_TOKEN
+            key: {{ environmentName }}
       - name: K6_PROMETHEUS_RW_SERVER_URL
         value: http://kube-prometheus-stack-prometheus.monitoring.svc:9090/api/v1/write
       - name: K6_PROMETHEUS_RW_TREND_AS_NATIVE_HISTOGRAM
