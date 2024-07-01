@@ -13,16 +13,43 @@ const duration = process.argv[7];
 const execution_time = test_result_json.replace(/test-execution-/, '').replace(/\.json/, '');
 // Read and parse the JSON file
 const data = JSON.parse(fs.readFileSync(test_result_json, 'utf8'));
-const keysCounter = ['Metric', 'count', 'rate', 'Thresholds'];
-const keysTrend = ['Metric', 'min', 'max', 'avg', 'p(95)', 'p(90)', 'Thresholds'];
-// Extract the metrics data
-metrics = Object.entries(data.metrics).map(([key, metric]) => {
+const metric_keys = ['data_received', 'data_sent', 'hopr_message_requests_succeed', 'hopr_message_requests_failed', 'hopr_sent_messages_succeed','hopr_message_latency'];
+
+metrics = Object.entries(data.metrics).filter(([key, metric]) => {
+  if(metric_keys.includes(key)) {
+    return true;
+  }
+}).map(([key, metric]) => {
+  if(key === 'data_received' || key === 'data_sent') {
+    metric = {
+      count: `${(metric.count / (1024 * 1024)).toFixed(2)} MB`,
+      rate: `${(metric.rate / 1024).toFixed(2)} KB/s`,
+      thresholds: metric.thresholds
+    }
+  }
+  if(key === 'hopr_message_requests_succeed' || key === 'hopr_message_requests_failed' || key === 'hopr_sent_messages_succeed') {
+    metric = {
+      count: metric.count > 1000 ? `${(metric.count / 1000).toFixed(2)} K` : metric.count,
+      rate: `${metric.rate.toFixed(2)} req/s`,
+      thresholds: metric.thresholds
+    }
+  }
+  if(key === 'hopr_message_latency') {
+    metric = {
+      min: metric.min > 1000 ? `${(metric.min / 1000).toFixed(2)} sec` : `${metric.min} ms`,
+      max: metric.max > 1000 ? `${(metric.max / 1000).toFixed(2)} sec` : `${metric.max} ms`,
+      avg: metric.avg > 1000 ? `${(metric.avg / 1000).toFixed(2)} sec` : `${metric.avg} ms`,
+      "p(95)": metric['p(95)'] > 1000 ? `${(metric['p(95)'] / 1000).toFixed(2)} sec` : `${metric['p(95)']} ms`,
+      "p(90)": metric['p(90)'] > 1000 ? `${(metric['p(90)'] / 1000).toFixed(2)} sec` : `${metric['p(90)']} ms`,
+      thresholds: metric.thresholds
+    }
+  }
 
   if (metric.thresholds) {
     let thresholds = Object.entries(metric.thresholds).map(([threshold_name, threshold_status]) => {
-      if (threshold_status === true) {
+      if (threshold_status === true) { // Red
         return `<span style="background-color: #ff7f7f;">${threshold_name}</span>`;
-      } else {
+      } else { // Green
         return `<span style="background-color: #90ee90;">${threshold_name}</span>`;
       }
     });
@@ -31,14 +58,22 @@ metrics = Object.entries(data.metrics).map(([key, metric]) => {
   } else {
     metric.Thresholds = "N/A";
   }
-  // Truncate values to 4 decimal places
-  for (let prop in metric) {
-    if (typeof metric[prop] === 'number' && metric[prop] !== Math.floor(metric[prop])) {
-      metric[prop] = metric[prop].toFixed(2);
-    }
-  }
+
   return { Metric: key, ...metric };
 });
+
+
+
+
+
+
+
+
+
+
+
+const keysCounter = ['Metric', 'count', 'rate', 'Thresholds'];
+const keysTrend = ['Metric', 'min', 'max', 'avg', 'p(95)', 'p(90)', 'Thresholds'];
 
 // Sort the metrics by name
 metrics.sort((a, b) => {
@@ -88,14 +123,14 @@ const mainTemplate = `
 <html>
 <h1>Load Testing results</h1>
 <h3>Details</h3>
-<ul>
-  <li>Network: ${network}</li>
-  <li>Workload: ${workload_name}</li>
-  <li>Test Scenario: ${test_scenario}</li>
-  <li>Itreations: ${scenario_iterations}</li>
-  <li>Duration: ${duration}</li>
-  <li>End time: ${execution_time}</li>
-</ul>
+<table style="border: 2px solid black; border-collapse: collapse;"><tbody>
+  <tr><td style="border: 1px solid black;">Network</td><td style="border: 1px solid black;">${network}</td></tr>
+  <tr><td style="border: 1px solid black;">Workload</td><td style="border: 1px solid black;">${workload_name}</td></tr>
+  <tr><td style="border: 1px solid black;">Test Scenario</td><td style="border: 1px solid black;">${test_scenario}</td></tr>
+  <tr><td style="border: 1px solid black;">Itreations</td><td style="border: 1px solid black;">${scenario_iterations}</td></tr>
+  <tr><td style="border: 1px solid black;">Duration</td><td style="border: 1px solid black;">${duration}</td></tr>
+  <tr><td style="border: 1px solid black;">End time</td><td style="border: 1px solid black;">${execution_time}</td></tr>
+</tbody></table>
 <h3>Counters</h3>
 ${counterHtml}
 <br>
