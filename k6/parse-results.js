@@ -36,11 +36,11 @@ metrics = Object.entries(data.metrics).filter(([key, metric]) => {
   }
   if(key === 'hopr_message_latency') {
     metric = {
-      min: metric.min > 1000 ? `${(metric.min / 1000).toFixed(2)} sec` : `${metric.min} ms`,
-      max: metric.max > 1000 ? `${(metric.max / 1000).toFixed(2)} sec` : `${metric.max} ms`,
-      avg: metric.avg > 1000 ? `${(metric.avg / 1000).toFixed(2)} sec` : `${metric.avg} ms`,
-      "p(95)": metric['p(95)'] > 1000 ? `${(metric['p(95)'] / 1000).toFixed(2)} sec` : `${metric['p(95)']} ms`,
-      "p(90)": metric['p(90)'] > 1000 ? `${(metric['p(90)'] / 1000).toFixed(2)} sec` : `${metric['p(90)']} ms`,
+      min: metric.min > 1000 ? `${(metric.min / 1000).toFixed(2)} sec` : `${metric.min.toFixed(2)} ms`,
+      max: metric.max > 1000 ? `${(metric.max / 1000).toFixed(2)} sec` : `${metric.max.toFixed(2)} ms`,
+      avg: metric.avg > 1000 ? `${(metric.avg / 1000).toFixed(2)} sec` : `${metric.avg.toFixed(2)} ms`,
+      "p(95)": metric['p(95)'] > 1000 ? `${(metric['p(95)'] / 1000).toFixed(2)} sec` : `${metric['p(95)'].toFixed(2)} ms`,
+      "p(90)": metric['p(90)'] > 1000 ? `${(metric['p(90)'] / 1000).toFixed(2)} sec` : `${metric['p(90)'].toFixed(2)} ms`,
       thresholds: metric.thresholds
     }
   }
