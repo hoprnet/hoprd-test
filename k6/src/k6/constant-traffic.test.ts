@@ -37,7 +37,7 @@ for (scenario in optionsData.scenarios) {
     optionsData.scenarios[scenario].preAllocatedVUs = Math.floor(amountOfSenders * (Number(__ENV.SCENARIO_ITERATIONS) || optionsData.scenarios[scenario].stages[1].target) / 2)
     scenariosLength++
   } else {
-    optionsData.scenarios[scenario].vus = amountOfSenders * 2
+    optionsData.scenarios[scenario].vus = amountOfSenders * 3
     if (__ENV.SCENARIO_DURATION) {
       let duration = __ENV.SCENARIO_DURATION;
       let durationInSeconds = 70;
@@ -116,6 +116,8 @@ export function receiveMessages(dataPool: { senders: HoprdNode[], nodes: HoprdNo
       });
     });
     check(websocketResponse, { 'status is 101': (r) => r && r.status === 101 });
+  } else {
+    //console.log(`No sender nodes available for this VU '${execution.vu.idInInstance}'`)
   }
 }
 
