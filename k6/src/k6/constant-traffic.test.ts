@@ -22,6 +22,7 @@ if (__ENV.HOPRD_API_TOKEN) {
 }
 
 // Test Options https://docs.k6.io/docs/options
+__ENV.WEBSOCKET_DISCONNECTED = 'false';
 const workloadName = __ENV.WORKLOAD_NAME || 'sanity-check'
 const optionsData = JSON.parse(open(`./workload-${workloadName}.json`))
 let scenario: keyof typeof optionsData.scenarios;
@@ -106,9 +107,11 @@ export function receiveMessages(dataPool: { senders: HoprdNode[], nodes: HoprdNo
         }
       });
       socket.on('error', (error) => {
+        __ENV.WEBSOCKET_DISCONNECTED = 'true';
         console.error(`Node ${senderHoprdNode.name} replied with a websocket error:`, error);
       });
       socket.on('close', (errorCode: any) => {
+        __ENV.WEBSOCKET_DISCONNECTED = 'true';
         console.log(`Disconnected via websocket from node ${senderHoprdNode.name} due to error code ${errorCode} at ${new Date().toISOString()}`);
       });
     });
@@ -122,6 +125,10 @@ export function multipleHopMessage(dataPool: { senders: HoprdNode[], nodes: Hopr
   const nodeIndex = Math.ceil(execution.vu.idInInstance % (amountOfSenders * scenariosLength))
   // console.log(`idInstance: ${execution.vu.idInInstance} having index : ${nodeIndex} from scenario[${execution.scenario.name}]`)
   const senderHoprdNode = dataPool.senders[nodeIndex]
+  if (__ENV.WEBSOCKET_DISCONNECTED === 'true') {
+      fail(`Node ${senderHoprdNode.name} disconnected from websocket`)
+  }
+
   const hops = Number(__ENV.HOPS) || 1
   let nodesPath: HoprdNode[] = [];
   for (let i = 0; i < hops; i++) {
