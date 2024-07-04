@@ -37,7 +37,7 @@ for (scenario in optionsData.scenarios) {
     optionsData.scenarios[scenario].preAllocatedVUs = Math.floor(amountOfSenders * (Number(__ENV.SCENARIO_ITERATIONS) || optionsData.scenarios[scenario].stages[1].target) / 2)
     scenariosLength++
   } else {
-    optionsData.scenarios[scenario].vus = amountOfSenders * 5
+    optionsData.scenarios[scenario].vus = amountOfSenders * 5 // Increasing the probability of opening a websocket connection per sender
     if (__ENV.SCENARIO_DURATION) {
       let duration = __ENV.SCENARIO_DURATION;
       let durationInSeconds = 70;
