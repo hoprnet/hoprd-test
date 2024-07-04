@@ -106,6 +106,14 @@ export class HoprdNode {
         })
       )
       } else {
+        if (channel.status != 'Open') {
+          console.error(`[ERROR] Channel from ${this.data.name} to ${route.name} is in status ${channel.status} and cannot be used. Please close it manually.`)
+          process.exit(1);
+        }
+        if (BigInt(channel.balance) < BigInt(10000000000000000)) {
+          console.error(`[ERROR] Channel (${channel.id}) balance from ${this.data.name} to ${route.name} is insufficient and cannot be used. Please top up manually the channel or close it.`)
+          process.exit(1);
+        }
         //console.log(`[DEBUG] Channel from ${this.data.name} to ${route.name} already openened with id ${channel.id}`)
       }
     }

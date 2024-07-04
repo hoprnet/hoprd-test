@@ -106,7 +106,7 @@ export function receiveMessages(dataPool: { senders: HoprdNode[], nodes: HoprdNo
         }
       });
       socket.on('error', (error) => {
-        console.log(`Error on ${senderHoprdNode.name}:`, error);
+        console.error(`Node ${senderHoprdNode.name} replied with a websocket error:`, error);
       });
       socket.on('close', (errorCode: any) => {
         console.log(`Disconnected via websocket from node ${senderHoprdNode.name} due to error code ${errorCode} at ${new Date().toISOString()}`);
