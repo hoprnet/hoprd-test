@@ -10,19 +10,20 @@
         "scenario": "receive_messages"
       }
     },
-    "send_one_hop": {
+    "incremental_trhoughput": {
       "executor": "ramping-arrival-rate",
       "startTime": "10s",
       "timeUnit": "1s",
       "stages": [
-        { "target": 200, "duration": "1m" },
-        { "target": 200, "duration": "30m" },
+        { "target": 20, "duration": "1m" },
+        { "target": 500, "duration": "30m" },
+        { "target": 20, "duration": "1m" },
         { "target": 0, "duration": "1m" }
       ],
       "preAllocatedVUs": 100,
       "env": {
         "HOPS": "1",
-        "WARMUP": "true"
+        "WARMUP": "false"
       },
       "exec": "multipleHopMessage",
       "tags": { 

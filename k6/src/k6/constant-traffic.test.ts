@@ -29,7 +29,9 @@ let scenario: keyof typeof optionsData.scenarios;
 let scenariosLength = 0;
 for (scenario in optionsData.scenarios) {
   if (optionsData.scenarios[scenario].exec !== "receiveMessages") {
-    optionsData.scenarios[scenario].stages[0].target = amountOfSenders * (__ENV.SCENARIO_ITERATIONS || optionsData.scenarios[scenario].stages[0].target)
+    if (__ENV.SCENARIO_WARMUP) {
+      optionsData.scenarios[scenario].stages[0].target = amountOfSenders * (__ENV.SCENARIO_ITERATIONS || optionsData.scenarios[scenario].stages[0].target)
+    }
     optionsData.scenarios[scenario].stages[1].target = amountOfSenders * (__ENV.SCENARIO_ITERATIONS || optionsData.scenarios[scenario].stages[1].target)
     if (__ENV.SCENARIO_DURATION) {
       optionsData.scenarios[scenario].stages[1].duration = __ENV.SCENARIO_DURATION
@@ -172,6 +174,7 @@ export function sendMessage(apiUrl, httpParams, requestPayload, tags) {
   return true
 }
 
+// This class cannot implement async methods
 export class HoprdNode {
 
   public name: string

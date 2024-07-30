@@ -22,7 +22,8 @@
       ],
       "preAllocatedVUs": 1,
       "env": {
-        "HOPS": "1"
+        "HOPS": "1",
+        "WARMUP": "true"
       },
       "exec": "multipleHopMessage",
       "tags": { 
