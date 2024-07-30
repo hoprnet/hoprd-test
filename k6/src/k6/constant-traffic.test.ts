@@ -29,7 +29,7 @@ let scenario: keyof typeof optionsData.scenarios;
 let scenariosLength = 0;
 for (scenario in optionsData.scenarios) {
   if (optionsData.scenarios[scenario].exec !== "receiveMessages") {
-    if (__ENV.SCENARIO_WARMUP) {
+    if (scenario !== "incremental_trhoughput") {
       optionsData.scenarios[scenario].stages[0].target = amountOfSenders * (__ENV.SCENARIO_ITERATIONS || optionsData.scenarios[scenario].stages[0].target)
     }
     optionsData.scenarios[scenario].stages[1].target = amountOfSenders * (__ENV.SCENARIO_ITERATIONS || optionsData.scenarios[scenario].stages[1].target)
