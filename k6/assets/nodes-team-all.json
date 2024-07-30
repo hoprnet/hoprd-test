@@ -1,11 +1,11 @@
 {
   "nodes": [
     {
-      "name": "hoprd-andrius-1",
+      "name": "hoprd-andrius-dappnode",
       "url": "http://85.206.96.234:3009/",
       "isSender": "true",
       "routes": [
-        { "name": "hoprd-andrius-2" },
+        { "name": "hoprd-andrius-vps" },
         { "name": "hoprd-ausias" },
         { "name": "hoprd-tino" },
         { "name": "hoprd-michal" },
@@ -17,11 +17,11 @@
       ]
     },
     {
-      "name": "hoprd-andrius-2",
+      "name": "hoprd-andrius-vps",
       "url": "http://173.249.13.193:3009/",
       "isSender": "true",
       "routes": [
-        { "name": "hoprd-andrius-1" },
+        { "name": "hoprd-andrius-dappnode" },
         { "name": "hoprd-ausias" },
         { "name": "hoprd-tino" },
         { "name": "hoprd-michal" },
@@ -34,11 +34,11 @@
     },
     {
       "name": "hoprd-ausias",
-      "url": "http://85.49.63.139:3009/",
+      "url": "http://85.49.63.139:3101/",
       "isSender": "true",
       "routes": [
-        { "name": "hoprd-andrius-1" },
-        { "name": "hoprd-andrius-2" },
+        { "name": "hoprd-andrius-dappnode" },
+        { "name": "hoprd-andrius-vps" },
         { "name": "hoprd-tino" },
         { "name": "hoprd-michal" },
         { "name": "hoprd-ronny" },
@@ -53,8 +53,8 @@
       "url": "http://5405b69f7730f684.dyndns.dappnode.io:3011/",
       "isSender": "true",
       "routes": [
-        { "name": "hoprd-andrius-1"},
-        { "name": "hoprd-andrius-2" },
+        { "name": "hoprd-andrius-dappnode"},
+        { "name": "hoprd-andrius-vps" },
         { "name": "hoprd-ausias" },
         { "name": "hoprd-tino" },
         { "name": "hoprd-michal" },
@@ -69,8 +69,8 @@
       "url": "http://65.109.137.126:3002/",
       "isSender": "true",
       "routes": [
-        { "name": "hoprd-andrius-1"},
-        { "name": "hoprd-andrius-2" },
+        { "name": "hoprd-andrius-dappnode"},
+        { "name": "hoprd-andrius-vps" },
         { "name": "hoprd-ausias" },
         { "name": "hoprd-tino" },
         { "name": "hoprd-michal" },
@@ -85,8 +85,8 @@
       "url": "http://vlabs.ddns.net:3003/",
       "isSender": "true",
       "routes": [
-        { "name": "hoprd-andrius-1"},
-        { "name": "hoprd-andrius-2" },
+        { "name": "hoprd-andrius-dappnode"},
+        { "name": "hoprd-andrius-vps" },
         { "name": "hoprd-ausias" },
         { "name": "hoprd-tino" },
         { "name": "hoprd-ronny" },
@@ -101,8 +101,8 @@
       "url": "http://91.132.145.250:3101",
       "isSender": "true",
       "routes": [
-        { "name": "hoprd-andrius-1"},
-        { "name": "hoprd-andrius-2" },
+        { "name": "hoprd-andrius-dappnode"},
+        { "name": "hoprd-andrius-vps" },
         { "name": "hoprd-ausias" },
         { "name": "hoprd-tino" },
         { "name": "hoprd-michal" },
@@ -117,8 +117,8 @@
       "url": "http://45.76.177.147:3101/",
       "isSender": "true",
       "routes": [
-        { "name": "hoprd-andrius-1"},
-        { "name": "hoprd-andrius-2" },
+        { "name": "hoprd-andrius-dappnode"},
+        { "name": "hoprd-andrius-vps" },
         { "name": "hoprd-ausias" },
         { "name": "hoprd-tino" },
         { "name": "hoprd-michal" },
@@ -133,8 +133,8 @@
       "url": "http://8.8.8.8:3001/",
       "isSender": "true",
       "routes": [
-        { "name": "hoprd-andrius-1"},
-        { "name": "hoprd-andrius-2" },
+        { "name": "hoprd-andrius-dappnode"},
+        { "name": "hoprd-andrius-vps" },
         { "name": "hoprd-ausias" },
         { "name": "hoprd-michal" },
         { "name": "hoprd-ronny" },
@@ -149,8 +149,8 @@
       "url": "http://8.8.8.8:3001/",
       "isSender": "true",
       "routes": [
-        { "name": "hoprd-andrius-1"},
-        { "name": "hoprd-andrius-2" },
+        { "name": "hoprd-andrius-dappnode"},
+        { "name": "hoprd-andrius-vps" },
         { "name": "hoprd-ausias" },
         { "name": "hoprd-michal" },
         { "name": "hoprd-ronny" },
