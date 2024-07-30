@@ -1,11 +1,25 @@
 {
   "nodes": [
     {
-      "name": "hoprd-ausias",
-      "url": "http://85.49.63.139:3009/",
+      "name": "hoprd-andrius-vps",
+      "url": "http://173.249.13.193:3009/",
       "isSender": "true",
       "routes": [
+        { "name": "hoprd-ausias" },
         { "name": "hoprd-michal" },
+        { "name": "hoprd-q" },
+        { "name": "hoprd-ronny" },
+        { "name": "hoprd-tibor" }
+      ]
+    },
+    {
+      "name": "hoprd-ausias",
+      "url": "http://85.49.63.139:3101/",
+      "isSender": "true",
+      "routes": [
+        { "name": "hoprd-andrius-vps" },
+        { "name": "hoprd-michal" },
+        { "name": "hoprd-q" },
         { "name": "hoprd-ronny" },
         { "name": "hoprd-tibor" }
       ]
@@ -15,8 +29,10 @@
       "url": "http://5405b69f7730f684.dyndns.dappnode.io:3011/",
       "isSender": "true",
       "routes": [
+        { "name": "hoprd-andrius-vps" },
         { "name": "hoprd-ausias" },
         { "name": "hoprd-michal" },
+        { "name": "hoprd-q" },
         { "name": "hoprd-tibor" }
       ]
     },
@@ -25,9 +41,11 @@
       "url": "http://65.109.137.126:3002/",
       "isSender": "true",
       "routes": [
+        { "name": "hoprd-andrius-vps" },
         { "name": "hoprd-ausias" },
         { "name": "hoprd-michal" },
-        { "name": "hoprd-ronny" }
+        { "name": "hoprd-ronny" },
+        { "name": "hoprd-q" }
       ]
     },
     {
@@ -35,7 +53,21 @@
       "url": "http://vlabs.ddns.net:3003/",
       "isSender": "true",
       "routes": [
+        { "name": "hoprd-andrius-vps" },
         { "name": "hoprd-ausias" },
+        { "name": "hoprd-q" },
+        { "name": "hoprd-ronny" },
+        { "name": "hoprd-tibor" }
+      ]
+    },
+    {
+      "name": "hoprd-q",
+      "url": "http://45.76.177.147:3101/",
+      "isSender": "true",
+      "routes": [
+        { "name": "hoprd-andrius-vps" },
+        { "name": "hoprd-ausias" },
+        { "name": "hoprd-michal" },
         { "name": "hoprd-ronny" },
         { "name": "hoprd-tibor" }
       ]
