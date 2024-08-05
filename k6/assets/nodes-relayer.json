@@ -4,11 +4,8 @@
       "name": "hoprd-core-rotsee-1",
       "url": "https://hoprd-core-rotsee-1.core-team.staging.hoprnet.link/",
       "isSender": true,
-      "isRelayer": true,
+      "isRelayer": false,
       "routes": [
-        { "name": "hoprd-core-rotsee-2" },
-        { "name": "hoprd-core-rotsee-3" },
-        { "name": "hoprd-core-rotsee-4" },
         { "name": "hoprd-core-rotsee-5" }
       ]
     },
@@ -16,11 +13,8 @@
       "name": "hoprd-core-rotsee-2",
       "url": "https://hoprd-core-rotsee-2.core-team.staging.hoprnet.link/",
       "isSender": true,
-      "isRelayer": true,
+      "isRelayer": false,
       "routes": [
-        { "name": "hoprd-core-rotsee-1" },
-        { "name": "hoprd-core-rotsee-3" },
-        { "name": "hoprd-core-rotsee-4" },
         { "name": "hoprd-core-rotsee-5" }
       ]
     },
@@ -28,11 +22,8 @@
       "name": "hoprd-core-rotsee-3",
       "url": "https://hoprd-core-rotsee-3.core-team.staging.hoprnet.link/",
       "isSender": true,
-      "isRelayer": true,
+      "isRelayer": false,
       "routes": [
-        { "name": "hoprd-core-rotsee-1" },
-        { "name": "hoprd-core-rotsee-2" },
-        { "name": "hoprd-core-rotsee-4" },
         { "name": "hoprd-core-rotsee-5" }
       ]
     },
@@ -40,11 +31,8 @@
       "name": "hoprd-core-rotsee-4",
       "url": "https://hoprd-core-rotsee-4.core-team.staging.hoprnet.link/",
       "isSender": true,
-      "isRelayer": true,
+      "isRelayer": false,
       "routes": [
-        { "name": "hoprd-core-rotsee-1" },
-        { "name": "hoprd-core-rotsee-2" },
-        { "name": "hoprd-core-rotsee-3" },
         { "name": "hoprd-core-rotsee-5" }
 
       ]
@@ -52,7 +40,7 @@
     {
       "name": "hoprd-core-rotsee-5",
       "url": "https://hoprd-core-rotsee-5.core-team.staging.hoprnet.link/",
-      "isSender": true,
+      "isSender": false,
       "isRelayer": true,
       "routes": [
         { "name": "hoprd-core-rotsee-1" },

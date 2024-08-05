@@ -3,7 +3,8 @@
     {
       "name": "hoprd-andrius-vps",
       "url": "http://173.249.13.193:3009/",
-      "isSender": "true",
+      "isSender": true,
+      "isRelayer": true,
       "routes": [
         { "name": "hoprd-ausias" },
         { "name": "hoprd-michal" },
@@ -15,7 +16,8 @@
     {
       "name": "hoprd-ausias",
       "url": "http://85.49.63.139:3101/",
-      "isSender": "true",
+      "isSender": true,
+      "isRelayer": true,
       "routes": [
         { "name": "hoprd-andrius-vps" },
         { "name": "hoprd-michal" },
@@ -26,8 +28,9 @@
     },
     {
       "name": "hoprd-ronny",
-      "url": "http://5405b69f7730f684.dyndns.dappnode.io:3011/",
-      "isSender": "true",
+      "url": "http://178.254.33.145:3002/",
+      "isSender": true,
+      "isRelayer": true,
       "routes": [
         { "name": "hoprd-andrius-vps" },
         { "name": "hoprd-ausias" },
@@ -39,7 +42,8 @@
     {
       "name": "hoprd-tibor",
       "url": "http://65.109.137.126:3002/",
-      "isSender": "true",
+      "isSender": true,
+      "isRelayer": true,
       "routes": [
         { "name": "hoprd-andrius-vps" },
         { "name": "hoprd-ausias" },
@@ -51,7 +55,8 @@
     {
       "name": "hoprd-michal",
       "url": "http://vlabs.ddns.net:3003/",
-      "isSender": "true",
+      "isSender": true,
+      "isRelayer": true,
       "routes": [
         { "name": "hoprd-andrius-vps" },
         { "name": "hoprd-ausias" },
@@ -63,7 +68,8 @@
     {
       "name": "hoprd-q",
       "url": "http://45.76.177.147:3101/",
-      "isSender": "true",
+      "isSender": true,
+      "isRelayer": true,
       "routes": [
         { "name": "hoprd-andrius-vps" },
         { "name": "hoprd-ausias" },

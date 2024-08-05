@@ -68,20 +68,25 @@ let messageLatency = new Trend('hopr_message_latency');
 // The Setup Function is run once before the Load Test https://docs.k6.io/docs/test-life-cycle
 export function setup() {
   const senders: HoprdNode[] = []
-  const nodes: HoprdNode[] = []
+  const relayers: HoprdNode[] = []
   nodesData.nodes.forEach((node: any) => {
     let hoprdNode: HoprdNode = new HoprdNode(node)
     if (hoprdNode.isSender) {
+      console.log(`Setting up ${hoprdNode.name} as sender`)
       senders.push(hoprdNode)
     }
-    nodes.push(hoprdNode)
+    if (hoprdNode.isRelayer) {
+      console.log(`Setting up ${hoprdNode.name} as relayer`)
+      relayers.push(hoprdNode)
+    }
+    
   })
-  return { senders, nodes }
+  return { senders, relayers }
 }
 
 // This function is executed for each iteration
 // default function imports the return data from the setup function https://docs.k6.io/docs/test-life-cycle
-export function receiveMessages(dataPool: { senders: HoprdNode[], nodes: HoprdNode[] }) {
+export function receiveMessages(dataPool: { senders: HoprdNode[], relayers: HoprdNode[] }) {
   const nodeIndex = Math.ceil((execution.vu.idInInstance ) % amountOfSenders)
   //console.log(`[idInstance ${execution.vu.idInInstance}] [nodeIndex: ${nodeIndex}] < ${amountOfSenders}`)
   if (execution.vu.idInInstance <= amountOfSenders) {
@@ -125,7 +130,7 @@ export function receiveMessages(dataPool: { senders: HoprdNode[], nodes: HoprdNo
 
 // This function is executed for each iteration
 // default function imports the return data from the setup function https://docs.k6.io/docs/test-life-cycle
-export function multipleHopMessage(dataPool: { senders: HoprdNode[], nodes: HoprdNode[] }) {
+export function multipleHopMessage(dataPool: { senders: HoprdNode[], relayers: HoprdNode[] }) {
   const nodeIndex = Math.ceil(execution.vu.idInInstance % (amountOfSenders * scenariosLength))
   // console.log(`idInstance: ${execution.vu.idInInstance} having index : ${nodeIndex} from scenario[${execution.scenario.name}]`)
   const senderHoprdNode = dataPool.senders[nodeIndex]
@@ -136,8 +141,8 @@ export function multipleHopMessage(dataPool: { senders: HoprdNode[], nodes: Hopr
   const hops = Number(__ENV.HOPS) || 1
   let nodesPath: HoprdNode[] = [];
   for (let i = 0; i < hops; i++) {
-    let recipientLength = Math.floor(Math.random() * (dataPool.nodes.length - 1))
-    let recipientHoprdNode = dataPool.nodes
+    let recipientLength = Math.floor(Math.random() * (dataPool.relayers.length - 1))
+    let recipientHoprdNode = dataPool.relayers
       .filter((node: HoprdNode) => node.name != senderHoprdNode.name)
     [recipientLength]
     if (nodesPath.some(includedNode => includedNode.name === recipientHoprdNode.name)) {
@@ -179,7 +184,8 @@ export class HoprdNode {
 
   public name: string
   public url: string
-  public isSender: string
+  public isSender: boolean
+  public isRelayer: boolean
   public peerAddress: string
   public httpParams: RefinedParams<ResponseType>
   public peerId: string
@@ -198,6 +204,7 @@ export class HoprdNode {
       }
     },
       this.isSender = data.isSender,
+      this.isRelayer = data.isRelayer,
       this.getAddress(data)
   }
 
