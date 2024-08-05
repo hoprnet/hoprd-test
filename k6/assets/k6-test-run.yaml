@@ -2,7 +2,7 @@
 apiVersion: k6.io/v1alpha1
 kind: K6
 metadata:
-  name: k6-hoprd-{{ environmentName }}-{{ workloadName }}
+  name: k6-hoprd-{{ nodes }}-{{ workloadName }}
   namespace: k6-operator-system
 spec:
   parallelism: 1
@@ -22,8 +22,8 @@ spec:
         cpu: 2
         memory: 2Gi
     env:
-      - name: ENVIRONMENT_NAME
-        value: {{ environmentName }}
+      - name: NODES
+        value: {{ nodes }}
       - name: WORKLOAD_NAME
         value: {{ workloadName }}
       - name: SCENARIO_ITERATIONS
@@ -36,7 +36,7 @@ spec:
         valueFrom:
           secretKeyRef:
             name: hoprd-api-tokens
-            key: {{ environmentName }}
+            key: {{ nodes }}
       - name: K6_PROMETHEUS_RW_SERVER_URL
         value: http://kube-prometheus-stack-prometheus.monitoring.svc:9090/api/v1/write
       - name: K6_PROMETHEUS_RW_TREND_AS_NATIVE_HISTOGRAM

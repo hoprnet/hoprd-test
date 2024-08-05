@@ -48,14 +48,6 @@ Here are the most useful commands:
 - `npm run test:dufour:setup`: Setup the dufour environment to check nodes healthy and open channels
 
 
-## Running docker-compose
-
-
-```
-docker-compose down ; docker-compose up 1&> /dev/null &
-
-```
-
 ## Running remotely
 
 A pipeline has been created to run the load testing remotely using a manual [github workflow](https://github.com/hoprnet/hoprnet/actions/workflows/load-tests.yaml) with these parameters

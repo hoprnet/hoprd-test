@@ -2,7 +2,7 @@ const fs = require('fs');
 const Handlebars = require('handlebars');
 
 // Execution details
-// node parse-results.js ${json_file} ${ENVIRONMENT_NAME} ${WORKLOAD_NAME} ${SCENARIO_ITERATIONS} ${TESTID} ${DURATION}
+// node parse-results.js ${json_file} ${NODES} ${WORKLOAD_NAME} ${SCENARIO_ITERATIONS} ${TESTID} ${DURATION}
 // node parse-results.js test-execution-20240522-113543.json rotsee sanity-check 1 test-2.1.0 30
 const test_result_json = process.argv[2];
 const network = process.argv[3];

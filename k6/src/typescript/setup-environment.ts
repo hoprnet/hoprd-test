@@ -36,13 +36,13 @@ const setupEnvironment = async (nodes: HoprdNode[]) => {
 }
 
 // Main
-const environmentName = process.env.ENVIRONMENT_NAME || 'rotsee'
+const nodes = process.env.NODES || 'rotsee'
 const workloadName = process.env.WORKLOAD_NAME || 'sanity-check'
 const testid = process.env.TESTID || 'kubernetes'
 const iterations = process.env.SCENARIO_ITERATIONS || 1
 const duration = process.env.SCENARIO_DURATION || "10m"
 const hoprdNodeThreads = process.env.HOPRD_NODE_THREADS || 1
-const nodesData = JSON.parse(fs.readFileSync(`assets/nodes-${environmentName}.json`).toString())
+const nodesData = JSON.parse(fs.readFileSync(`assets/nodes-${nodes}.json`).toString())
 const promiseNodes: HoprdNode[] = nodesData.nodes.map(async (node: any) => {
   let hoprdNode = new HoprdNode(node);
   await hoprdNode.init();
@@ -57,13 +57,13 @@ Promise.all(promiseNodes).then((nodes: HoprdNode[]) => {
     // Generate k6 test run file
     const k6TestRunTemplateData = fs.readFileSync(`assets/k6-test-run.yaml`).toString()
     const k6TestRunTemplate = Handlebars.compile(k6TestRunTemplateData);
-    const k6TestRunTemplateParsed = k6TestRunTemplate({ environmentName, workloadName, iterations, testid, duration, hoprdNodeThreads });
+    const k6TestRunTemplateParsed = k6TestRunTemplate({ nodes, workloadName, iterations, testid, duration, hoprdNodeThreads });
     fs.writeFileSync(`./k6-test-run.yaml`, k6TestRunTemplateParsed)
 
     // Generate k6 test results file
     const k6TestResultsTemplateData = fs.readFileSync(`assets/k6-test-results.yaml`).toString()
     const k6TestResultsTemplate = Handlebars.compile(k6TestResultsTemplateData);
-    const k6TestResultsTemplateParsed = k6TestResultsTemplate({ environmentName, workloadName, iterations, testid, duration });
+    const k6TestResultsTemplateParsed = k6TestResultsTemplate({ nodes, workloadName, iterations, testid, duration });
     fs.writeFileSync(`./k6-test-results.yaml`, k6TestResultsTemplateParsed)
 
   }).catch((err) => console.error(err))

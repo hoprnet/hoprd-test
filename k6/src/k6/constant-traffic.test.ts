@@ -5,10 +5,10 @@ import http, { RefinedParams, RefinedResponse, ResponseType } from 'k6/http'
 import { check, fail } from 'k6'
 import ws from 'k6/ws';
 // 1. Begin Init section
-const environmentName = __ENV.ENVIRONMENT_NAME || 'local'
+const nodes = __ENV.NODES || 'rotsee'
 
 // Load nodes
-const nodesData = JSON.parse(open(`./nodes-${environmentName}.json`))
+const nodesData = JSON.parse(open(`./nodes-${nodes}.json`))
 const amountOfSenders = nodesData.nodes.filter((node: any) => node.isSender != undefined && node.isSender).length
 
 // Override API Token

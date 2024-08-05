@@ -19,7 +19,7 @@ COPY --from=node /app/k6/dist /app/hoprnet
 
 WORKDIR /app/hoprnet
 
-ENV ENVIRONMENT_NAME=pluto
+ENV NODES=rotsee
 ENV WORKLOAD_NAME=simple
 
 ENTRYPOINT [ "/app/hoprnet/k6"]
