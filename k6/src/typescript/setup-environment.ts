@@ -50,8 +50,8 @@ const promiseNodes: HoprdNode[] = nodesData.nodes.map(async (node: any) => {
 });
 
 
-Promise.all(promiseNodes).then((nodes: HoprdNode[]) => {
-  setupEnvironment(nodes).then(() => {
+Promise.all(promiseNodes).then((hoprdNodes: HoprdNode[]) => {
+  setupEnvironment(hoprdNodes).then(() => {
     console.log('[INFO] Environment fully setup')
 
     // Generate k6 test run file
