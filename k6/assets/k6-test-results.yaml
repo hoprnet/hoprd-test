@@ -16,20 +16,18 @@ spec:
           cd /test-results/k6/
           for i in {1..5}
           do
-            json_file=$(ls -1 test-execution-*.json | sort -r | head -1)
-            if [ -n "$json_file" ]; then
-              echo "Test results exist"
+            if ls test-execution-*.json > /dev/null 2>&1; then
+              json_file=$(ls -1 test-execution-*.json | sort -r | head -1)
+              echo "Test results exist at ${json_file}"
+              find . -type f  -name "test-execution-*.json" | grep -v ${json_file} | xargs rm 2> /dev/null
+              npm install handlebars
+              curl -s https://raw.githubusercontent.com/hoprnet/hoprd-test/main/k6/parse-results.js -o /test-results/k6/parse-results.js
+              node /test-results/k6/parse-results.js ${json_file} {{ nodes }} {{ workloadName }} {{ iterations }} {{ testid }} {{ duration}}
               break
             else
-              ls -al
               echo "Waiting for test to finish..."
               sleep 300
             fi
-          done
-          find . -type f  -name "test-execution-*.json" | grep -v ${json_file} | xargs rm 2> /dev/null
-          npm install handlebars
-          curl -s https://raw.githubusercontent.com/hoprnet/hoprd-test/main/k6/parse-results.js -o /test-results/k6/parse-results.js
-          node /test-results/k6/parse-results.js ${json_file} {{ nodes }} {{ workloadName }} {{ iterations }} {{ testid }} {{ duration}}
         volumeMounts:
           - name: test-results
             mountPath: /test-results/k6
