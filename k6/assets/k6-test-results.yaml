@@ -28,6 +28,7 @@ spec:
               echo "Waiting for test to finish..."
               sleep 300
             fi
+          done
         volumeMounts:
           - name: test-results
             mountPath: /test-results/k6
