@@ -40,7 +40,7 @@ const nodes = process.env.NODES || 'rotsee'
 const workloadName = process.env.WORKLOAD_NAME || 'sanity-check'
 const testid = process.env.TESTID || 'kubernetes'
 const iterations = process.env.SCENARIO_ITERATIONS || 1
-const duration = process.env.SCENARIO_DURATION || "10m"
+const duration = process.env.SCENARIO_DURATION || "30"
 const hoprdNodeThreads = process.env.HOPRD_NODE_THREADS || 1
 const nodesData = JSON.parse(fs.readFileSync(`assets/nodes-${nodes}.json`).toString())
 const promiseNodes: HoprdNode[] = nodesData.nodes.map(async (node: any) => {

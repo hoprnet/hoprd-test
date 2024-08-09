@@ -28,26 +28,26 @@ const optionsData = JSON.parse(open(`./workload-${workloadName}.json`))
 let scenario: keyof typeof optionsData.scenarios;
 let scenariosLength = 0;
 for (scenario in optionsData.scenarios) {
-  if (optionsData.scenarios[scenario].exec !== "receiveMessages") {
-    if (scenario !== "incremental_trhoughput") {
+  if (scenario !== "receive_messages") {
+    if (scenario !== "incremental" && scenario !== "hysteresis" ) { // Incremental and Hysteresis scenarios should keep stage 0 target as is
       optionsData.scenarios[scenario].stages[0].target = amountOfSenders * (__ENV.SCENARIO_ITERATIONS || optionsData.scenarios[scenario].stages[0].target)
     }
     optionsData.scenarios[scenario].stages[1].target = amountOfSenders * (__ENV.SCENARIO_ITERATIONS || optionsData.scenarios[scenario].stages[1].target)
     if (__ENV.SCENARIO_DURATION) {
-      optionsData.scenarios[scenario].stages[1].duration = __ENV.SCENARIO_DURATION
+      if ( scenario === "hysteresis" ) { // Hysteresis scenario should divide the duration in half for stage 1 and 2
+        let halfDuration = Math.floor(Number(__ENV.SCENARIO_DURATION) / 2);
+        optionsData.scenarios[scenario].stages[1].duration = halfDuration + 'm'
+        optionsData.scenarios[scenario].stages[2].duration = halfDuration + 'm'
+      } else {
+        optionsData.scenarios[scenario].stages[1].duration = __ENV.SCENARIO_DURATION + 'm'
+      }
     }
-    optionsData.scenarios[scenario].preAllocatedVUs = Math.floor(amountOfSenders * (Number(__ENV.SCENARIO_ITERATIONS) || optionsData.scenarios[scenario].stages[1].target) / 2)
+    optionsData.scenarios[scenario].preAllocatedVUs = Math.max(1,Math.floor(amountOfSenders * (Number(__ENV.SCENARIO_ITERATIONS) || optionsData.scenarios[scenario].stages[1].target) / 2))
     scenariosLength++
   } else {
     optionsData.scenarios[scenario].vus = amountOfSenders * 5 // Increasing the probability of opening a websocket connection per sender
     if (__ENV.SCENARIO_DURATION) {
-      let duration = __ENV.SCENARIO_DURATION;
-      let durationInSeconds = 70;
-      if (duration.endsWith('m')) {
-        durationInSeconds += parseInt(duration.slice(0, -1)) * 60;
-      } else if (duration.endsWith('s')) {
-        durationInSeconds += parseInt(duration.slice(0, -1));
-      }
+      let durationInSeconds = Number(__ENV.SCENARIO_DURATION) * 60 + 70;
       optionsData.scenarios[scenario].maxDuration = durationInSeconds + 's';
     }
   }
@@ -81,6 +81,8 @@ export function setup() {
     }
     
   })
+  // console.log(`Senders: ${JSON.stringify(senders)}`);
+  // console.log(`Relayers: ${JSON.stringify(relayers)}`);
   return { senders, relayers }
 }
 
@@ -132,7 +134,7 @@ export function receiveMessages(dataPool: { senders: HoprdNode[], relayers: Hopr
 // default function imports the return data from the setup function https://docs.k6.io/docs/test-life-cycle
 export function multipleHopMessage(dataPool: { senders: HoprdNode[], relayers: HoprdNode[] }) {
   const nodeIndex = Math.ceil(execution.vu.idInInstance % (amountOfSenders * scenariosLength))
-  // console.log(`idInstance: ${execution.vu.idInInstance} having index : ${nodeIndex} from scenario[${execution.scenario.name}]`)
+  //console.log(`idInstance: ${execution.vu.idInInstance} having index : ${nodeIndex} from scenario[${execution.scenario.name}]`)
   const senderHoprdNode = dataPool.senders[nodeIndex]
   if (__ENV.WEBSOCKET_DISCONNECTED === 'true') {
       fail(`Node ${senderHoprdNode.name} disconnected from websocket`)

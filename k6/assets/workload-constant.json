@@ -10,7 +10,7 @@
         "scenario": "receive_messages"
       }
     },
-    "send_one_hop": {
+    "constant_load": {
       "executor": "ramping-arrival-rate",
       "startTime": "10s",
       "timeUnit": "1s",

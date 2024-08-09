@@ -7,7 +7,7 @@ metadata:
 spec:
   parallelism: 1
   script:
-    localFile: /app/hoprnet/constant-traffic.test.js
+    localFile: /app/hoprnet/send-messages.test.js
   separate: true
   arguments: --tag testid={{ testid }} --summary-export=/test-results/k6/test-execution-$(date +%Y%m%d-%H%M%S).json
   runner:

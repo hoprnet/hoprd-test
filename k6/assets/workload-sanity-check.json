@@ -11,7 +11,7 @@
         "scenario": "receive_messages"
       }
     },
-    "send_one_hop": {
+    "sanity_check": {
       "executor": "ramping-arrival-rate",
       "startTime": "5s",
       "timeUnit": "1s",

@@ -87,7 +87,7 @@
     },
     {
       "name": "hoprd-michal",
-      "url": "http://vlabs.ddns.net:3003/",
+      "url": "http://vlabs.ddns.net:3101/",
       "isSender": true,
       "isRelayer": true,
       "routes": [

@@ -10,14 +10,15 @@
         "scenario": "receive_messages"
       }
     },
-    "incremental": {
+    "hysteresis": {
       "executor": "ramping-arrival-rate",
       "startTime": "10s",
       "timeUnit": "1s",
       "stages": [
         { "target": 2, "duration": "5s" },
-        { "target": 500, "duration": "30m" },
-        { "target": 0, "duration": "1m" }
+        { "target": 500, "duration": "15m" },
+        { "target": 2, "duration": "15m" },
+        { "target": 0, "duration": "5s" }
       ],
       "preAllocatedVUs": 100,
       "env": {
