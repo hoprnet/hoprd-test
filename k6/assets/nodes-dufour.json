@@ -1,64 +1,64 @@
 {
   "nodes": [
     {
-      "name": "hoprd-core-dufour-1",
-      "url": "https://hoprd-core-dufour-1.core-team.staging.hoprnet.link/",
+      "name": "core-node-1",
+      "url": "https://core-node-1.core-team.prod.hoprnet.link/",
       "isSender": true,
       "isRelayer": true,
       "routes": [
-        { "name": "hoprd-core-dufour-2" },
-        { "name": "hoprd-core-dufour-3" },
-        { "name": "hoprd-core-dufour-4" },
-        { "name": "hoprd-core-dufour-5" }
+        { "name": "core-node-2" },
+        { "name": "core-node-3" },
+        { "name": "core-node-4" },
+        { "name": "core-node-5" }
       ]
     },
     {
-      "name": "hoprd-core-dufour-2",
-      "url": "https://hoprd-core-dufour-2.core-team.staging.hoprnet.link/",
+      "name": "core-node-2",
+      "url": "https://core-node-2.core-team.prod.hoprnet.link/",
       "isSender": true,
       "isRelayer": true,
       "routes": [
-        { "name": "hoprd-core-dufour-1" },
-        { "name": "hoprd-core-dufour-3" },
-        { "name": "hoprd-core-dufour-4" },
-        { "name": "hoprd-core-dufour-5" }
+        { "name": "core-node-1" },
+        { "name": "core-node-3" },
+        { "name": "core-node-4" },
+        { "name": "core-node-5" }
       ]
     },
     {
-      "name": "hoprd-core-dufour-3",
-      "url": "https://hoprd-core-dufour-3.core-team.staging.hoprnet.link/",
+      "name": "core-node-3",
+      "url": "https://core-node-3.core-team.prod.hoprnet.link/",
       "isSender": true,
       "isRelayer": true,
       "routes": [
-        { "name": "hoprd-core-dufour-1" },
-        { "name": "hoprd-core-dufour-2" },
-        { "name": "hoprd-core-dufour-4" },
-        { "name": "hoprd-core-dufour-5" }
+        { "name": "core-node-1" },
+        { "name": "core-node-2" },
+        { "name": "core-node-4" },
+        { "name": "core-node-5" }
       ]
     },
     {
-      "name": "hoprd-core-dufour-4",
-      "url": "https://hoprd-core-dufour-4.core-team.staging.hoprnet.link/",
+      "name": "core-node-4",
+      "url": "https://core-node-4.core-team.prod.hoprnet.link/",
       "isSender": true,
       "isRelayer": true,
       "routes": [
-        { "name": "hoprd-core-dufour-1" },
-        { "name": "hoprd-core-dufour-2" },
-        { "name": "hoprd-core-dufour-3" },
-        { "name": "hoprd-core-dufour-5" }
+        { "name": "core-node-1" },
+        { "name": "core-node-2" },
+        { "name": "core-node-3" },
+        { "name": "core-node-5" }
 
       ]
     },
     {
-      "name": "hoprd-core-dufour-5",
-      "url": "https://hoprd-core-dufour-5.core-team.staging.hoprnet.link/",
+      "name": "core-node-5",
+      "url": "https://core-node-5.core-team.prod.hoprnet.link/",
       "isSender": true,
       "isRelayer": true,
       "routes": [
-        { "name": "hoprd-core-dufour-1" },
-        { "name": "hoprd-core-dufour-2" },
-        { "name": "hoprd-core-dufour-3" },
-        { "name": "hoprd-core-dufour-4" }
+        { "name": "core-node-1" },
+        { "name": "core-node-2" },
+        { "name": "core-node-3" },
+        { "name": "core-node-4" }
       ]
     }
   ]
