@@ -38,18 +38,15 @@
     "docker:push": "docker push europe-west3-docker.pkg.dev/hoprassociation/docker-images/hoprd-k6:latest",
     "test": "npm run test:local",
     "test:local": "npm run webpack && K6_PROMETHEUS_RW_TREND_AS_NATIVE_HISTOGRAM=true K6_OUT=xk6-prometheus-rw K6_PROMETHEUS_RW_SERVER_URL=https://prometheus.staging.hoprnet.link/api/v1/write ./k6 run ./dist/send-messages.test.js",
-    "test:rotsee": "npm run webpack && NODES=rotsee K6_PROMETHEUS_RW_TREND_AS_NATIVE_HISTOGRAM=true K6_OUT=xk6-prometheus-rw K6_PROMETHEUS_RW_SERVER_URL=https://prometheus.staging.hoprnet.link/api/v1/write ./k6 run --summary-export=test-execution-local.json --tag testid=local ./dist/send-messages.test.js",
+    "test:many2many": "npm run webpack && NODES=many2many K6_PROMETHEUS_RW_TREND_AS_NATIVE_HISTOGRAM=true K6_OUT=xk6-prometheus-rw K6_PROMETHEUS_RW_SERVER_URL=https://prometheus.staging.hoprnet.link/api/v1/write ./k6 run --summary-export=test-execution-local.json --tag testid=local ./dist/send-messages.test.js",
     "test:sender": "npm run webpack && NODES=sender K6_PROMETHEUS_RW_TREND_AS_NATIVE_HISTOGRAM=true K6_OUT=xk6-prometheus-rw K6_PROMETHEUS_RW_SERVER_URL=https://prometheus.staging.hoprnet.link/api/v1/write ./k6 run --summary-export=test-execution-local.json --tag testid=local ./dist/send-messages.test.js",
     "test:receiver": "npm run webpack && NODES=receiver K6_PROMETHEUS_RW_TREND_AS_NATIVE_HISTOGRAM=true K6_OUT=xk6-prometheus-rw K6_PROMETHEUS_RW_SERVER_URL=https://prometheus.staging.hoprnet.link/api/v1/write ./k6 run --summary-export=test-execution-local.json --tag testid=local ./dist/send-messages.test.js",
     "test:relayer": "npm run webpack && NODES=relayer K6_PROMETHEUS_RW_TREND_AS_NATIVE_HISTOGRAM=true K6_OUT=xk6-prometheus-rw K6_PROMETHEUS_RW_SERVER_URL=https://prometheus.staging.hoprnet.link/api/v1/write ./k6 run --summary-export=test-execution-local.json --tag testid=local ./dist/send-messages.test.js",
     "test:team": "npm run webpack && NODES=team K6_PROMETHEUS_RW_TREND_AS_NATIVE_HISTOGRAM=true K6_OUT=xk6-prometheus-rw K6_PROMETHEUS_RW_SERVER_URL=https://prometheus.staging.hoprnet.link/api/v1/write ./k6 run --summary-export=test-execution-local.json --tag testid=local ./dist/send-messages.test.js",
     "test:dufour": "npm run webpack && NODES=dufour K6_PROMETHEUS_RW_TREND_AS_NATIVE_HISTOGRAM=true K6_OUT=xk6-prometheus-rw K6_PROMETHEUS_RW_SERVER_URL=https://prometheus.staging.hoprnet.link/api/v1/write ./k6 run --summary-export=test-execution-local.json --tag testid=local ./dist/send-messages.test.js",
-    "test:rotsee:setup": "npm run build && NODES=rotsee node ./dist/setup-environment.js",
-    "test:sender:setup": "npm run build && NODES=sender node ./dist/setup-environment.js",
-    "test:relayer:setup": "npm run build && NODES=relayer node ./dist/setup-environment.js",
-    "test:team:setup": "npm run build && NODES=team node ./dist/setup-environment.js",
-    "test:dufour:setup": "npm run build && NODES=dufour node ./dist/setup-environment.js",
-    "parse:results": "node parse-results.js test-execution-20240522-113543.json rotsee sanity-check 1 test-2.1.0 30"
+    "setup:rotsee": "npm run build && NODES=many2many node ./dist/setup-environment.js",
+    "setup:team": "npm run build && NODES=team node ./dist/setup-environment.js",
+    "parse:results": "node parse-results.js test-execution-20240522-113543.json many2many sanity-check 1 test-2.1.0 30"
   },
   "dependencies": {
     "@hoprnet/hopr-sdk": "^2.1.0-beta.30",

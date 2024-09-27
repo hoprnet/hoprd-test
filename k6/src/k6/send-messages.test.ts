@@ -5,7 +5,7 @@ import http, { RefinedParams, RefinedResponse, ResponseType } from 'k6/http'
 import { check, fail } from 'k6'
 import ws from 'k6/ws';
 // 1. Begin Init section
-const nodes = __ENV.NODES || 'rotsee'
+const nodes = __ENV.NODES || 'many2many'
 
 // Load nodes
 const nodesData = JSON.parse(open(`./nodes-${nodes}.json`))

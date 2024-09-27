@@ -36,7 +36,7 @@ const setupEnvironment = async (nodes: HoprdNode[]) => {
 }
 
 // Main
-const nodes = process.env.NODES || 'rotsee'
+const nodes = process.env.NODES || 'many2many'
 const workloadName = process.env.WORKLOAD_NAME || 'sanity-check'
 const testid = process.env.TESTID || 'kubernetes'
 const iterations = process.env.SCENARIO_ITERATIONS || 1

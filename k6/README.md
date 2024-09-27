@@ -19,13 +19,13 @@ Here is an example to install it in MacOS systems:
 docker run --rm -it -e GOOS=darwin -u "$(id -u):$(id -g)" -v "${PWD}:/xk6" grafana/xk6 build v0.42.0 --with github.com/grafana/xk6-output-prometheus-remote
 ```
 
-## Target environment
+## Nodes Topology
 
-The load testing can be run against a given environment. At this moment we have identified 4 environments:
-- **Local cluster**: The local cluster environment is described in `hoprnet` repository as a development environment to run your own tests. It is not expected to receive too much load, but it is useful as it can be use to develop load testing tests 
-- **Pluto**: The pluto image is a docker packaged distribution of the local cluster, which makes it easier to run for automated tests.
-- **GCP rotsee**: The GCP rotsee environment consists of 10 nodes, not fully interconnected. Each node is running in a different VM and is expected to be used as target environment with more workloads than just developing the load testing.
-- **Dufour rotsee**: The GCP dufour environment consists of 10 nodes, not fully interconnected. Each node is running in a different VM and is expected to be used as target environment with more workloads than just developing the load testing.
+The load testing can be run against a given topology of nodes. At this moment we have identified the following topologies:
+- many2many: This topology injects messages from any sender to any destination using any relayer
+- sender: This topology injects messages from only 1 sender node(which does not act as relayer or destination), to many relayers to a many destinations
+- receiver: This topology injects messages from only many sender nodes, to many relayers to only 1 destination (which does not act as relayer or sender)
+- relayer: This topology injects messages from only many sender nodes to only 1 relayer node(which does not act as sender or destination) to a many destinations
 
 ## Building
 
@@ -41,11 +41,8 @@ Here are the most useful commands:
 - `npm run cluster:start`: Start local cluster
 - `npm run cluster:stop`: Stops local cluster
 - `npm run test`: Execute constant traffic test using previously started local cluster. Used for development purposes of load testing scenarios
-- `npm run test:pluto`: Executes a docker compose containing pluto and k6 scripts
-- `npm run test:rotsee`: Executes constant traffic test against rotsee environment
-- `npm run test:dufour`: Executes constant traffic test against dufour environment
-- `npm run test:rotsee:setup`: Setup the rotsee environment to check nodes healthy and open channels
-- `npm run test:dufour:setup`: Setup the dufour environment to check nodes healthy and open channels
+- `npm run test:many2many`: Executes constant traffic test using many 2 many topology
+- `npm run setup:rotsee`: Setup the rotsee environment to check nodes healthy and open channels
 
 
 ## Running remotely

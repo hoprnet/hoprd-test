@@ -3,7 +3,7 @@ const Handlebars = require('handlebars');
 
 // Execution details
 // node parse-results.js ${json_file} ${NODES} ${WORKLOAD_NAME} ${SCENARIO_ITERATIONS} ${TESTID} ${DURATION}
-// node parse-results.js test-execution-20240522-113543.json rotsee sanity-check 1 test-2.1.0 30
+// node parse-results.js test-execution-20240522-113543.json many2many sanity-check 1 test-2.1.0 30
 const test_result_json = process.argv[2];
 const network = process.argv[3];
 const workload_name = process.argv[4];
