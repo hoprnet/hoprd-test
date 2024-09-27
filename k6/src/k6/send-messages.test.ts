@@ -10,6 +10,7 @@ const nodes = __ENV.NODES || 'rotsee'
 // Load nodes
 const nodesData = JSON.parse(open(`./nodes-${nodes}.json`))
 const amountOfSenders = nodesData.nodes.filter((node: any) => node.isSender != undefined && node.isSender).length
+const amountOfReceivers = nodesData.nodes.filter((node: any) => node.isReceiver != undefined && node.isReceiver).length
 
 // Override API Token
 if (__ENV.HOPRD_API_TOKEN) {
@@ -68,12 +69,17 @@ let messageLatency = new Trend('hopr_message_latency');
 // The Setup Function is run once before the Load Test https://docs.k6.io/docs/test-life-cycle
 export function setup() {
   const senders: HoprdNode[] = []
+  const receivers: HoprdNode[] = []
   const relayers: HoprdNode[] = []
   nodesData.nodes.forEach((node: any) => {
     let hoprdNode: HoprdNode = new HoprdNode(node)
     if (hoprdNode.isSender) {
       console.log(`Setting up ${hoprdNode.name} as sender`)
       senders.push(hoprdNode)
+    }
+    if (hoprdNode.isReceiver) {
+      console.log(`Setting up ${hoprdNode.name} as receiver`)
+      receivers.push(hoprdNode)
     }
     if (hoprdNode.isRelayer) {
       console.log(`Setting up ${hoprdNode.name} as relayer`)
@@ -83,21 +89,21 @@ export function setup() {
   })
   // console.log(`Senders: ${JSON.stringify(senders)}`);
   // console.log(`Relayers: ${JSON.stringify(relayers)}`);
-  return { senders, relayers }
+  return { senders, relayers, receivers }
 }
 
 // This function is executed for each iteration
 // default function imports the return data from the setup function https://docs.k6.io/docs/test-life-cycle
-export function receiveMessages(dataPool: { senders: HoprdNode[], relayers: HoprdNode[] }) {
-  const nodeIndex = Math.ceil((execution.vu.idInInstance ) % amountOfSenders)
-  //console.log(`[idInstance ${execution.vu.idInInstance}] [nodeIndex: ${nodeIndex}] < ${amountOfSenders}`)
-  if (execution.vu.idInInstance <= amountOfSenders) {
-    const senderHoprdNode = dataPool.senders[nodeIndex];  
-    let wsUrl = senderHoprdNode.url.replace('http', 'ws');
+export function receiveMessages(dataPool: { senders: HoprdNode[], relayers: HoprdNode[], receivers: HoprdNode[] }) {
+  const nodeIndex = Math.ceil((execution.vu.idInInstance ) % amountOfReceivers)
+  //console.log(`[idInstance ${execution.vu.idInInstance}] [nodeIndex: ${nodeIndex}] < ${amountOfReceivers}`)
+  if (execution.vu.idInInstance <= amountOfReceivers) {
+    const receiverHoprdNode = dataPool.receivers[nodeIndex];  
+    let wsUrl = receiverHoprdNode.url.replace('http', 'ws');
     wsUrl = `${wsUrl}/messages/websocket`
-    console.log(`Connecting to ${senderHoprdNode.name} via websocket`)
-    const websocketResponse = ws.connect(wsUrl, senderHoprdNode.httpParams, function (socket) {
-      socket.on('open', () => console.log(`Connected via websocket to node ${senderHoprdNode.name}`));
+    console.log(`Connecting to ${receiverHoprdNode.name} via websocket`)
+    const websocketResponse = ws.connect(wsUrl, receiverHoprdNode.httpParams, function (socket) {
+      socket.on('open', () => console.log(`Connected via websocket to node ${receiverHoprdNode.name}`));
       socket.on('message', (data) => { 
         let message = JSON.parse(data)
         let messageType = message.type;
@@ -106,22 +112,22 @@ export function receiveMessages(dataPool: { senders: HoprdNode[], relayers: Hopr
           let tags = JSON.parse(message.body.split(' ')[1]);
           let duration = new Date().getTime() - startTime;
           messageLatency.add(duration, tags);
-          console.log(`Message received on ${senderHoprdNode.name} relayed from ${tags.path} with latency ${duration} ms`)
+          console.log(`Message received on ${receiverHoprdNode.name} relayed from ${tags.path} with latency ${duration} ms`)
           sentMessagesSucceed.add(1, tags);
         } else if (messageType === 'message-ack') {
-          messagesRelayedSucceed.add(1, {origin: senderHoprdNode.name});
+          messagesRelayedSucceed.add(1, {origin: receiverHoprdNode.name});
           //console.log(`Message ack received on ${senderHoprdNode.name}`)
         } else {
-          console.log(`Unknown message type ${messageType} received on ${senderHoprdNode.name}`)
+          console.log(`Unknown message type ${messageType} received on ${receiverHoprdNode.name}`)
         }
       });
       socket.on('error', (error) => {
         __ENV.WEBSOCKET_DISCONNECTED = 'true';
-        console.error(`Node ${senderHoprdNode.name} replied with a websocket error:`, error);
+        console.error(`Node ${receiverHoprdNode.name} replied with a websocket error:`, error);
       });
       socket.on('close', (errorCode: any) => {
         __ENV.WEBSOCKET_DISCONNECTED = 'true';
-        console.log(`Disconnected via websocket from node ${senderHoprdNode.name} due to error code ${errorCode} at ${new Date().toISOString()}`);
+        console.log(`Disconnected via websocket from node ${receiverHoprdNode.name} due to error code ${errorCode} at ${new Date().toISOString()}`);
       });
     });
     check(websocketResponse, { 'status is 101': (r) => r && r.status === 101 });
@@ -132,35 +138,41 @@ export function receiveMessages(dataPool: { senders: HoprdNode[], relayers: Hopr
 
 // This function is executed for each iteration
 // default function imports the return data from the setup function https://docs.k6.io/docs/test-life-cycle
-export function multipleHopMessage(dataPool: { senders: HoprdNode[], relayers: HoprdNode[] }) {
+export function multipleHopMessage(dataPool: { senders: HoprdNode[], relayers: HoprdNode[], receivers: HoprdNode[] }) {
+  const hops = Number(__ENV.HOPS) || 1
   const nodeIndex = Math.ceil(execution.vu.idInInstance % (amountOfSenders * scenariosLength))
   //console.log(`idInstance: ${execution.vu.idInInstance} having index : ${nodeIndex} from scenario[${execution.scenario.name}]`)
-  const senderHoprdNode = dataPool.senders[nodeIndex]
+  const sender = dataPool.senders[nodeIndex]
   if (__ENV.WEBSOCKET_DISCONNECTED === 'true') {
-      fail(`Node ${senderHoprdNode.name} disconnected from websocket`)
+      fail(`Node ${sender.name} disconnected from websocket`)
   }
 
-  const hops = Number(__ENV.HOPS) || 1
+  // Set the receiver node
+  const receivers = dataPool.receivers.filter((receiver: HoprdNode) => receiver.name != sender.name)
+  let receiver;
+  if (receivers.length === 0) {
+    fail(`No receiver nodes available for this VU '${execution.vu.idInInstance}'`)
+  } else {
+    receiver = receivers[Math.floor(Math.random() * receivers.length )];
+  }
+
+  // Set the Path
   let nodesPath: HoprdNode[] = [];
-  for (let i = 0; i < hops; i++) {
-    let recipientLength = Math.floor(Math.random() * (dataPool.relayers.length - 1))
-    let recipientHoprdNode = dataPool.relayers
-      .filter((node: HoprdNode) => node.name != senderHoprdNode.name)
-    [recipientLength]
-    if (nodesPath.some(includedNode => includedNode.name === recipientHoprdNode.name)) {
-      i--;
-    } else {
-      nodesPath.push(recipientHoprdNode)
+  const relayers = dataPool.relayers.filter((relayer: HoprdNode) => relayer.name != sender.name && relayer.name != receiver.name)
+  while (nodesPath.length < hops) {
+    const relayer = relayers[Math.floor(Math.random() * relayers.length)]
+    if (!nodesPath.some(includedNode => includedNode.name === relayer.name)) {
+      nodesPath.push(relayer)
     }
   }
   let pathNames = nodesPath.map((node: HoprdNode) => node.name).join(' -> ');
-  let pathPeerIds = nodesPath.map((node: HoprdNode) => node.peerId);
+  let path = nodesPath.map((node: HoprdNode) => node.peerId);
 
-  //console.log(`[VU:${execution.vu.idInInstance}] - Sending ${hops} hops message ${senderHoprdNode.name} (source) -> [${pathNames}] -> ${senderHoprdNode.name} (destination)`)
-  let tags = {name: senderHoprdNode.name, hops: hops, path: pathNames}
+  console.log(`[VU:${execution.vu.idInInstance}] - Sending ${hops} hops message [${sender.name}] (source) -> [${pathNames}] (relayers) -> [${receiver.name}] (target)`)
+  let tags = {name: sender.name, hops: hops, path: pathNames}
   let startTime = new Date().getTime();
   let body = `${startTime} ${JSON.stringify(tags)}`;
-  sendMessage(senderHoprdNode.url, senderHoprdNode.httpParams, JSON.stringify({ tag: execution.vu.idInInstance + 1024, body, path: pathPeerIds, peerId: senderHoprdNode.peerId, hops }), tags)
+  sendMessage(sender.url, sender.httpParams, JSON.stringify({ tag: execution.vu.idInInstance + 1024, body, path, peerId: receiver.peerId, hops }), tags)
 }
 
 export function teardown(dataPool: { senders: HoprdNode[], nodes: HoprdNode[] }) {
@@ -188,6 +200,7 @@ export class HoprdNode {
   public url: string
   public isSender: boolean
   public isRelayer: boolean
+  public isReceiver: boolean
   public peerAddress: string
   public httpParams: RefinedParams<ResponseType>
   public peerId: string
@@ -207,6 +220,7 @@ export class HoprdNode {
     },
       this.isSender = data.isSender,
       this.isRelayer = data.isRelayer,
+      this.isReceiver = data.isReceiver
       this.getAddress(data)
   }
 

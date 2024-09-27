@@ -4,8 +4,8 @@
       "name": "core-node-1",
       "url": "https://core-node-1.core-team.staging.hoprnet.link/",
       "isSender": true,
-      "isRelayer": false,
-      "isReceiver": true,
+      "isRelayer": true,
+      "isReceiver": false,
       "routes": [
         { "name": "core-node-5" }
       ]
@@ -14,8 +14,8 @@
       "name": "core-node-2",
       "url": "https://core-node-2.core-team.staging.hoprnet.link/",
       "isSender": true,
-      "isRelayer": false,
-      "isReceiver": true,
+      "isRelayer": true,
+      "isReceiver": false,
       "routes": [
         { "name": "core-node-5" }
       ]
@@ -24,8 +24,8 @@
       "name": "core-node-3",
       "url": "https://core-node-3.core-team.staging.hoprnet.link/",
       "isSender": true,
-      "isRelayer": false,
-      "isReceiver": true,
+      "isRelayer": true,
+      "isReceiver": false,
       "routes": [
         { "name": "core-node-5" }
       ]
@@ -34,8 +34,8 @@
       "name": "core-node-4",
       "url": "https://core-node-4.core-team.staging.hoprnet.link/",
       "isSender": true,
-      "isRelayer": false,
-      "isReceiver": true,
+      "isRelayer": true,
+      "isReceiver": false,
       "routes": [
         { "name": "core-node-5" }
 
@@ -45,8 +45,8 @@
       "name": "core-node-5",
       "url": "https://core-node-5.core-team.staging.hoprnet.link/",
       "isSender": false,
-      "isRelayer": true,
-      "isReceiver": false,
+      "isRelayer": false,
+      "isReceiver": true,
       "routes": [
         { "name": "core-node-1" },
         { "name": "core-node-2" },

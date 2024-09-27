@@ -5,6 +5,7 @@
       "url": "http://85.206.96.234:3009/",
       "isSender": true,
       "isRelayer": true,
+      "isReceiver": true,
       "routes": [
         { "name": "hoprd-andrius-vps" },
         { "name": "hoprd-ausias" },
@@ -22,6 +23,7 @@
       "url": "http://173.249.13.193:3009/",
       "isSender": true,
       "isRelayer": true,
+      "isReceiver": true,
       "routes": [
         { "name": "hoprd-andrius-dappnode" },
         { "name": "hoprd-ausias" },
@@ -39,6 +41,7 @@
       "url": "http://85.49.63.139:3101/",
       "isSender": true,
       "isRelayer": true,
+      "isReceiver": true,
       "routes": [
         { "name": "hoprd-andrius-dappnode" },
         { "name": "hoprd-andrius-vps" },
@@ -56,6 +59,7 @@
       "url": "http://178.254.33.145:3002/",
       "isSender": true,
       "isRelayer": true,
+      "isReceiver": true,
       "routes": [
         { "name": "hoprd-andrius-dappnode"},
         { "name": "hoprd-andrius-vps" },
@@ -73,6 +77,7 @@
       "url": "http://65.109.137.126:3002/",
       "isSender": true,
       "isRelayer": true,
+      "isReceiver": true,
       "routes": [
         { "name": "hoprd-andrius-dappnode"},
         { "name": "hoprd-andrius-vps" },
@@ -90,6 +95,7 @@
       "url": "http://vlabs.ddns.net:3101/",
       "isSender": true,
       "isRelayer": true,
+      "isReceiver": true,
       "routes": [
         { "name": "hoprd-andrius-dappnode"},
         { "name": "hoprd-andrius-vps" },
@@ -107,6 +113,7 @@
       "url": "http://91.132.145.250:3101",
       "isSender": true,
       "isRelayer": true,
+      "isReceiver": true,
       "routes": [
         { "name": "hoprd-andrius-dappnode"},
         { "name": "hoprd-andrius-vps" },
@@ -124,6 +131,7 @@
       "url": "http://45.76.177.147:3101/",
       "isSender": true,
       "isRelayer": true,
+      "isReceiver": true,
       "routes": [
         { "name": "hoprd-andrius-dappnode"},
         { "name": "hoprd-andrius-vps" },
@@ -141,6 +149,7 @@
       "url": "http://8.8.8.8:3001/",
       "isSender": true,
       "isRelayer": true,
+      "isReceiver": true,
       "routes": [
         { "name": "hoprd-andrius-dappnode"},
         { "name": "hoprd-andrius-vps" },
@@ -158,6 +167,7 @@
       "url": "http://8.8.8.8:3001/",
       "isSender": true,
       "isRelayer": true,
+      "isReceiver": true,
       "routes": [
         { "name": "hoprd-andrius-dappnode"},
         { "name": "hoprd-andrius-vps" },

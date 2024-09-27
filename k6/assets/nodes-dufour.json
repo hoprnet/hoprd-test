@@ -5,6 +5,7 @@
       "url": "https://core-node-1.core-team.prod.hoprnet.link/",
       "isSender": true,
       "isRelayer": true,
+      "isReceiver": true,
       "routes": [
         { "name": "core-node-2" },
         { "name": "core-node-3" },
@@ -17,6 +18,7 @@
       "url": "https://core-node-2.core-team.prod.hoprnet.link/",
       "isSender": true,
       "isRelayer": true,
+      "isReceiver": true,
       "routes": [
         { "name": "core-node-1" },
         { "name": "core-node-3" },
@@ -29,6 +31,7 @@
       "url": "https://core-node-3.core-team.prod.hoprnet.link/",
       "isSender": true,
       "isRelayer": true,
+      "isReceiver": true,
       "routes": [
         { "name": "core-node-1" },
         { "name": "core-node-2" },
@@ -41,6 +44,7 @@
       "url": "https://core-node-4.core-team.prod.hoprnet.link/",
       "isSender": true,
       "isRelayer": true,
+      "isReceiver": true,
       "routes": [
         { "name": "core-node-1" },
         { "name": "core-node-2" },
@@ -54,6 +58,7 @@
       "url": "https://core-node-5.core-team.prod.hoprnet.link/",
       "isSender": true,
       "isRelayer": true,
+      "isReceiver": true,
       "routes": [
         { "name": "core-node-1" },
         { "name": "core-node-2" },
