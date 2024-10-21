@@ -174,7 +174,7 @@ export function multipleHopMessage(dataPool: { senders: HoprdNode[], relayers: H
   let tags = {name: sender.name, hops: hops, path: pathNames}
   let startTime = new Date().getTime();
   let body = `${startTime} ${JSON.stringify(tags)}`;
-  sendMessage(sender.url, sender.httpParams, JSON.stringify({ tag: execution.vu.idInInstance + 1024, body, path, peerId: receiver.peerId, hops }), tags)
+  sendMessage(sender.url, sender.httpParams, JSON.stringify({ tag: execution.vu.idInInstance + 1024, body, path, destination: receiver.peerId, hops }), tags)
 }
 
 export function teardown(dataPool: { senders: HoprdNode[], nodes: HoprdNode[] }) {
@@ -200,6 +200,7 @@ export class HoprdNode {
 
   public name: string
   public url: string
+  public enabled: boolean
   public isSender: boolean
   public isRelayer: boolean
   public isReceiver: boolean
@@ -220,6 +221,7 @@ export class HoprdNode {
         name: data.name
       }
     },
+      this.enabled = data.enabled,
       this.isSender = data.isSender,
       this.isRelayer = data.isRelayer,
       this.isReceiver = data.isReceiver

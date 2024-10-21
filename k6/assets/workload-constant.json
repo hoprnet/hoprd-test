@@ -5,6 +5,7 @@
       "vus": 1,
       "iterations": 1,
       "maxDuration": "31m10s",
+      "gracefulStop": "15s",
       "exec": "receiveMessages",
       "tags": { 
         "scenario": "receive_messages"
