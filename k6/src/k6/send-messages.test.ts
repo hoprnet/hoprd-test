@@ -170,7 +170,7 @@ export function multipleHopMessage(dataPool: { senders: HoprdNode[], relayers: H
   let pathNames = nodesPath.map((node: HoprdNode) => node.name).join(' -> ');
   let path = nodesPath.map((node: HoprdNode) => node.peerId);
 
-  console.log(`[VU:${execution.vu.idInInstance}] - Sending ${hops} hops message [${sender.name}] (source) -> [${pathNames}] (relayers) -> [${receiver.name}] (target)`)
+  //console.log(`[VU:${execution.vu.idInInstance}] - Sending ${hops} hops message [${sender.name}] (source) -> [${pathNames}] (relayers) -> [${receiver.name}] (target)`)
   let tags = {name: sender.name, hops: hops, path: pathNames}
   let startTime = new Date().getTime();
   let body = `${startTime} ${JSON.stringify(tags)}`;

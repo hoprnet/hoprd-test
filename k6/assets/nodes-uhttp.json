@@ -2,7 +2,7 @@
   "nodes": [
     {
       "name": "uhttp-green-node-1",
-      "url": "https://uhttp-green-node-1.uhttp.staging.hoprnet.link",
+      "url": "https://uhttp-green-node-1.uhttp.staging.hoprnet.link/",
       "enabled": true,
       "isSender": true,
       "isRelayer": true,
