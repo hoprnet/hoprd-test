@@ -18,7 +18,6 @@ const amountOfReceivers = nodesData.nodes.filter(
 ).length;
 
 const MaxPayloadBytes = 400;
-// UTF-8 uses variying byte sizes - try to keep them in the single byte range
 const Alphabet =
   "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
 
@@ -249,6 +248,9 @@ export function multipleHopMessage(dataPool: {
   );
 }
 
+// use random ASCI chars to extend the payload
+// UTF-8 uses variying byte sizes - try to keep them in the single byte range
+// so we have a predicatble payload size
 function extendWrandomBytes(body: string): string {
   const count = MaxPayloadBytes - body.length - 1;
   let rndmContent = "";
