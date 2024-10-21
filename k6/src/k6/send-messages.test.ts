@@ -18,6 +18,7 @@ const amountOfReceivers = nodesData.nodes.filter(
 ).length;
 
 const MaxPayloadBytes = 400;
+// UTF-8 uses variying byte sizes - try to keep them in the single byte range
 const Alphabet =
   "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
 
