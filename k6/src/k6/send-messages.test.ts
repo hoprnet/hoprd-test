@@ -4,6 +4,7 @@ import { Counter, Trend } from "k6/metrics";
 import http, { RefinedParams, RefinedResponse, ResponseType } from "k6/http";
 import { check, fail } from "k6";
 import ws from "k6/ws";
+import crypto from 'k6/crypto';
 // 1. Begin Init section
 const nodes = __ENV.NODES || "many2many";
 
@@ -17,7 +18,7 @@ const amountOfReceivers = nodesData.nodes.filter(
     node.enabled && node.isReceiver != undefined && node.isReceiver,
 ).length;
 
-const MaxPayloadBytes = 400;
+const MaxPayloadBytes = 325;
 
 // Override API Token
 if (__ENV.HOPRD_API_TOKEN) {
@@ -248,9 +249,9 @@ export function multipleHopMessage(dataPool: {
 
 function extendWrandomBytes(body: string): string {
   const count = MaxPayloadBytes - body.length - 1;
-  const bytes = new Uint8Array(count);
-  crypto.getRandomValues(bytes);
-  const str = bytes.reduce<string>((acc, v) => {
+  const bytes = crypto.randomBytes(count);
+  const uintArray = new Uint8Array(bytes);
+  const str = uintArray.reduce<string>((acc, v) => {
     acc += String.fromCharCode(v);
     return acc;
   }, "");
