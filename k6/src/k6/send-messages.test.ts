@@ -12,6 +12,8 @@ const nodesData = JSON.parse(open(`./nodes-${nodes}.json`))
 const amountOfSenders = nodesData.nodes.filter((node: any) => node.enabled && node.isSender != undefined && node.isSender).length
 const amountOfReceivers = nodesData.nodes.filter((node: any) => node.enabled && node.isReceiver != undefined && node.isReceiver).length
 
+const MaxPayloadBytes = 400;
+
 // Override API Token
 if (__ENV.HOPRD_API_TOKEN) {
   nodesData.nodes.forEach((node: any) => {
@@ -173,8 +175,20 @@ export function multipleHopMessage(dataPool: { senders: HoprdNode[], relayers: H
   //console.log(`[VU:${execution.vu.idInInstance}] - Sending ${hops} hops message [${sender.name}] (source) -> [${pathNames}] (relayers) -> [${receiver.name}] (target)`)
   let tags = {name: sender.name, hops: hops, path: pathNames}
   let startTime = new Date().getTime();
-  let body = `${startTime} ${JSON.stringify(tags)}`;
+  let contentBody = `${startTime} ${JSON.stringify(tags)}`;
+  const body = extendWrandomBytes(contentBody);
   sendMessage(sender.url, sender.httpParams, JSON.stringify({ tag: execution.vu.idInInstance + 1024, body, path, destination: receiver.peerId, hops }), tags)
+}
+
+function extendWrandomBytes(body: string): string {
+    const count = MaxPayloadBytes - body.length - 1;
+    const bytes = new Uint8Array(count);
+    crypto.getRandomValues(bytes);
+    const str = bytes.reduce<string>((acc, v) => {
+        acc += String.fromCharCode(v);
+        return acc;
+    }, '');
+    return `${body} ${str}`;
 }
 
 export function teardown(dataPool: { senders: HoprdNode[], nodes: HoprdNode[] }) {
