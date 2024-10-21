@@ -3,6 +3,7 @@
     {
       "name": "uhttp-green-node-1",
       "url": "https://uhttp-green-node-1.uhttp.staging.hoprnet.link",
+      "enabled": true,
       "isSender": true,
       "isRelayer": true,
       "isReceiver": true,
@@ -16,6 +17,7 @@
     {
       "name": "uhttp-green-node-2",
       "url": "https://uhttp-green-node-2.uhttp.staging.hoprnet.link/",
+      "enabled": true,
       "isSender": true,
       "isRelayer": true,
       "isReceiver": true,
@@ -29,6 +31,7 @@
     {
       "name": "uhttp-green-node-3",
       "url": "https://uhttp-green-node-3.uhttp.staging.hoprnet.link/",
+      "enabled": true,
       "isSender": true,
       "isRelayer": true,
       "isReceiver": true,
@@ -42,6 +45,7 @@
     {
       "name": "uhttp-green-node-4",
       "url": "https://uhttp-green-node-4.uhttp.staging.hoprnet.link/",
+      "enabled": true,
       "isSender": true,
       "isRelayer": true,
       "isReceiver": true,
@@ -56,6 +60,7 @@
     {
       "name": "uhttp-green-node-5",
       "url": "https://uhttp-green-node-5.uhttp.staging.hoprnet.link/",
+      "enabled": true,
       "isSender": true,
       "isRelayer": true,
       "isReceiver": true,
