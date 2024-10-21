@@ -25,8 +25,9 @@ const setupEnvironment = async (nodes: HoprdNode[]) => {
   }
 
   // Open channels nodes
+  const enabledNodes: HoprdNode[] = nodes.filter((node:HoprdNode) => node.data.enabled)
   const openChannels: Promise<string[]> [] = []
-  nodes.forEach((node:HoprdNode) => { openChannels.push(node.openChannels(nodes))})
+  nodes.forEach((node:HoprdNode) => { openChannels.push(node.openChannels(enabledNodes))})
 
   const nodePendingTransactions: string[][] = await Promise.all(openChannels)
     if (nodePendingTransactions.flat().length > 0 ) {
@@ -43,14 +44,16 @@ const iterations = process.env.SCENARIO_ITERATIONS || 1
 const duration = process.env.SCENARIO_DURATION || "30"
 const hoprdNodeThreads = process.env.HOPRD_NODE_THREADS || 1
 const nodesData = JSON.parse(fs.readFileSync(`assets/nodes-${nodes}.json`).toString())
-const promiseNodes: HoprdNode[] = nodesData.nodes.map(async (node: any) => {
+const enabledNodes: HoprdNode[] = nodesData.nodes
+  .filter((node: any) => node.enabled)
+  .map(async (node: any) => {
   let hoprdNode = new HoprdNode(node);
   await hoprdNode.init();
   return hoprdNode;
 });
+nodesData.nodes.filter((node: any) => !node.enabled).forEach((node: any) => { console.log(`[INFO] Node ${node.name} is disabled`) })
 
-
-Promise.all(promiseNodes).then((hoprdNodes: HoprdNode[]) => {
+Promise.all(enabledNodes).then((hoprdNodes: HoprdNode[]) => {
   setupEnvironment(hoprdNodes).then(() => {
     console.log('[INFO] Environment fully setup')
 

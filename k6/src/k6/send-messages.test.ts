@@ -9,8 +9,8 @@ const nodes = __ENV.NODES || 'many2many'
 
 // Load nodes
 const nodesData = JSON.parse(open(`./nodes-${nodes}.json`))
-const amountOfSenders = nodesData.nodes.filter((node: any) => node.isSender != undefined && node.isSender).length
-const amountOfReceivers = nodesData.nodes.filter((node: any) => node.isReceiver != undefined && node.isReceiver).length
+const amountOfSenders = nodesData.nodes.filter((node: any) => node.enabled && node.isSender != undefined && node.isSender).length
+const amountOfReceivers = nodesData.nodes.filter((node: any) => node.enabled && node.isReceiver != undefined && node.isReceiver).length
 
 // Override API Token
 if (__ENV.HOPRD_API_TOKEN) {
@@ -71,7 +71,9 @@ export function setup() {
   const senders: HoprdNode[] = []
   const receivers: HoprdNode[] = []
   const relayers: HoprdNode[] = []
-  nodesData.nodes.forEach((node: any) => {
+  nodesData.nodes
+  .filter((node: any) => node.enabled)
+  .forEach((node: any) => {
     let hoprdNode: HoprdNode = new HoprdNode(node)
     if (hoprdNode.isSender) {
       console.log(`Setting up ${hoprdNode.name} as sender`)
