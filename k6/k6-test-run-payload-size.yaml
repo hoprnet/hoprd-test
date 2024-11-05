@@ -1,0 +1,52 @@
+---
+apiVersion: k6.io/v1alpha1
+kind: K6
+metadata:
+  name: k6-hoprd-many2many-constant
+  namespace: k6-operator-system
+spec:
+  parallelism: 1
+  script:
+    localFile: /app/hoprnet/send-messages.test.js
+  separate: true
+  arguments: --tag testid=kubernetes --summary-export=/test-results/k6/test-execution-$(date +%Y%m%d-%H%M%S).json
+  runner:
+    image: europe-west3-docker.pkg.dev/hoprassociation/docker-images/hoprd-k6:payload-size
+    securityContext:
+      runAsUser: 0
+    resources:
+      limits:
+        cpu: 2
+        memory: 2Gi
+      requests:
+        cpu: 2
+        memory: 2Gi
+    env:
+      - name: NODES
+        value: many2many
+      - name: WORKLOAD_NAME
+        value: constant
+      - name: SCENARIO_ITERATIONS
+        value: "1"
+      - name: SCENARIO_DURATION
+        value: "30"
+      - name: HOPRD_NODE_THREADS
+        value: "1"
+      - name: HOPRD_API_TOKEN
+        valueFrom:
+          secretKeyRef:
+            name: hoprd-api-tokens
+            key: many2many
+      - name: K6_PROMETHEUS_RW_SERVER_URL
+        value: http://kube-prometheus-stack-prometheus.monitoring.svc:9090/api/v1/write
+      - name: K6_PROMETHEUS_RW_TREND_AS_NATIVE_HISTOGRAM
+        value: 'true'
+      - name: K6_OUT
+        value: xk6-prometheus-rw
+    volumes:
+      - name: test-results
+        persistentVolumeClaim:
+          claimName: test-results
+    volumeMounts:
+      - name: test-results
+        mountPath: /test-results/k6

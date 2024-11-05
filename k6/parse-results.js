@@ -13,7 +13,7 @@ const duration = process.argv[7];
 const execution_time = test_result_json.replace(/test-execution-/, '').replace(/\.json/, '');
 // Read and parse the JSON file
 const data = JSON.parse(fs.readFileSync(test_result_json, 'utf8'));
-const metric_keys = ['data_received', 'data_sent', 'hopr_message_requests_succeed', 'hopr_message_requests_failed', 'hopr_sent_messages_succeed','hopr_message_latency'];
+const metric_keys = ['data_received', 'data_sent', 'hopr_message_requests_succeed', 'hopr_sent_messages_succeed','hopr_message_latency'];
 
 metrics = Object.entries(data.metrics).filter(([key, metric]) => {
   if(metric_keys.includes(key)) {
@@ -27,7 +27,7 @@ metrics = Object.entries(data.metrics).filter(([key, metric]) => {
       thresholds: metric.thresholds
     }
   }
-  if(key === 'hopr_message_requests_succeed' || key === 'hopr_message_requests_failed' || key === 'hopr_sent_messages_succeed') {
+  if(key === 'hopr_message_requests_succeed' || key === 'hopr_sent_messages_succeed') {
     metric = {
       count: metric.count > 1000 ? `${(metric.count / 1000).toFixed(2)} K` : metric.count,
       rate: `${metric.rate.toFixed(2)} req/s`,

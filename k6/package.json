@@ -12,7 +12,7 @@
     "@babel/plugin-transform-block-scoping": "^7.14.1",
     "@babel/preset-env": "7.23.2",
     "@babel/preset-typescript": "7.23.2",
-    "@types/k6": "~0.47.0",
+    "@types/k6": "~0.54.1",
     "@types/node": "^20.8.5",
     "@types/node-fetch": "^2.6.6",
     "@types/webpack": "5.28.3",
@@ -44,14 +44,16 @@
     "test:receiver": "npm run webpack && NODES=receiver K6_PROMETHEUS_RW_TREND_AS_NATIVE_HISTOGRAM=true K6_OUT=xk6-prometheus-rw K6_PROMETHEUS_RW_SERVER_URL=https://prometheus.staging.hoprnet.link/api/v1/write ./k6 run --summary-export=test-execution-local.json --tag testid=local ./dist/send-messages.test.js",
     "test:relayer": "npm run webpack && NODES=relayer K6_PROMETHEUS_RW_TREND_AS_NATIVE_HISTOGRAM=true K6_OUT=xk6-prometheus-rw K6_PROMETHEUS_RW_SERVER_URL=https://prometheus.staging.hoprnet.link/api/v1/write ./k6 run --summary-export=test-execution-local.json --tag testid=local ./dist/send-messages.test.js",
     "test:team": "npm run webpack && NODES=team K6_PROMETHEUS_RW_TREND_AS_NATIVE_HISTOGRAM=true K6_OUT=xk6-prometheus-rw K6_PROMETHEUS_RW_SERVER_URL=https://prometheus.staging.hoprnet.link/api/v1/write ./k6 run --summary-export=test-execution-local.json --tag testid=local ./dist/send-messages.test.js",
-    "test:dufour": "npm run webpack && NODES=dufour K6_PROMETHEUS_RW_TREND_AS_NATIVE_HISTOGRAM=true K6_OUT=xk6-prometheus-rw K6_PROMETHEUS_RW_SERVER_URL=https://prometheus.staging.hoprnet.link/api/v1/write ./k6 run --summary-export=test-execution-local.json --tag testid=local ./dist/send-messages.test.js",
     "setup:many2many": "npm run build && NODES=many2many node ./dist/setup-environment.js",
     "setup:uhttp": "npm run build && NODES=uhttp node ./dist/setup-environment.js",
+    "setup:sender": "npm run build && NODES=sender node ./dist/setup-environment.js",
+    "setup:receiver": "npm run build && NODES=receiver node ./dist/setup-environment.js",
+    "setup:relayer": "npm run build && NODES=relayer node ./dist/setup-environment.js",
     "setup:team": "npm run build && NODES=team node ./dist/setup-environment.js",
     "parse:results": "node parse-results.js test-execution-20240522-113543.json many2many sanity-check 1 test-2.1.0 30"
   },
   "dependencies": {
-    "@hoprnet/hopr-sdk": "^2.1.0-beta.30",
+    "@hoprnet/hopr-sdk": "^2.1.9",
     "fs": "^0.0.1-security",
     "handlebars": "^4.7.8"
   }

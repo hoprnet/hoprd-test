@@ -10,7 +10,8 @@ export class HoprdNode {
         timeout?: number;
     };
   private sdk: HoprSDK;
-  public peerAddress?: string;
+  public nativeAddress?: string;
+  public peerId?: string;
   public channels?: GetChannelsResponseType
 
 
@@ -29,17 +30,18 @@ export class HoprdNode {
 
   public async init() {
     await this.sdk.api.account.getAddresses(this.basePayload).then((addresses) => {
-      this.peerAddress = addresses.native;
+      this.nativeAddress = addresses.native;
+      this.peerId = addresses.hopr
     }).catch((error: any) => {
       console.error(`[ERROR] Unable to get node peerAddress for '${this.data.name}'`)
-      console.error(`[ERROR] ${error}`)
+      console.error("[ERROR]", error)
       process.exit(1);
     });
     await this.sdk.api.channels.getChannels(this.basePayload).then((channels) => {
      this.channels = channels;
     }).catch((error: any) => {
       console.error(`[ERROR] Unable to get node channels for '${this.data.name}'`)
-      console.error(`[ERROR] ${error}`)
+      console.error("[ERROR]", error)
       process.exit(1);
     });
   }
@@ -58,7 +60,7 @@ export class HoprdNode {
     return true
     }).catch((error: any) => {
       console.error(`[ERROR] Insufficient node balance for '${this.data.name}'`)
-      console.error(`[ERROR] ${error}`)
+      console.error("[ERROR]", error)
       return false
 
     });
@@ -79,63 +81,111 @@ export class HoprdNode {
       console.error(`[ERROR] Node ${this.data.name} is not yet synchronised`)
       return false
     })
-
   }
 
-  public async openChannels(nodes: HoprdNode[]): Promise<string[]> {
-    const pendingChannels: Promise<{ channelId: string; transactionReceipt: string; }>[] = []
-    const getPeerAddressByNodeName = (nodeName: string): string => { return nodes.find((node: HoprdNode) => node.data.name == nodeName)?.peerAddress || ''}
-    for (let index = 0; index < this.data.routes.length; index++) {
-      const route = this.data.routes[index];
-      const routePeerAddress = getPeerAddressByNodeName(route.name)
+  public async openChannel(peerAddress: string, nodeName: string): Promise<string> {
+    if (peerAddress == '') {
+      console.error(`[ERROR] Unable to find peerAddress for node '${nodeName}' in routes for node ${this.data.name}`)
+      process.exit(1);
+    }
+    const openChannelPayload = Object.assign(this.basePayload, {peerAddress, amount: "100000000000000000", timeout: 1000 * 60 * 3 });
+    return this.sdk.api.channels.openChannel(openChannelPayload).then(
+      (newChannel: any) => {
+        console.log(`[INFO] Openning outgoing channel from ${this.data.name} to ${nodeName} on Tx: ${newChannel.transactionReceipt}`)
+        return newChannel.channelId
+      }).catch((error: any) => {
+        console.error(`[ERROR] Unable to open outgoing channel from ${this.data.name} to ${nodeName}`)
+        console.error(`[ERROR]`, error)
+        return ''
+      })
+  }
+
+  public async closeChannel(channelId: string): Promise<void> {
+    const closeChannelPayload = Object.assign(this.basePayload, {channelId, timeout: 1000 * 60 * 5 });
+    console.log(`[INFO] Closing outgoing channel ${channelId} from ${this.data.name}`)
+    return this.sdk.api.channels.closeChannel(closeChannelPayload).then(
+      (closeChannel: any) => {
+        console.log(`[INFO] Closing outgoing channel ${closeChannel.channelId} from ${this.data.name}`)
+      }).catch((error: any) => {
+        console.error(`[ERROR] Unable to close outgoing channel from ${this.data.name} with channelId ${channelId}`)
+        console.error("[ERROR]", error)
+      })
+  }
+
+  public async syncChannels(nodes: HoprdNode[]): Promise<string[]> {
+    const pendingOpenChannels: Promise<string> [] = []
+    const pendingCloseChannels: Promise<void> [] = []
+    // Prepare to open channels
+    for (let route of this.data.routes) {
+      const routePeerAddress = this.getNativeAddressByNodeName(route.name, nodes)
       if (routePeerAddress == '') {
         console.error(`[ERROR] Unable to find peerAddress for node ${route.name} in routes for node ${this.data.name}`)
         process.exit(1);
       }
       const channel = this.channels?.outgoing.find((channel) => channel.status == 'Open' && channel.peerAddress == routePeerAddress )
       if (! channel) {
-        let openChannelPayload = Object.assign(this.basePayload, {peerAddress: routePeerAddress, amount: "100000000000000000", timeout: 1000 * 60 * 3 });
-        //console.log(`[INFO] Openning outgoing channel from ${this.data.name} with payload ${JSON.stringify(openChannelPayload)}`)
-        pendingChannels.push(this.sdk.api.channels.openChannel(openChannelPayload).then(
-        (newChannel: any) => {
-          console.log(`[INFO] Openning outgoing channel[${newChannel.channelId}] from ${this.data.name} to ${route.name} on Tx: ${newChannel.transactionReceipt}`)
-          return newChannel
-        }).catch((error: any) => {
-          console.error(`[ERROR] Unable to open outgoing channel from ${this.data.name} to ${route.name}`)
-          console.error(`[ERROR] ${error}`)
-        })
-      )
+        pendingOpenChannels.push(this.openChannel(routePeerAddress, route.name))
       } else {
         if (channel.status != 'Open') {
           console.error(`[ERROR] Channel from ${this.data.name} to ${route.name} is in status ${channel.status} and cannot be used. Please close it manually.`)
           process.exit(1);
         }
         if (BigInt(channel.balance) < BigInt(10000000000000000)) {
-          console.error(`[ERROR] Channel (${channel.id}) balance from ${this.data.name} to ${route.name} is insufficient and cannot be used. Please top up manually the channel or close it.`)
-          process.exit(1);
+          console.warn(`[WARN] Channel (${channel.id}) balance from ${this.data.name} to ${route.name} is insufficient and cannot be used. Funding it automatically.`)
+          await this.sdk.api.channels.fundChannel(Object.assign(this.basePayload, {channelId: channel.id, amount: "10000000000000000"}));
         }
-        //console.log(`[DEBUG] Channel from ${this.data.name} to ${route.name} already openened with id ${channel.id}`)
       }
     }
-    let openningChannels: string[] = (await Promise.all(pendingChannels)).map(channel => channel.channelId)
+    // Prepare to close channels
+    let channelsToClose = this.getOutgoingChannelsToClose(nodes).then((channelsToClose) => {
+      channelsToClose.forEach((channelId) => {
+        console.log(`[INFO] Closing outgoing channel ${channelId} from ${this.data.name}`)
+        //pendingCloseChannels.push(this.closeChannel(channelId))
+      })
+      return channelsToClose;
+    });
+
+    // Open and close channels
+    let openningChannels: string[] = (await Promise.all(pendingOpenChannels));
+    await Promise.all(pendingCloseChannels);
+
+    // Wait for channels to be openned and closed
+    let waitForChannels = [...openningChannels.map(openningChannel => this.waitForChannelStatus(openningChannel, 'Open')), ...(await channelsToClose).map(channelToClose => this.waitForChannelStatus(channelToClose, 'Closed'))];
+    return Promise.all(waitForChannels);
+  }
+
+  getNativeAddressByNodeName(nodeName: string, nodes: HoprdNode[]): string {
+    let node: HoprdNode | undefined = nodes.find((node: HoprdNode) => node.data.name === nodeName );
+    return node?.nativeAddress || '';
+  }
+
+  public async getOutgoingChannelsToClose(nodes: HoprdNode[]): Promise<string[]> {
+    const currentChannels: GetChannelsResponseType = await this.sdk.api.channels.getChannels(this.basePayload)
+    const outgoingNativeAddressNodes: string[] = this.data.routes.map((route: any) => this.getNativeAddressByNodeName(route.name, nodes));
+    const channelsToClose = currentChannels.outgoing.filter((outgoingChannel) => {
+      //console.log(`[INFO] Checking channel ${outgoingChannel.id} from ${this.data.name} to ${outgoingChannel.peerAddress}`)
+      //console.log(`[INFO] Is about to close: ${!outgoingNativeAddressNodes.includes(outgoingChannel.peerAddress) && outgoingChannel.status === 'Open'}`)
+      return !outgoingNativeAddressNodes.includes(outgoingChannel.peerAddress) && outgoingChannel.status === 'Open'
+    }).map((outgoingChannel) => outgoingChannel.id)
+    return channelsToClose;
+  }
+
+  async waitForChannelStatus(channelId: string, desiredStatus: string): Promise<string> {
     let iteration = 0
-    let channels = openningChannels
-    const waitingChannels: Promise<string[]> = new Promise<string[]>( (resolve) => {
+    let channel = channelId
+    const waitingChannel: Promise<string> = new Promise<string>( (resolve) => {
       var interval = setInterval(async () => {
           iteration++
           const currentChannels: GetChannelsResponseType = await this.sdk.api.channels.getChannels(this.basePayload)
-          channels = channels.filter(channel => currentChannels.outgoing.find(outgoingChannel => outgoingChannel.id == channel && outgoingChannel.status == "Open" ) == undefined )
-          if (channels.length == 0 || iteration >= 10) {
+          const channelStatus = currentChannels.outgoing.find(outgoingChannel => outgoingChannel.id == channel )
+          if (channelStatus?.status == desiredStatus || iteration >= 10) {
             clearInterval(interval);
-            resolve(channels)
+            resolve(channel)
           } else {
-            console.log(`[INFO] [Iteration ${iteration}] Node ${this.data.name} has pending channels : ${channels}`)
+            console.log(`[INFO] [Iteration ${iteration}] Node ${this.data.name} has '${channelStatus?.status}' channel : ${channel}`)
           }
         }, 60 * 1000)
     })
-    return (await waitingChannels)
-
+    return (await waitingChannel)
   }
-
-
 }

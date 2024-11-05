@@ -1,39 +1,16 @@
 import * as fs from 'fs';
 import Handlebars from "handlebars";
 import { HoprdNode } from './hoprd-node';
+import { checkNodes, setupChannels } from './setup-tasks';
 
 const setupEnvironment = async (nodes: HoprdNode[]) => {
-  const maxRetries = 10;
-  let retries = 0;
-  let checkNodes: Promise<{node: HoprdNode, status: boolean}>[] = nodes.map((node:HoprdNode) => node.check().then(status => ({node, status})));
-  while (checkNodes.length > 0 && retries < maxRetries) {
-    const results: {node: HoprdNode, status: boolean}[] = await Promise.all(checkNodes);
-    
-    // Filter out the nodes that were checked successfully
-    checkNodes = results.filter(result => !result.status).map(result => result.node.check().then(status => ({node: result.node, status})));
 
-    if (checkNodes.length > 0) {
-      if (retries < maxRetries - 1) { // if it's not the last iteration
-        console.error(`[ERROR] Retrying in 60 seconds...`)
-        await new Promise(resolve => setTimeout(resolve, 60000));
-      } else {
-        console.error(`[ERROR] Review the previous errors checking nodes. Exiting after ${maxRetries} attempts.`)
-        process.exit(1);
-      }
-    }
-    retries++;
-  }
+  // Check nodes
+  await checkNodes(nodes, 10)
 
-  // Open channels nodes
-  const enabledNodes: HoprdNode[] = nodes.filter((node:HoprdNode) => node.data.enabled)
-  const openChannels: Promise<string[]> [] = []
-  nodes.forEach((node:HoprdNode) => { openChannels.push(node.openChannels(enabledNodes))})
+  // Setup channels
+  await setupChannels(nodes)  
 
-  const nodePendingTransactions: string[][] = await Promise.all(openChannels)
-    if (nodePendingTransactions.flat().length > 0 ) {
-      console.error(`[ERROR] There are ${nodePendingTransactions.flat().length} channels pending to be openned`)
-      process.exit(1);
-    }
 }
 
 // Main

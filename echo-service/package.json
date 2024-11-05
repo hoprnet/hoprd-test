@@ -1,0 +1,25 @@
+{
+  "name": "echo-service",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "ts-node src/index.ts",
+    "docker:build": "docker build --platform linux/amd64 -t europe-west3-docker.pkg.dev/hoprassociation/docker-images/hoprd-k6-echo-service .",
+    "docker:push": "docker push europe-west3-docker.pkg.dev/hoprassociation/docker-images/hoprd-k6-echo-service"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "express": "^4.21.1"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.8.7",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.6.3"
+  }
+}
