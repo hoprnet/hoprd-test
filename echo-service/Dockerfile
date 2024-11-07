@@ -30,11 +30,18 @@ WORKDIR /app
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/package.json ./
 
+# Use a startup script to run both servers
+COPY start.sh /app/start.sh
+RUN chmod +x /app/start.sh
+
 # Install only production dependencies
 RUN npm install --production
 
 # Expose the application port
 EXPOSE 8080
 
+# Expose the websocket port
+EXPOSE 8888
+
 # Run the application
-CMD ["node", "dist/index.js"]
+CMD ["/app/start.sh"]

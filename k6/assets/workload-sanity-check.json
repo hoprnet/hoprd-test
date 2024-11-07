@@ -1,22 +1,10 @@
 {
   "scenarios": {
-    "receive_messages": {
-      "executor": "per-vu-iterations",
-      "vus": 5,
-      "iterations": 1,
-      "maxDuration": "1m5s",
-      "gracefulStop": "5s",
-      "exec": "receiveMessages",
-      "tags": { 
-        "scenario": "receive_messages"
-      }
-    },
     "sanity_check": {
       "executor": "per-vu-iterations",
       "vus": 5,
       "iterations": 1,
-      "maxDuration": "1m5s",
-      "startTime": "5s",
+      "maxDuration": "1m",
       "env": {
         "HOPS": "1"
       },

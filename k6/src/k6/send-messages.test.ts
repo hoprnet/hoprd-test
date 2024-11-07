@@ -23,6 +23,11 @@ const amountOfReceivers = nodesData.filter((node: any) => node.enabled && node.i
 // Read workload options
 __ENV.WEBSOCKET_DISCONNECTED = "false";
 const workloadName = __ENV.WORKLOAD_NAME || "sanity-check";
+let message_delay: number = 1000;
+if (__ENV.SCENARIO_ITERATIONS) {
+  message_delay = 1000 / parseInt(__ENV.SCENARIO_ITERATIONS);
+  console.log(`[Setup] Setting delay between messages to ${message_delay} ms`);
+}
 const workloadOptions = JSON.parse(open(`./workload-${workloadName}.json`));
 //console.log("Test execution options: ");
 //console.log(JSON.stringify(workloadOptions))
@@ -32,7 +37,7 @@ export const options: Partial<Options> = workloadOptions;
 // Define metrics
 let messageRequestsSucceed = new Counter("hopr_message_requests_succeed"); // Counts the number of messages requests successfully sent
 let sentMessagesSucceed = new Counter("hopr_sent_messages_succeed"); // Counts the number of X hop messages successfully transmitted
-let messagesRelayedSucceed = new Counter("hopr_messages_relayed_succeed"); // Counts the number of messages successfully relayed
+let sentMessagesFailed = new Counter("hopr_sent_messages_failed"); // Counts the number of X hop messages failed transmittion
 let messageLatency = new Trend("hopr_message_latency");
 
 // The Setup Function is run once before the Load Test https://docs.k6.io/docs/test-life-cycle
@@ -56,53 +61,6 @@ export function setup() {
   return { senders, receivers };
 }
 
-// Scenario to receive messages
-export function receiveMessages(dataPool: {
-  senders: HoprdNode[];
-  receivers: HoprdNode[];
-}) {
-  const receiverNodeIndex = Math.ceil(execution.vu.idInInstance % amountOfReceivers);
-  //console.log(`[idInstance ${execution.vu.idInInstance}] [nodeIndex: ${nodeIndex}] < ${amountOfReceivers}`)
-  if (execution.vu.idInInstance <= amountOfReceivers) {
-    const receiverHoprdNode = dataPool.receivers[receiverNodeIndex];
-    let wsUrl = receiverHoprdNode.url.replace("http", "ws");
-    wsUrl += '/messages/websocket';
-    console.log(`[Receiver] Connecting receiver ${receiverHoprdNode.name} via websocket`);
-    const websocketResponse = ws.connect(
-      wsUrl,
-      receiverHoprdNode.httpParams,
-      function (socket) {
-        socket.on("open", () =>
-          console.log(`[Receiver] Connected via websocket to receiver node ${receiverHoprdNode.name}`));
-        socket.on("message", (data: string) => {
-          console.log(`[Receiver] Message text received on ${receiverHoprdNode.name}`);
-          console.log(data);
-        });
-        socket.on('binaryMessage', (data: ArrayBuffer) => {
-          console.log(`[Receiver] Message binary received on ${receiverHoprdNode.name}`);
-          console.log(data);
-          const { sender, receiver, startTime } = Utils.unpackMessagePayload(data);
-          let duration = new Date().getTime() - startTime;
-          messageLatency.add(duration, {sender});
-          console.log(`[Receiver] Message received on ${receiverHoprdNode.name} sent from ${sender} with latency ${duration} ms`);
-          sentMessagesSucceed.add(1, {sender});
-        });
-        socket.on("error", (error) => {
-          __ENV.WEBSOCKET_DISCONNECTED = "true";
-          console.error(`Node ${receiverHoprdNode.name} replied with a websocket error:`,error);
-        });
-        socket.on("close", (errorCode: any) => {
-          __ENV.WEBSOCKET_DISCONNECTED = "true";
-          console.log(`[Receiver] Disconnected via websocket from node ${receiverHoprdNode.name} due to error code ${errorCode} at ${new Date().toISOString()}`);
-        });
-      },
-    );
-    check(websocketResponse, { "status is 101": (r) => r && r.status === 101 });
-  } else {
-    //console.log(`No sender nodes available for this VU '${execution.vu.idInInstance}'`)
-  }
-}
-
 // Scenario to send messages
 export function sendMessages(dataPool: {
   senders: HoprdNode[];
@@ -124,36 +82,44 @@ export function sendMessages(dataPool: {
     receiver = receivers[Math.floor(Math.random() * receivers.length)];
   }
   let url = sender.url.replace("http", "ws") + '/session/websocket?';
-  url += 'capabilities=Segmentation&'; // &capabilities=Retransmission
-  url += 'target=k6-echo.k6-operator-system.staging.hoprnet.link%3A443&';
+  url += 'capabilities=Segmentation&capabilities=Retransmission&';
+  url += 'target=k6-echo.k6-operator-system.staging.hoprnet.link%3A80&';
   url += 'hops=1&';
   url += `destination=${receiver.peerId}&`;
   url += 'protocol=tcp'; 
+
+  //url = 'ws://localhost:8888';
+  //url = 'ws://k6-echo.k6-operator-system.svc:8888';
+  //console.log(`Connecting to ${url}`);
 
   //Open websocket connection to receiver node
   console.log(`[Sender][VU ${senderNodeIndex + 1}] Connecting sender ${sender.name} via websocket to ${receiver.name}`);
   const websocketResponse = ws.connect(url,sender.httpParams,function (socket) {
       socket.on("open", () => {
         console.log(`[Sender][VU ${senderNodeIndex + 1}] Connected via websocket to sender node ${sender.name}`);
-        while (! __ENV.WEBSOCKET_DISCONNECTED) {
+        socket.setInterval(function timeout() {
+          if (__ENV.WEBSOCKET_DISCONNECTED === "true") {
+            console.log(`[Sender][VU:${senderNodeIndex + 1}] Websocket disconnected. Stopping the interval`);
+            socket.close();
+            return;
+          }
           const messagePayload: ArrayBuffer = Utils.buildMessagePayload(sender.name, receiver.name);
-          console.log(`[Sender][VU:${senderNodeIndex + 1}] Sending ${hops} hops message from [${sender.name}] to [${receiver.name}]`);
+          //console.log(`[Sender][VU:${senderNodeIndex + 1}] Sending ${hops} hops message from [${sender.name}] to [${receiver.name}]`);
           socket.sendBinary(messagePayload);
           messageRequestsSucceed.add(1, { sender: sender.name });
-          sleep(1);
-        }
-      });
-      socket.on('message', (data: string) => {
-          console.log(`[Sender] Message binary received on ${receiver.name}`);
-          console.log(data);
+        }, message_delay);
       });
       socket.on('binaryMessage', (data: ArrayBuffer) => {
-        console.log(data);
-        const { sender, receiver, startTime } = Utils.unpackMessagePayload(data);
-        let duration = new Date().getTime() - startTime;
-        messageLatency.add(duration, {sender});
-        console.log(`[Sender] Message received on ${receiver} sent from ${sender} with latency ${duration} ms`);
-        sentMessagesSucceed.add(1, {sender});
+        const { sender, receiver, startTime } = Utils.unpackMessagePayload(new Uint8Array(data));
+        let duration = new Date().getTime() - parseInt(startTime);
+        if (sender !== "unknown") {
+          messageLatency.add(duration, {sender});
+          console.log(`[Sender] Message received on ${receiver} sent from ${sender} with latency ${duration} ms`);
+          sentMessagesSucceed.add(1, {sender});
+        } else {
+          console.error(`[Sender] Message received with incomplete data`);
+          sentMessagesFailed.add(1, {sender});
+        }
       });
 
       socket.on("error", (error) => {

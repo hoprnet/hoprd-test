@@ -21,7 +21,11 @@ export class Utils {
         const bufferView = new Uint8Array(buffer);
         let str = '';
         for (let i = 0; i < bufferView.length; i++) {
-            str += String.fromCharCode(bufferView[i]);
+            const charCode = bufferView[i];
+            // Only append printable ASCII characters
+            if (charCode >= 32 && charCode <= 126) {
+                str += String.fromCharCode(charCode);
+            }
         }
         return str;
     }
@@ -32,15 +36,14 @@ export class Utils {
         return Utils.stringToArrayBuffer(messagePayload)
     }
 
-    public static unpackMessagePayload(messagePayload: ArrayBuffer): {sender: string, receiver: string, startTime: number} {
-        const message = Utils.arrayBufferToString(messagePayload);
-        const senderMatch = message.match(/sender=(.*)&receiver/);
-        const sender = senderMatch ? senderMatch[1] : '';
-        const receiverMatch = message.match(/receiver=(.*)&startTime/);
-        const receiver = receiverMatch ? receiverMatch[1] : '';
-        const startTimeMatch = message.match(/startTime=(.*) HTTP/);
-        const startTime = startTimeMatch ? parseInt(startTimeMatch[1]) : 0;
-        return { sender, receiver, startTime };
+    public static unpackMessagePayload(messagePayload: ArrayBuffer): {sender: string, receiver: string, startTime: string} {
+        let httpResponse = Utils.arrayBufferToString(messagePayload);
+        const body = httpResponse.substring(httpResponse.indexOf("{\"message\""), httpResponse.length);
+        try {
+            return JSON.parse(body).message;
+        } catch (error) {
+            return {sender: "unknown", receiver: "unknown", startTime: new Date().getTime().toString()};
+        }
     }
 
     // use random ASCI chars to extend the payload
