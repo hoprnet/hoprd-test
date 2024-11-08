@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - main
+      - ausias/websocket-bidirectional
 concurrency:
   group: k6
   cancel-in-progress: true
