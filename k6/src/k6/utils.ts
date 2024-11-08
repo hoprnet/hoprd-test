@@ -60,24 +60,4 @@ export class Utils {
     return JSON.stringify({ ...body, randomContent });
     }
 
-    public static sendMessage(apiUrl, httpParams, requestPayload, tags, messageRequestsSucceed: Counter, messageRequestsFailed: Counter) {
-        let startTime = new Date().getTime();
-
-        const messageRequestResponse = http.post(
-            `${apiUrl}/messages`,
-            requestPayload,
-            httpParams,
-        ); // Send the 1 hop message
-        if (messageRequestResponse.status === 202) {
-            messageRequestsSucceed.add(1, tags);
-        } else {
-            console.error(
-            `Failed to send message request. Details: ${JSON.stringify(messageRequestResponse)}`,
-            );
-            messageRequestsFailed.add(1, tags);
-            return false;
-        }
-        return true;
-    }
-
 }

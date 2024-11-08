@@ -10,8 +10,11 @@ wss.on('connection', (ws: WebSocket) => {
   ws.on('message', (message: Buffer, isBinary: boolean) => {
     // Log the received binary message
     if (isBinary) {
+      const messageString = arrayBufferToString(message);
+      const fields = messageString.substring(messageString.indexOf('?'), messageString.lastIndexOf(' HTTP') + 1);
+      const [sender, receiver, startTime] = fields.split('&').map((field) => field.split('=')[1]);
       console.log('Received binary data:', arrayBufferToString(message))
-      const replyMessage = 'HTTP/1.1 200 OKDate: Thu, 07 Nov 2024 07:53:37 GMTContent-Type: application/json; charset=utf-8Content-Length: 89Connection: keep-aliveX-Powered-By: ExpressETag: W/"59-O9qhlozVfW4uteOBAOQnVURtayI"{"message":{"sender":"core-node-3","receiver":"core-node-5","startTime":"1730997568249"}}';
+      const replyMessage = `HTTP/1.1 200 OKDate: Thu, 07 Nov 2024 07:53:37 GMTContent-Type: application/json; charset=utf-8Content-Length: 89Connection: keep-aliveX-Powered-By: ExpressETag: W/"59-O9qhlozVfW4uteOBAOQnVURtayI"{"message":{"sender":"${sender}","receiver":"${receiver}","startTime":"${startTime}"}}`;
 
       // Echo the binary data back to the client
       ws.send(stringToArrayBuffer(replyMessage), { binary: true });

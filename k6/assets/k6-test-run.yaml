@@ -26,12 +26,12 @@ spec:
         value: {{ nodes }}
       - name: WORKLOAD_NAME
         value: {{ workloadName }}
-      - name: SCENARIO_ITERATIONS
-        value: "{{ iterations }}"
-      - name: SCENARIO_DURATION
+      - name: PACKETS_PER_SECOND_PER_VU
+        value: "{{ packetsPerSecondPerVu }}"
+      - name: DURATION
         value: "{{ duration }}"
-      - name: HOPRD_NODE_THREADS
-        value: "{{ hoprdNodeThreads }}"
+      - name: VU_PER_ROUTE
+        value: "{{ vuPerRoute }}"
       - name: HOPRD_API_TOKEN
         valueFrom:
           secretKeyRef:

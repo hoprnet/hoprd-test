@@ -8,6 +8,9 @@
       "isRelayer": false,
       "isReceiver": false,
       "routes": [
+        { "name": "core-node-2" },
+        { "name": "core-node-3" },
+        { "name": "core-node-4" },
         { "name": "core-node-5" }
       ]
     },
@@ -19,6 +22,9 @@
       "isRelayer": true,
       "isReceiver": true,
       "routes": [
+        { "name": "core-node-1" },
+        { "name": "core-node-3" },
+        { "name": "core-node-4" },
         { "name": "core-node-5" }
       ]
     },
@@ -30,6 +36,9 @@
       "isRelayer": true,
       "isReceiver": true,
       "routes": [
+        { "name": "core-node-1" },
+        { "name": "core-node-2" },
+        { "name": "core-node-4" },
         { "name": "core-node-5" }
       ]
     },
@@ -41,8 +50,10 @@
       "isRelayer": true,
       "isReceiver": true,
       "routes": [
+        { "name": "core-node-1" },
+        { "name": "core-node-2" },
+        { "name": "core-node-3" },
         { "name": "core-node-5" }
-
       ]
     },
     {
