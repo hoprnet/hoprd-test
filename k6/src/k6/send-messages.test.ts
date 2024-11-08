@@ -62,12 +62,13 @@ Object.keys(workloadOptions.scenarios).forEach((scenario) => {
   }
 });
 
-console.log(`[Setup] Initial VU ${dataPool.length}`);
-console.log(`[Setup] Message delay set to ${Math.trunc(messageDelay)} ms`);
-console.log(`[Setup] Test duration set to ${duration}m`);
-//console.log("Test execution options: ");
-//console.log(JSON.stringify(workloadOptions))
-
+if (__VU === 1) { // Only print once to avoid spamming the console
+  console.log(`[Setup] Initial VU ${dataPool.length}`);
+  console.log(`[Setup] Message delay set to ${Math.trunc(messageDelay)} ms`);
+  console.log(`[Setup] Test duration set to ${duration}m`);
+  console.log("Test execution options: ");
+  console.log(JSON.stringify(workloadOptions))
+}
 
 // Test Options https://docs.k6.io/docs/options
 export const options: Partial<Options> = workloadOptions;
