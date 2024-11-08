@@ -33,8 +33,8 @@ let dataPool = sendersData.flatMap(sender => receiversData.map(receiver => { ret
 __ENV.WEBSOCKET_DISCONNECTED = "false";
 const workloadName = __ENV.WORKLOAD_NAME || "sanity-check";
 let messageDelay: number = 1000;
-if (__ENV.PACKETS_PER_SECOND_PER_VU) {
-  messageDelay = 1000 / parseInt(__ENV.PACKETS_PER_SECOND_PER_VU);
+if (__ENV.REQUESTS_PER_SECOND_PER_VU) {
+  messageDelay = 1000 / parseInt(__ENV.REQUESTS_PER_SECOND_PER_VU);
 }
 let duration: number = 1;
 if (__ENV.DURATION) {
@@ -62,13 +62,12 @@ Object.keys(workloadOptions.scenarios).forEach((scenario) => {
   }
 });
 
-if (__VU === 1) { // Only print once to avoid spamming the console
-  console.log(`[Setup] Initial VU ${dataPool.length}`);
-  console.log(`[Setup] Message delay set to ${Math.trunc(messageDelay)} ms`);
-  console.log(`[Setup] Test duration set to ${duration}m`);
-  console.log("Test execution options: ");
-  console.log(JSON.stringify(workloadOptions))
-}
+console.log(`[Setup] Initial VU ${dataPool.length}`);
+console.log(`[Setup] Message delay set to ${Math.trunc(messageDelay)} ms`);
+console.log(`[Setup] Test duration set to ${duration}m`);
+//console.log("Test execution options: ");
+//console.log(JSON.stringify(workloadOptions))
+
 
 // Test Options https://docs.k6.io/docs/options
 export const options: Partial<Options> = workloadOptions;

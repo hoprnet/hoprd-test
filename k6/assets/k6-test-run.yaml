@@ -1,6 +1,6 @@
 ---
 apiVersion: k6.io/v1alpha1
-kind: K6
+kind: TestRun
 metadata:
   name: k6-hoprd-{{ nodes }}-{{ workloadName }}
   namespace: k6-operator-system
@@ -16,18 +16,18 @@ spec:
       runAsUser: 0
     resources:
       limits:
-        cpu: 2
-        memory: 2Gi
+        cpu: 3
+        memory: 3Gi
       requests:
-        cpu: 2
-        memory: 2Gi
+        cpu: 3
+        memory: 3Gi
     env:
       - name: NODES
         value: {{ nodes }}
       - name: WORKLOAD_NAME
         value: {{ workloadName }}
-      - name: PACKETS_PER_SECOND_PER_VU
-        value: "{{ packetsPerSecondPerVu }}"
+      - name: REQUESTS_PER_SECOND_PER_VU
+        value: "{{ requestsPerSecondPerVu }}"
       - name: DURATION
         value: "{{ duration }}"
       - name: VU_PER_ROUTE

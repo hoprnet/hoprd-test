@@ -17,7 +17,7 @@ const setupEnvironment = async (nodes: HoprdNode[]) => {
 const nodes = process.env.NODES || 'many2many'
 const workloadName = process.env.WORKLOAD_NAME || 'sanity-check'
 const testid = process.env.TESTID || 'kubernetes'
-const packetsPerSecondPerVu = process.env.PACKETS_PER_SECOND_PER_VU || 1
+const requestsPerSecondPerVu = process.env.REQUESTS_PER_SECOND_PER_VU || 1
 const duration = process.env.DURATION || "30"
 const vuPerRoute = process.env.VU_PER_ROUTE || 1
 const nodesData = JSON.parse(fs.readFileSync(`assets/nodes-${nodes}.json`).toString())
@@ -37,13 +37,13 @@ Promise.all(enabledNodes).then((hoprdNodes: HoprdNode[]) => {
     // Generate k6 test run file
     const k6TestRunTemplateData = fs.readFileSync(`assets/k6-test-run.yaml`).toString()
     const k6TestRunTemplate = Handlebars.compile(k6TestRunTemplateData);
-    const k6TestRunTemplateParsed = k6TestRunTemplate({ nodes, workloadName, packetsPerSecondPerVu, testid, duration, vuPerRoute });
+    const k6TestRunTemplateParsed = k6TestRunTemplate({ nodes, workloadName, requestsPerSecondPerVu, testid, duration, vuPerRoute });
     fs.writeFileSync(`./k6-test-run.yaml`, k6TestRunTemplateParsed)
 
     // Generate k6 test results file
     const k6TestResultsTemplateData = fs.readFileSync(`assets/k6-test-results.yaml`).toString()
     const k6TestResultsTemplate = Handlebars.compile(k6TestResultsTemplateData);
-    const k6TestResultsTemplateParsed = k6TestResultsTemplate({ nodes, workloadName, packetsPerSecondPerVu, testid, duration });
+    const k6TestResultsTemplateParsed = k6TestResultsTemplate({ nodes, workloadName, requestsPerSecondPerVu, testid, duration });
     fs.writeFileSync(`./k6-test-results.yaml`, k6TestResultsTemplateParsed)
 
   }).catch((err) => console.error(err))
