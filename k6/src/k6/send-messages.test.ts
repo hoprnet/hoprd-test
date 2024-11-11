@@ -44,7 +44,7 @@ let vuPerRoute = 1;
 if (__ENV.VU_PER_ROUTE) {
   vuPerRoute = parseInt(__ENV.VU_PER_ROUTE);
 }
-
+const hops = Number(__ENV.HOPS) || 1;
 
 const workloadOptions = JSON.parse(open(`./workload-${workloadName}.json`));
 Object.keys(workloadOptions.scenarios).forEach((scenario) => {
@@ -61,6 +61,9 @@ Object.keys(workloadOptions.scenarios).forEach((scenario) => {
     workloadOptions.scenarios[scenario].stages[0].duration = `${duration}m`;
   }
 });
+
+// Default metric labels:
+const defaultMetricLabels = { workload: workloadName, topology: nodes, hops: hops.toString() };
 
 if (__VU === 1) { // Only print once to avoid spamming the console
   console.log(`[Setup] Initial VU ${dataPool.length}`);
@@ -94,7 +97,6 @@ export function setup() {
 // Scenario to send messages
 export function sendMessages(dataPool: [{ sender: HoprdNode, receiver: HoprdNode }]) {
 
-  const hops = Number(__ENV.HOPS) || 1;
   const vu = Math.ceil((__VU - 1) % dataPool.length);
   const sender = dataPool[vu].sender;
   const receiver = dataPool[vu].receiver;
@@ -127,21 +129,21 @@ export function sendMessages(dataPool: [{ sender: HoprdNode, receiver: HoprdNode
           const messagePayload: ArrayBuffer = Utils.buildMessagePayload(sender.name, receiver.name);
           //console.log(`[Sender][VU:${senderNodeIndex + 1}] Sending ${hops} hops message from [${sender.name}] to [${receiver.name}]`);
           socket.sendBinary(messagePayload);
-          dataSent.add(messagePayload.byteLength, { sender: sender.name, receiver: receiver.name });
-          messageRequests.add(1, { sender: sender.name, receiver: receiver.name });
+          dataSent.add(messagePayload.byteLength, { ...defaultMetricLabels, sender: sender.name, receiver: receiver.name });
+          messageRequests.add(1, { ...defaultMetricLabels, sender: sender.name, receiver: receiver.name});
         }, messageDelay);
       });
       socket.on('binaryMessage', (data: ArrayBuffer) => {
         const { sender, receiver, startTime } = Utils.unpackMessagePayload(new Uint8Array(data));
         let duration = new Date().getTime() - parseInt(startTime);
         if (sender !== "unknown") {
-          messageLatency.add(duration, {sender, receiver});
+          messageLatency.add(duration, {...defaultMetricLabels, sender, receiver});
           console.log(`[Sender] Message received on ${receiver} sent from ${sender} with latency ${duration} ms`);
-          sentMessagesSucceed.add(1, {sender, receiver});
-          dataReceived.add(data.byteLength, {sender, receiver});
+          sentMessagesSucceed.add(1, {...defaultMetricLabels, sender, receiver});
+          dataReceived.add(data.byteLength, {...defaultMetricLabels, sender, receiver});
         } else {
           console.error(`[Sender] Message received with incomplete data`);
-          sentMessagesFailed.add(1, {sender, receiver});
+          sentMessagesFailed.add(1, {...defaultMetricLabels, sender, receiver});
         }
       });
 
