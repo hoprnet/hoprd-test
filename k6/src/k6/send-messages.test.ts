@@ -83,13 +83,12 @@ let dataReceived = new Counter("hopr_data_received");
 
 // The Setup Function is run once before the Load Test https://docs.k6.io/docs/test-life-cycle
 export function setup() {
-  dataPool.map((route) => {
+  return dataPool.map((route) => {
   return { 
     sender: new HoprdNode(route.sender), 
     receiver: new HoprdNode(route.receiver) 
     };
-  })
-  return dataPool;
+  });
 }
 
 // Scenario to send messages
@@ -111,8 +110,7 @@ export function sendMessages(dataPool: [{ sender: HoprdNode, receiver: HoprdNode
   url += 'protocol=tcp'; 
 
   //url = 'ws://localhost:8888';
-  url = 'ws://k6-echo.k6-operator-system.svc:8888';
-  //console.log(`Connecting to ${url}`);
+  //url = 'ws://k6-echo.k6-operator-system.svc:8888';
 
   //Open websocket connection to receiver node
   console.log(`[Sender][VU ${vu + 1}] Connecting sender ${sender.name} via websocket to ${receiver.name}`);
