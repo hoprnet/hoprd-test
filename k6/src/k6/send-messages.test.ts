@@ -155,16 +155,16 @@ export function sendMessages(dataPool: [{ sender: HoprdNode, relayer: HoprdNode,
         }, messageDelay);
       });
       socket.on('binaryMessage', (data: ArrayBuffer) => {
-        const { sender, receiver, relayer, startTime } = Utils.unpackMessagePayload(new Uint8Array(data));
+        const { senderName, receiverName, relayerName, startTime } = Utils.unpackMessagePayload(new Uint8Array(data));
         let duration = new Date().getTime() - parseInt(startTime);
-        if (sender !== "unknown") {
-          messageLatency.add(duration, {...defaultMetricLabels, sender, receiver, relayer});
-          console.log(`[Sender] Message received on ${sender} relayed from ${relayer} using exit node ${receiver} with latency ${duration} ms`);
-          sentMessagesSucceed.add(1, {...defaultMetricLabels, sender, receiver, relayer});
-          dataReceived.add(data.byteLength, {...defaultMetricLabels, sender, receiver, relayer});
+        if (senderName !== "unknown") {
+          messageLatency.add(duration, {...defaultMetricLabels, sender: sender.name, receiver: receiver.name, relayer: relayer.name});
+          console.log(`[Sender] Message received on ${sender.name} relayed from ${relayer.name} using exit node ${receiver.name} with latency ${duration} ms`);
+          sentMessagesSucceed.add(1, {...defaultMetricLabels, sender: sender.name, receiver: receiver.name, relayer: relayer.name});
+          dataReceived.add(data.byteLength, {...defaultMetricLabels, sender: sender.name, receiver: receiver.name, relayer: relayer.name});
         } else {
-          console.error(`[Sender] Message received on ${sender} with incomplete data`);
-          sentMessagesFailed.add(1, {...defaultMetricLabels, sender, receiver, relayer});
+          console.error(`[Sender] Message received on ${sender.name} with incomplete data`);
+          sentMessagesFailed.add(1, {...defaultMetricLabels, sender: sender.name, receiver: receiver.name, relayer: relayer.name});
         }
       });
 

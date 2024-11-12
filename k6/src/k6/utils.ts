@@ -36,13 +36,13 @@ export class Utils {
         return Utils.stringToArrayBuffer(messagePayload)
     }
 
-    public static unpackMessagePayload(messagePayload: ArrayBuffer): {sender: string, receiver: string, relayer: string, startTime: string} {
+    public static unpackMessagePayload(messagePayload: ArrayBuffer): {senderName: string, receiverName: string, relayerName: string, startTime: string} {
         let httpResponse = Utils.arrayBufferToString(messagePayload);
         const body = httpResponse.substring(httpResponse.indexOf("{\"message\""), httpResponse.length);
         try {
             return JSON.parse(body).message;
         } catch (error) {
-            return {sender: "unknown", receiver: "unknown", relayer: "unknown", startTime: new Date().getTime().toString()};
+            return {senderName: "unknown", receiverName: "unknown", relayerName: "unknown", startTime: new Date().getTime().toString()};
         }
     }
 
