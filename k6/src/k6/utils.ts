@@ -30,19 +30,23 @@ export class Utils {
         return str;
     }
 
-    public static buildMessagePayload(senderName: string, receiverName: string, relayerName: string): ArrayBuffer {
-        let now = Date.now();
-        const messagePayload = 'GET /?sender=' + senderName + '&receiver=' + receiverName + '&relayer=' + relayerName + '&startTime=' + now + ' HTTP/1.1\r\nHost: k6-echo.k6-operator-system.staging.hoprnet.link\r\n\r\n';
+    public static buildMessagePayload(destination: string): ArrayBuffer {
+        const messagePayload = `GET /?startTime=${Date.now()} HTTP/1.1\r\nHost: ${destination}\r\n\r\n`;
         return Utils.stringToArrayBuffer(messagePayload)
     }
 
-    public static unpackMessagePayload(messagePayload: ArrayBuffer): {senderName: string, receiverName: string, relayerName: string, startTime: string} {
+    public static unpackMessagePayload(messagePayload: ArrayBuffer): string {
         let httpResponse = Utils.arrayBufferToString(messagePayload);
+
+        // This line only works with the echo service not with other targets
         const body = httpResponse.substring(httpResponse.indexOf("{\"message\""), httpResponse.length);
+        //const body = httpResponse.substring(httpResponse.indexOf("<!doctype"), httpResponse.length);
         try {
             return JSON.parse(body).message;
+            //return new Date().getTime().toString();
         } catch (error) {
-            return {senderName: "unknown", receiverName: "unknown", relayerName: "unknown", startTime: new Date().getTime().toString()};
+            console.error("Error parsing message payload: " + httpResponse);
+            return "0";
         }
     }
 

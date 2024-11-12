@@ -7,6 +7,7 @@ import { HoprdNode } from "./hoprd-node";
 import { Utils } from "./utils";
 
 // Read nodes
+const TARGET_DESTINATION = __ENV.TARGET_DESTINATION || 'k6-echo.k6-operator-system.staging.hoprnet.link'; //|| "www.example.com";
 const nodes = __ENV.NODES || "many2many";
 const nodesData = JSON.parse(open(`./nodes-${nodes}.json`)).nodes
     .map((node) => { 
@@ -125,7 +126,7 @@ export function sendMessages(dataPool: [{ sender: HoprdNode, relayer: HoprdNode,
 
   let url = sender.url.replace("http", "ws") + '/session/websocket?';
   url += 'capabilities=Segmentation&capabilities=Retransmission&';
-  url += 'target=k6-echo.k6-operator-system.staging.hoprnet.link%3A80&';
+  url += `target=${TARGET_DESTINATION}%3A80&`;
   url += `hops=${hops}&`;
   url += `path=${relayer.peerId}&`;
   url += `destination=${receiver.peerId}&`;
@@ -147,7 +148,7 @@ export function sendMessages(dataPool: [{ sender: HoprdNode, relayer: HoprdNode,
             socket.close();
             return;
           }
-          const messagePayload: ArrayBuffer = Utils.buildMessagePayload(sender.name, receiver.name, relayer.name);
+          const messagePayload: ArrayBuffer = Utils.buildMessagePayload(TARGET_DESTINATION);
           //console.log(`[Sender][VU:${senderNodeIndex + 1}] Sending ${hops} hops message from [${sender.name}] to [${receiver.name}]`);
           socket.sendBinary(messagePayload);
           dataSent.add(messagePayload.byteLength, { ...defaultMetricLabels, sender: sender.name, receiver: receiver.name, relayer: relayer.name });
@@ -155,9 +156,9 @@ export function sendMessages(dataPool: [{ sender: HoprdNode, relayer: HoprdNode,
         }, messageDelay);
       });
       socket.on('binaryMessage', (data: ArrayBuffer) => {
-        const { senderName, receiverName, relayerName, startTime } = Utils.unpackMessagePayload(new Uint8Array(data));
+        const startTime = Utils.unpackMessagePayload(new Uint8Array(data));
         let duration = new Date().getTime() - parseInt(startTime);
-        if (senderName !== "unknown") {
+        if (startTime !== "0") {
           messageLatency.add(duration, {...defaultMetricLabels, sender: sender.name, receiver: receiver.name, relayer: relayer.name});
           console.log(`[Sender] Message received on ${sender.name} relayed from ${relayer.name} using exit node ${receiver.name} with latency ${duration} ms`);
           sentMessagesSucceed.add(1, {...defaultMetricLabels, sender: sender.name, receiver: receiver.name, relayer: relayer.name});

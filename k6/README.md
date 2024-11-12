@@ -33,17 +33,16 @@ The load testing can be run against a given topology of nodes. At this moment we
 Here are the most useful commands:
 
 - `npm install`: Install Node dependencies
+- `npm run install:xk6:mac`: Installk6 locally
 - `npm run build`: Build source code for running tests
 
 ## Running tests
 
+Define the environment variable `HOPRD_API_TOKEN` with the token setup on the target nodes before execute thes commands.
 
-- `npm run cluster:start`: Start local cluster
-- `npm run cluster:stop`: Stops local cluster
-- `npm run test`: Execute constant traffic test using previously started local cluster. Used for development purposes of load testing scenarios
+- `npm run test:local`: Execute constant traffic test using previously started local cluster. Used for development purposes of load testing scenarios
+- `npm run setup:many2many`: Setup the nodes topology many2many
 - `npm run test:many2many`: Executes constant traffic test using many 2 many topology
-- `npm run setup:rotsee`: Setup the rotsee environment to check nodes healthy and open channels
-
 
 ## Running remotely
 
