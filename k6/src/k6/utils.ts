@@ -30,19 +30,19 @@ export class Utils {
         return str;
     }
 
-    public static buildMessagePayload(senderName: string, receiverName: string): ArrayBuffer {
+    public static buildMessagePayload(senderName: string, receiverName: string, relayerName: string): ArrayBuffer {
         let now = Date.now();
-        const messagePayload = 'GET /?sender=' + senderName + '&receiver=' + receiverName + '&startTime=' + now + ' HTTP/1.1\r\nHost: k6-echo.k6-operator-system.staging.hoprnet.link\r\n\r\n';
+        const messagePayload = 'GET /?sender=' + senderName + '&receiver=' + receiverName + '&relayer=' + relayerName + '&startTime=' + now + ' HTTP/1.1\r\nHost: k6-echo.k6-operator-system.staging.hoprnet.link\r\n\r\n';
         return Utils.stringToArrayBuffer(messagePayload)
     }
 
-    public static unpackMessagePayload(messagePayload: ArrayBuffer): {sender: string, receiver: string, startTime: string} {
+    public static unpackMessagePayload(messagePayload: ArrayBuffer): {sender: string, receiver: string, relayer: string, startTime: string} {
         let httpResponse = Utils.arrayBufferToString(messagePayload);
         const body = httpResponse.substring(httpResponse.indexOf("{\"message\""), httpResponse.length);
         try {
             return JSON.parse(body).message;
         } catch (error) {
-            return {sender: "unknown", receiver: "unknown", startTime: new Date().getTime().toString()};
+            return {sender: "unknown", receiver: "unknown", relayer: "unknown", startTime: new Date().getTime().toString()};
         }
     }
 

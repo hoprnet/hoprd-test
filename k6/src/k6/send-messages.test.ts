@@ -18,17 +18,27 @@ const nodesData = JSON.parse(open(`./nodes-${nodes}.json`)).nodes
   });
 let sendersData: any[] = [];
 let receiversData: any[] = [];
+let relayersData: any[] = [];
 nodesData.filter((node: any) => node.enabled)
   .forEach((node: any) => {
     if (node.isSender) {
       sendersData.push(node);
     }
+    if (node.isRelayer) {
+      relayersData.push(node);
+    }
     if (node.isReceiver) {
       receiversData.push(node);
     }
   });
-let dataPool = sendersData.flatMap(sender => receiversData.map(receiver => { return { sender, receiver};})).filter((route) => route.sender.name !== route.receiver.name);
-
+let dataPool = sendersData
+  .flatMap(sender => {
+    return receiversData.flatMap(receiver => {
+      return relayersData.map( relayer => { return { sender, relayer, receiver}; });
+    })
+  })
+  .filter((route) => route.sender.name !== route.receiver.name && route.sender.name !== route.relayer.name && route.relayer.name !== route.receiver.name);
+  
 // Read workload options
 __ENV.WEBSOCKET_DISCONNECTED = "false";
 const workloadName = __ENV.WORKLOAD_NAME || "sanity-check";
@@ -44,7 +54,10 @@ let vuPerRoute = 1;
 if (__ENV.VU_PER_ROUTE) {
   vuPerRoute = parseInt(__ENV.VU_PER_ROUTE);
 }
-const hops = Number(__ENV.HOPS) || 1;
+let hops = 1;
+if (__ENV.HOPS) {
+  hops = parseInt(__ENV.HOPS);
+}
 
 const workloadOptions = JSON.parse(open(`./workload-${workloadName}.json`));
 Object.keys(workloadOptions.scenarios).forEach((scenario) => {
@@ -66,7 +79,11 @@ Object.keys(workloadOptions.scenarios).forEach((scenario) => {
 const defaultMetricLabels = { workload: workloadName, topology: nodes, hops: hops.toString() };
 
 if (__VU === 1) { // Only print once to avoid spamming the console
-  console.log(`[Setup] Initial VU ${dataPool.length}`);
+  //dataPool.forEach((route: any) => console.log(`[Setup] DataPool sender ${route.sender.name} -> ${route.relayer.name} -> ${route.receiver.name}`));
+  console.log(`[Setup] Workload: ${workloadName}`);
+  console.log(`[Setup] Request per second per VU: ${__ENV.REQUESTS_PER_SECOND_PER_VU || 1}`);
+  console.log(`[Setup] VU per node: ${__ENV.VU_PER_ROUTE || 1}`);
+  console.log(`[Setup] Initial VU: ${dataPool.length}`);
   console.log(`[Setup] Message delay set to ${Math.trunc(messageDelay)} ms`);
   console.log(`[Setup] Test duration set to ${duration}m`);
   console.log("Test execution options: ");
@@ -88,17 +105,19 @@ let dataReceived = new Counter("hopr_data_received");
 export function setup() {
   return dataPool.map((route) => {
   return { 
-    sender: new HoprdNode(route.sender), 
+    sender: new HoprdNode(route.sender),
+    relayer: new HoprdNode(route.relayer),
     receiver: new HoprdNode(route.receiver) 
     };
   });
 }
 
 // Scenario to send messages
-export function sendMessages(dataPool: [{ sender: HoprdNode, receiver: HoprdNode }]) {
+export function sendMessages(dataPool: [{ sender: HoprdNode, relayer: HoprdNode, receiver: HoprdNode }]) {
 
   const vu = Math.ceil((__VU - 1) % dataPool.length);
   const sender = dataPool[vu].sender;
+  const relayer = dataPool[vu].relayer;
   const receiver = dataPool[vu].receiver;
   let websocketOpened = false;
   //console.log(`VU[${senderNodeIndex}] on scenario[${execution.scenario.name}]`)
@@ -108,11 +127,13 @@ export function sendMessages(dataPool: [{ sender: HoprdNode, receiver: HoprdNode
   url += 'capabilities=Segmentation&capabilities=Retransmission&';
   url += 'target=k6-echo.k6-operator-system.staging.hoprnet.link%3A80&';
   url += `hops=${hops}&`;
+  url += `path=${relayer.peerId}&`;
   url += `destination=${receiver.peerId}&`;
   url += 'protocol=tcp'; 
 
   //url = 'ws://localhost:8888';
   //url = 'ws://k6-echo.k6-operator-system.svc:8888';
+  //console.log(`Url: ${url}`);
 
   //Open websocket connection to receiver node
   console.log(`[Sender][VU ${vu + 1}] Connecting sender ${sender.name} via websocket to ${receiver.name}`);
@@ -126,24 +147,24 @@ export function sendMessages(dataPool: [{ sender: HoprdNode, receiver: HoprdNode
             socket.close();
             return;
           }
-          const messagePayload: ArrayBuffer = Utils.buildMessagePayload(sender.name, receiver.name);
+          const messagePayload: ArrayBuffer = Utils.buildMessagePayload(sender.name, receiver.name, relayer.name);
           //console.log(`[Sender][VU:${senderNodeIndex + 1}] Sending ${hops} hops message from [${sender.name}] to [${receiver.name}]`);
           socket.sendBinary(messagePayload);
-          dataSent.add(messagePayload.byteLength, { ...defaultMetricLabels, sender: sender.name, receiver: receiver.name });
-          messageRequests.add(1, { ...defaultMetricLabels, sender: sender.name, receiver: receiver.name});
+          dataSent.add(messagePayload.byteLength, { ...defaultMetricLabels, sender: sender.name, receiver: receiver.name, relayer: relayer.name });
+          messageRequests.add(1, { ...defaultMetricLabels, sender: sender.name, receiver: receiver.name, relayer: relayer.name});
         }, messageDelay);
       });
       socket.on('binaryMessage', (data: ArrayBuffer) => {
-        const { sender, receiver, startTime } = Utils.unpackMessagePayload(new Uint8Array(data));
+        const { sender, receiver, relayer, startTime } = Utils.unpackMessagePayload(new Uint8Array(data));
         let duration = new Date().getTime() - parseInt(startTime);
         if (sender !== "unknown") {
-          messageLatency.add(duration, {...defaultMetricLabels, sender, receiver});
-          console.log(`[Sender] Message received on ${receiver} sent from ${sender} with latency ${duration} ms`);
-          sentMessagesSucceed.add(1, {...defaultMetricLabels, sender, receiver});
-          dataReceived.add(data.byteLength, {...defaultMetricLabels, sender, receiver});
+          messageLatency.add(duration, {...defaultMetricLabels, sender, receiver, relayer});
+          console.log(`[Sender] Message received on ${sender} relayed from ${relayer} using exit node ${receiver} with latency ${duration} ms`);
+          sentMessagesSucceed.add(1, {...defaultMetricLabels, sender, receiver, relayer});
+          dataReceived.add(data.byteLength, {...defaultMetricLabels, sender, receiver, relayer});
         } else {
-          console.error(`[Sender] Message received with incomplete data`);
-          sentMessagesFailed.add(1, {...defaultMetricLabels, sender, receiver});
+          console.error(`[Sender] Message received on ${sender} with incomplete data`);
+          sentMessagesFailed.add(1, {...defaultMetricLabels, sender, receiver, relayer});
         }
       });
 

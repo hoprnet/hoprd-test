@@ -6,7 +6,7 @@ const port = 8080;
 
 app.get('*', (req: Request, res: Response) => {
   const queryParams = req.query;
-  console.log(queryParams);
+  console.log(JSON.stringify(queryParams));
   res.json({ message: queryParams });
 });
 
