@@ -14,10 +14,9 @@ This package is responsible of creating a set of load testing scenarios to be us
 
 The binary [xk6](https://github.com/grafana/xk6) is used to install a binary named `k6` with certain extensions. Follow the installations guidlelines on how to install locally a `k6` binary bundled with the [xk6-output-prometheus-remote](https://github.com/grafana/xk6-output-prometheus-remote). 
 
-Here is an example to install it in MacOS systems:
-```bash
-docker run --rm -it -e GOOS=darwin -u "$(id -u):$(id -g)" -v "${PWD}:/xk6" grafana/xk6 build v0.42.0 --with github.com/grafana/xk6-output-prometheus-remote
-```
+Or alternatively execute:
+- `npm run install:xk6:linux`: Install k6 locally for Linux
+- `npm run install:xk6:mac`: Install k6 locally for Mac
 
 ## Nodes Topology
 
@@ -33,7 +32,6 @@ The load testing can be run against a given topology of nodes. At this moment we
 Here are the most useful commands:
 
 - `npm install`: Install Node dependencies
-- `npm run install:xk6:mac`: Installk6 locally
 - `npm run build`: Build source code for running tests
 
 ## Running tests
