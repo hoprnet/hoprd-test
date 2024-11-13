@@ -2,7 +2,7 @@
 
 This package is responsible of creating a set of load testing scenarios to be used to check performance and capacity of Hoprd network
 
-## Use cases
+## Use cases
 
 - Generate high peaks of load to test network stability at those circumstances
 - Generate high peaks of load to test hoprd node stability at those circumstances
