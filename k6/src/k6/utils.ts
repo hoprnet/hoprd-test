@@ -1,9 +1,19 @@
-import http from "k6/http";
-import { Counter, Trend } from "k6/metrics";
-
 
 const MaxPayloadBytes = 400;
 const Alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+
+export enum destinations {
+    ECHO_SERVICE = "k6-echo.k6-operator-system.staging.hoprnet.link",
+    WWW_EXAMPLE_COM = "www.example.com"
+}
+
+export function getDestination(): destinations {
+    if ( __ENV.TARGET_DESTINATION === destinations.WWW_EXAMPLE_COM ) {
+        return destinations.WWW_EXAMPLE_COM;
+    } else {
+        return destinations.ECHO_SERVICE;
+    }
+}
 
 export class Utils {
 
@@ -30,23 +40,39 @@ export class Utils {
         return str;
     }
 
-    public static buildMessagePayload(destination: string): ArrayBuffer {
-        const messagePayload = `GET /?startTime=${Date.now()} HTTP/1.1\r\nHost: ${destination}\r\n\r\n`;
+    static getFakeStartTime(): string {
+        let time = new Date().getTime() - 30000;
+        return time.toString();
+    }
+
+    public static buildMessagePayload(): ArrayBuffer {
+        const messagePayload = `GET /?startTime=${Date.now()} HTTP/1.1\r\nHost: ${getDestination()}\r\n\r\n`;
+        //console.log("Message sent payload:" + JSON.stringify(messagePayload)); 
         return Utils.stringToArrayBuffer(messagePayload)
     }
 
     public static unpackMessagePayload(messagePayload: ArrayBuffer): string {
         let httpResponse = Utils.arrayBufferToString(messagePayload);
-
-        // This line only works with the echo service not with other targets
-        const body = httpResponse.substring(httpResponse.indexOf("{\"message\""), httpResponse.length);
-        //const body = httpResponse.substring(httpResponse.indexOf("<!doctype"), httpResponse.length);
-        try {
-            return JSON.parse(body).message;
-            //return new Date().getTime().toString();
-        } catch (error) {
-            console.error("Error parsing message payload: " + httpResponse);
-            return "0";
+        //console.log("Message received payload:" + JSON.stringify(httpResponse));
+        let body = "";
+        switch (getDestination()) {
+            case destinations.ECHO_SERVICE:
+                body = httpResponse.substring(httpResponse.indexOf("{\"message\""), httpResponse.length);
+                //console.log("Message received body:" + JSON.stringify(body));
+                try {
+                    return JSON.parse(body).message.startTime;
+                } catch (error) {
+                    console.error("Error parsing message payload: " + httpResponse);
+                    return Utils.getFakeStartTime();
+                }
+            case destinations.WWW_EXAMPLE_COM:
+                if (! httpResponse.startsWith("HTTP/1.1 200 OK") || httpResponse.indexOf("</html>") < 0) {
+                    console.error("Error parsing message payload:" + httpResponse);
+                }
+                return Utils.getFakeStartTime();
+            default:
+                console.log("Unknown destination");
+                return Utils.getFakeStartTime();
         }
     }
 

@@ -1,15 +1,13 @@
 import { Options } from "k6/options";
-import execution from "k6/execution";
-import { Counter, Trend } from "k6/metrics";
+import { Counter, Trend, Gauge } from "k6/metrics";
 import { check, fail } from "k6";
 import ws from "k6/ws";
 import { HoprdNode } from "./hoprd-node";
-import { Utils } from "./utils";
+import { getDestination, Utils } from "./utils";
 
 // Read nodes
-const TARGET_DESTINATION = __ENV.TARGET_DESTINATION || 'k6-echo.k6-operator-system.staging.hoprnet.link'; //|| "www.example.com";
-const nodes = __ENV.NODES || "many2many";
-const nodesData = JSON.parse(open(`./nodes-${nodes}.json`)).nodes
+const topologyName = __ENV.TOPOLOGY_NAME || "many2many";
+const nodesData = JSON.parse(open(`./nodes-${topologyName}.json`)).nodes
     .map((node) => { 
       node.apiToken = __ENV.HOPRD_API_TOKEN
       if (!node.url.endsWith("api/v3")) {
@@ -77,7 +75,6 @@ Object.keys(workloadOptions.scenarios).forEach((scenario) => {
 });
 
 // Default metric labels:
-const defaultMetricLabels = { workload: workloadName, topology: nodes, hops: hops.toString() };
 
 if (__VU === 1) { // Only print once to avoid spamming the console
   //dataPool.forEach((route: any) => console.log(`[Setup] DataPool sender ${route.sender.name} -> ${route.relayer.name} -> ${route.receiver.name}`));
@@ -95,21 +92,61 @@ if (__VU === 1) { // Only print once to avoid spamming the console
 export const options: Partial<Options> = workloadOptions;
 
 // Define metrics
-let messageRequests = new Counter("hopr_message_requests"); // Counts the number of messages requests successfully sent
-let sentMessagesSucceed = new Counter("hopr_sent_messages_succeed"); // Counts the number of X hop messages successfully transmitted
-let sentMessagesFailed = new Counter("hopr_sent_messages_failed"); // Counts the number of X hop messages failed transmittion
-let messageLatency = new Trend("hopr_message_latency");
-let dataSent = new Counter("hopr_data_sent");
-let dataReceived = new Counter("hopr_data_received");
+const defaultMetricLabels = { workload: workloadName, topology: topologyName, hops: hops.toString() };
+const messageRequests = new Counter("hopr_message_requests"); // Counts the number of messages requests successfully sent
+const sentMessagesSucceed = new Counter("hopr_sent_messages_succeed"); // Counts the number of X hop messages successfully transmitted
+const sentMessagesFailed = new Counter("hopr_sent_messages_failed"); // Counts the number of X hop messages failed transmittion
+const messageLatency = new Trend("hopr_message_latency");
+const dataSent = new Counter("hopr_data_sent");
+const dataReceived = new Counter("hopr_data_received");
+const workloadType = new Gauge("hopr_workload_type");
+const topologyType = new Gauge("hopr_topology_type");
 
 // The Setup Function is run once before the Load Test https://docs.k6.io/docs/test-life-cycle
 export function setup() {
+  switch (workloadName) {
+    case 'sanity-check':
+      workloadType.add(1);
+      break;
+    case 'constant':
+      workloadType.add(2);
+      break;
+    case 'incremental':
+      workloadType.add(3);
+      break;
+    case 'hysteresis':
+      workloadType.add(4);
+      break;
+    default:
+      console.log('Unknown workload type');
+      break;
+  }
+  switch (topologyName) {
+    case 'local':
+      topologyType.add(0);
+      break;
+    case 'many2many':
+      topologyType.add(1);
+      break;
+    case 'sender':
+      topologyType.add(2);
+      break;
+    case 'receiver':
+      topologyType.add(3);
+      break;
+    case 'relayer':
+      topologyType.add(4);
+      break;
+    default:
+      console.log('Unknown topology type');
+      break;
+  }
   return dataPool.map((route) => {
-  return { 
-    sender: new HoprdNode(route.sender),
-    relayer: new HoprdNode(route.relayer),
-    receiver: new HoprdNode(route.receiver) 
-    };
+    return { 
+      sender: new HoprdNode(route.sender),
+      relayer: new HoprdNode(route.relayer),
+      receiver: new HoprdNode(route.receiver) 
+      };
   });
 }
 
@@ -126,7 +163,7 @@ export function sendMessages(dataPool: [{ sender: HoprdNode, relayer: HoprdNode,
 
   let url = sender.url.replace("http", "ws") + '/session/websocket?';
   url += 'capabilities=Segmentation&capabilities=Retransmission&';
-  url += `target=${TARGET_DESTINATION}%3A80&`;
+  url += `target=${getDestination()}%3A80&`;
   url += `hops=${hops}&`;
   url += `path=${relayer.peerId}&`;
   url += `destination=${receiver.peerId}&`;
@@ -148,7 +185,7 @@ export function sendMessages(dataPool: [{ sender: HoprdNode, relayer: HoprdNode,
             socket.close();
             return;
           }
-          const messagePayload: ArrayBuffer = Utils.buildMessagePayload(TARGET_DESTINATION);
+          const messagePayload: ArrayBuffer = Utils.buildMessagePayload();
           //console.log(`[Sender][VU:${senderNodeIndex + 1}] Sending ${hops} hops message from [${sender.name}] to [${receiver.name}]`);
           socket.sendBinary(messagePayload);
           dataSent.add(messagePayload.byteLength, { ...defaultMetricLabels, sender: sender.name, receiver: receiver.name, relayer: relayer.name });

@@ -22,8 +22,8 @@ spec:
         cpu: 3
         memory: 3Gi
     env:
-      - name: NODES
-        value: {{ nodes }}
+      - name: TOPOLOGY_NAME
+        value: {{ topologyName }}
       - name: WORKLOAD_NAME
         value: {{ workloadName }}
       - name: REQUESTS_PER_SECOND_PER_VU
@@ -36,7 +36,7 @@ spec:
         valueFrom:
           secretKeyRef:
             name: hoprd-api-tokens
-            key: {{ nodes }}
+            key: {{ topologyName }}
       - name: K6_PROMETHEUS_RW_SERVER_URL
         value: http://kube-prometheus-stack-prometheus.monitoring.svc:9090/api/v1/write
       - name: K6_PROMETHEUS_RW_TREND_AS_NATIVE_HISTOGRAM

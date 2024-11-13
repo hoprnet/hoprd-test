@@ -43,10 +43,7 @@ export class HoprdNode {
         name: "init_test",
       },
     };
-    const response: RefinedResponse<"text"> = http.get(
-      `${this.url}/account/addresses`,
-      httpParams,
-    );
+    const response: RefinedResponse<"text"> = http.get(`${this.url}/account/addresses`,httpParams);
     if (response.status === 200) {
       const addresses = JSON.parse(response.body);
       this.peerAddress = addresses.native;

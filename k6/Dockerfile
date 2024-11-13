@@ -19,7 +19,7 @@ COPY --from=node /app/k6/dist /app/hoprnet
 
 WORKDIR /app/hoprnet
 
-ENV NODES=many2many
+ENV TOPOLOGY_NAME=many2many
 ENV WORKLOAD_NAME=simple
 
 ENTRYPOINT [ "/app/hoprnet/k6"]
