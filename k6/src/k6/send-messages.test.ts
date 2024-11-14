@@ -79,13 +79,18 @@ Object.keys(workloadOptions.scenarios).forEach((scenario) => {
 if (__VU === 1) { // Only print once to avoid spamming the console
   //dataPool.forEach((route: any) => console.log(`[Setup] DataPool sender ${route.sender.name} -> ${route.relayer.name} -> ${route.receiver.name}`));
   console.log(`[Setup] Workload: ${workloadName}`);
+  console.log(`[Setup] Topology: ${topologyName}`);
+  console.log(`[Setup] Test duration set to ${duration}m`);
+  console.log(`[Setup] Hops: ${__ENV.HOPS || 1}`); 
+  console.log(`[Setup] Senders: ${sendersData.length}`);
+  console.log(`[Setup] Relayers: ${relayersData.length}`);
+  console.log(`[Setup] Receivers: ${receiversData.length}`);
   console.log(`[Setup] Request per second per VU: ${__ENV.REQUESTS_PER_SECOND_PER_VU || 1}`);
   console.log(`[Setup] VU per node: ${__ENV.VU_PER_ROUTE || 1}`);
-  console.log(`[Setup] Initial VU: ${dataPool.length}`);
+  console.log(`[Setup] Routes: ${dataPool.length}`);
   console.log(`[Setup] Message delay set to ${Math.trunc(messageDelay)} ms`);
-  console.log(`[Setup] Test duration set to ${duration}m`);
-  console.log("Test execution options: ");
-  console.log(JSON.stringify(workloadOptions))
+  // console.log("Test execution options: ");
+  // console.log(JSON.stringify(workloadOptions))
 }
 
 // Test Options https://docs.k6.io/docs/options
@@ -193,22 +198,24 @@ export function sendMessages(dataPool: [{ sender: HoprdNode, relayer: HoprdNode,
         }, messageDelay);
       });
       socket.on('binaryMessage', (data: ArrayBuffer) => {
-        const startTime = Utils.unpackMessagePayload(new Uint8Array(data));
-        let duration = new Date().getTime() - parseInt(startTime);
-        if (startTime !== "0") {
+        try {
+          const startTime = Utils.unpackMessagePayload(new Uint8Array(data));
+          let duration = new Date().getTime() - parseInt(startTime);
           messageLatency.add(duration, {...defaultMetricLabels, sender: sender.name, receiver: receiver.name, relayer: relayer.name});
           console.log(`[Sender] Message received on ${sender.name} relayed from ${relayer.name} using exit node ${receiver.name} with latency ${duration} ms`);
           sentMessagesSucceed.add(1, {...defaultMetricLabels, sender: sender.name, receiver: receiver.name, relayer: relayer.name});
           dataReceived.add(data.byteLength, {...defaultMetricLabels, sender: sender.name, receiver: receiver.name, relayer: relayer.name});
-        } else {
+        } catch (error) {
           console.error(`[Sender] Message received on ${sender.name} with incomplete data`);
           sentMessagesFailed.add(1, {...defaultMetricLabels, sender: sender.name, receiver: receiver.name, relayer: relayer.name});
+          fail(`[Sender] Message received on ${sender.name} with incomplete data`);
         }
       });
 
       socket.on("error", (error) => {
         __ENV.WEBSOCKET_DISCONNECTED = "true";
         console.error(`[Sender] Node ${sender.name} replied with a websocket error:`, error);
+        fail(`[Sender] Node ${sender.name} replied with a websocket error: ${error}`);
       });
       socket.on("close", (errorCode: any) => {
         __ENV.WEBSOCKET_DISCONNECTED = "true";

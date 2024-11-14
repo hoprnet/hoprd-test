@@ -54,25 +54,25 @@ export class Utils {
     public static unpackMessagePayload(messagePayload: ArrayBuffer): string {
         let httpResponse = Utils.arrayBufferToString(messagePayload);
         //console.log("Message received payload:" + JSON.stringify(httpResponse));
-        let body = "";
         switch (getDestination()) {
             case destinations.ECHO_SERVICE:
-                body = httpResponse.substring(httpResponse.indexOf("{\"message\""), httpResponse.length);
+                const body = httpResponse.substring(httpResponse.indexOf("{\"message\""), httpResponse.length);
                 //console.log("Message received body:" + JSON.stringify(body));
                 try {
                     return JSON.parse(body).message.startTime;
                 } catch (error) {
                     console.error("Error parsing message payload: " + httpResponse);
-                    return Utils.getFakeStartTime();
+                    throw error;
                 }
             case destinations.WWW_EXAMPLE_COM:
                 if (! httpResponse.startsWith("HTTP/1.1 200 OK") || httpResponse.indexOf("</html>") < 0) {
                     console.error("Error parsing message payload:" + httpResponse);
+                    throw new Error("Invalid response");
                 }
                 return Utils.getFakeStartTime();
             default:
                 console.log("Unknown destination");
-                return Utils.getFakeStartTime();
+                throw new Error("Invalid response");
         }
     }
 
