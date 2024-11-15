@@ -16,24 +16,41 @@ const setupEnvironment = async (nodes: HoprdNode[]) => {
 }
 
 // Main
-const clusterNodes = __ENV.K6_CLUSTER_NODES || "core";
-const topologyName = process.env.K6_TOPOLOGY_NAME || 'many2many'
-const workloadName = process.env.K6_WORKLOAD_NAME || 'sanity-check'
-const testid = process.env.TESTID || 'kubernetes'
-const requestsPerSecondPerVu = process.env.REQUESTS_PER_SECOND_PER_VU || 1
-const duration = process.env.DURATION || "30"
-const vuPerRoute = process.env.VU_PER_ROUTE || 1
-const nodesData = JSON.parse(fs.readFileSync(`assets/nodes-${topologyName}.json`).toString())
-const enabledNodes: HoprdNode[] = nodesData.nodes
-  .filter((node: any) => node.enabled)
-  .map(async (node: any) => {
-  let hoprdNode = new HoprdNode(node);
-  await hoprdNode.init();
-  return hoprdNode;
-});
-nodesData.nodes.filter((node: any) => !node.enabled).forEach((node: any) => { console.log(`[INFO] Node ${node.name} is disabled`) })
+const clusterNodes = process.env.K6_CLUSTER_NODES || "core";
+const topologyName = process.env.K6_TOPOLOGY_NAME || 'many2many';
+const workloadName = process.env.K6_WORKLOAD_NAME || 'sanity-check';
+const testid = process.env.TESTID || 'kubernetes';
+const requestsPerSecondPerVu = parseInt(process.env.K6_REQUESTS_PER_SECOND_PER_VU || '1', 10);
+const duration = parseInt(process.env.K6_DURATION || '30',10);
+const vuPerRoute = parseInt(process.env.K6_VU_PER_ROUTE || '1', 10);
+let hoprdNodes: HoprdNode[] = [];
+try {
+  const clusterNodesData = JSON.parse(fs.readFileSync(`assets/cluster-nodes-${clusterNodes}.json`).toString()).nodes;
+  const topologyNodesData = JSON.parse(fs.readFileSync(`assets/topology-${topologyName}.json`).toString()).nodes;
+  const getClusterNodeByName = (nodeName: string) => clusterNodesData.filter((node: any) => node.name === nodeName)[0];
+  hoprdNodes = topologyNodesData
+        .filter((node: any) => {
+          if (!node.enabled) {
+            console.log(`[WARN] Skipping node ${node.name} as it is disabled`)
+          }
+          return node.enabled;
+        })
+        .map(async (topologyNode: any) => {
+            topologyNode.apiToken = process.env.HOPRD_API_TOKEN
+            let node = getClusterNodeByName(topologyNode.name);
+            topologyNode.url = node.url;
+            topologyNode.instance = node.instance;
+            let hoprdNode = new HoprdNode(topologyNode);
+            await hoprdNode.init();
+            return hoprdNode;
+        });
+} catch (error) {
+  console.error(`Failed to read or parse nodes data files for topology ${topologyName} and workload ${workloadName}:`, error);
+  process.exit(1);
+}
 
-Promise.all(enabledNodes).then((hoprdNodes: HoprdNode[]) => {
+
+Promise.all(hoprdNodes).then((hoprdNodes: HoprdNode[]) => {
   setupEnvironment(hoprdNodes).then(() => {
     console.log('[INFO] Environment fully setup')
 

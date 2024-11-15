@@ -2,7 +2,7 @@ const MaxPayloadBytes = 400;
 const Alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
 
 // Function to convert string to Uint8Array
-function stringToArrayBuffer(str) {
+function stringToArrayBuffer(str: string): ArrayBuffer {
     const buffer = new ArrayBuffer(str.length);
     const bufferView = new Uint8Array(buffer);
     for (let i = 0; i < str.length; i++) {
@@ -11,7 +11,7 @@ function stringToArrayBuffer(str) {
     return buffer;
 }
 
-function arrayBufferToString(buffer) {
+function arrayBufferToString(buffer: ArrayBuffer): string {
     const bufferView = new Uint8Array(buffer);
     let str = '';
     for (let i = 0; i < bufferView.length; i++) {
@@ -57,6 +57,19 @@ export function unpackMessagePayload(messagePayload: ArrayBuffer, hostDestinatio
             return getFakeStartTime();
         }
     }
+}
+
+export function mergeNodesJsonFiles(clusterNodesData: any, topologyNodesData: any): any[] {
+    const getClusterNodeByName = (nodeName: string) => clusterNodesData.filter((node: any) => node.name === nodeName)[0];
+    return topologyNodesData
+        .filter((node: any) => node.enabled)
+        .map((topologyNode: any) => {
+            topologyNode.apiToken = __ENV.HOPRD_API_TOKEN
+            let node = getClusterNodeByName(topologyNode.name);
+            topologyNode.url = node.url;
+            topologyNode.instance = node.instance;
+            return topologyNode;
+        });
 }
 
 // use random ASCI chars to extend the payload

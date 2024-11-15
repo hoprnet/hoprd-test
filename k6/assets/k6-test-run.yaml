@@ -28,11 +28,11 @@ spec:
         value: {{ topologyName }}
       - name: K6_WORKLOAD_NAME
         value: {{ workloadName }}
-      - name: REQUESTS_PER_SECOND_PER_VU
+      - name: K6_REQUESTS_PER_SECOND_PER_VU
         value: "{{ requestsPerSecondPerVu }}"
-      - name: DURATION
+      - name: K6_DURATION
         value: "{{ duration }}"
-      - name: VU_PER_ROUTE
+      - name: K6_VU_PER_ROUTE
         value: "{{ vuPerRoute }}"
       - name: HOPRD_API_TOKEN
         valueFrom:

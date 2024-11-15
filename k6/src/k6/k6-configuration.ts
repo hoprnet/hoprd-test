@@ -1,4 +1,5 @@
 import { fail } from "k6";
+import { mergeNodesJsonFiles } from "./utils";
 
 export class Route {
     public sender: any;
@@ -54,16 +55,16 @@ export class K6Configuration {
         __ENV.K6_WEBSOCKET_DISCONNECTED = "false";
         if (__ENV.REQUESTS_PER_SECOND_PER_VU) {
             const rps = parseInt(__ENV.REQUESTS_PER_SECOND_PER_VU);
-            if (!isNaN(rps) && rps > 0) {
+            if (!Number.isNaN(rps) && rps > 0) {
                 this.messageDelay = 1000 / rps;
             } else {
                 fail('[Error] Invalid REQUESTS_PER_SECOND_PER_VU, using default messageDelay.');
             }
             this.messageDelay = 1000 / parseInt(__ENV.REQUESTS_PER_SECOND_PER_VU);
         }
-        if (__ENV.DURATION) {
-            const duration = parseInt(__ENV.DURATION);
-            if (!isNaN(duration) && duration > 0) {
+        if (__ENV.K6_DURATION) {
+            const duration = parseInt(__ENV.K6_DURATION);
+            if (!Number.isNaN(duration) && duration > 0) {
                 this.duration = duration;
             } else {
                 fail('[ERROR] Invalid DURATION, using default duration.');
@@ -71,7 +72,7 @@ export class K6Configuration {
         }
         if (__ENV.VU_PER_ROUTE) {
             const vuPerRoute = parseInt(__ENV.VU_PER_ROUTE);
-            if (!isNaN(vuPerRoute) && vuPerRoute > 0) {
+            if (!Number.isNaN(vuPerRoute) && vuPerRoute > 0) {
                 this.vuPerRoute = vuPerRoute;
             } else {
                 fail('[ERROR] Invalid VU_PER_ROUTE, using default vuPerRoute.');
@@ -79,7 +80,7 @@ export class K6Configuration {
         }
         if (__ENV.HOPS) {
             const hops = parseInt(__ENV.HOPS);
-            if (!isNaN(hops) && hops > 0) {
+            if (!Number.isNaN(hops) && hops > 0) {
                 this.hops = hops;
             } else {
                 fail('[ERROR] Invalid HOPS, using default hops.');
@@ -94,20 +95,11 @@ export class K6Configuration {
         const clusterNodesData = JSON.parse(open(`./cluster-nodes-${this.clusterNodes}.json`)).nodes;
         const topologyNodesData = JSON.parse(open(`./topology-${this.topology}.json`)).nodes;
 
-        const getClusterNodeByName = (nodeName: string) => clusterNodesData.filter((node: any) => node.name === nodeName)[0];
-
-        topologyNodesData
-            .filter((node: any) => node.enabled)
-            .forEach((topologyNode) => {
-                topologyNode.apiToken = __ENV.HOPRD_API_TOKEN
-                let node = getClusterNodeByName(topologyNode.name);
-                topologyNode.url = node.url;
-                topologyNode.instance = node.instance;
-            });
+        let mergedNodesData = mergeNodesJsonFiles(clusterNodesData, topologyNodesData);
         const sendersData: any[] = [];
         const relayersData: any[] = [];
         const receiversData: any[] = [];
-        topologyNodesData
+        mergedNodesData
             .forEach((node: any) => {
                 if (node.isSender) {
                     sendersData.push(node);
