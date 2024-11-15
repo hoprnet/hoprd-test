@@ -1,6 +1,5 @@
 export class K6Configuration {
 
-    public static readonly DEFAULT_ECHO_SERVICE: "k6-echo.k6-operator-system.staging.hoprnet.link";
     public clusterNodes: string;
     public topology: string;
     public workload: string;
@@ -9,7 +8,7 @@ export class K6Configuration {
     public duration: number = 1;
     public hops: number = 1;
     public messageDelay: number = 1000;
-    public targetDestination: string = K6Configuration.DEFAULT_ECHO_SERVICE;
+    public targetDestination: string = "k6-echo.k6-operator-system.staging.hoprnet.link";
     public vuPerRoute: number = 1;
 
     public constructor(){
@@ -32,6 +31,7 @@ export class K6Configuration {
             console.log(`[Setup] Request per second per VU: ${__ENV.REQUESTS_PER_SECOND_PER_VU || 1}`);
             console.log(`[Setup] VU per node: ${__ENV.VU_PER_ROUTE || 1}`);
             console.log(`[Setup] Routes: ${this.dataPool.length}`);
+            console.log(`[Setup] Target destination: ${this.targetDestination}`);
             console.log(`[Setup] Message delay set to ${Math.trunc(this.messageDelay)} ms`);
             // console.log("Test execution options: ");
             // console.log(JSON.stringify(workloadOptions))

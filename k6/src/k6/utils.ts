@@ -33,8 +33,8 @@ export class Utils {
         return time.toString();
     }
 
-    public static buildMessagePayload(hostDestination: string): ArrayBuffer {
-        const messagePayload = `GET /?startTime=${Date.now()} HTTP/1.1\r\nHost: ${hostDestination}\r\n\r\n`;
+    public static buildMessagePayload(targetDestination: string, counter: number): ArrayBuffer {
+        const messagePayload = `GET /?startTime=${Date.now()}&count=${counter} HTTP/1.1\r\nHost: ${targetDestination}\r\n\r\n`;
         //console.log("Message sent payload:" + JSON.stringify(messagePayload)); 
         return Utils.stringToArrayBuffer(messagePayload)
     }
@@ -43,7 +43,7 @@ export class Utils {
         let httpResponse = Utils.arrayBufferToString(messagePayload);
         //console.log("Message received payload:" + JSON.stringify(httpResponse));
         switch (hostDestination) {
-            case K6Configuration.DEFAULT_ECHO_SERVICE:
+            case "k6-echo.k6-operator-system.staging.hoprnet.link":
                 const body = httpResponse.substring(httpResponse.indexOf("{\"message\""), httpResponse.length);
                 //console.log("Message received body:" + JSON.stringify(body));
                 try {

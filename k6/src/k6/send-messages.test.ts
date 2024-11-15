@@ -100,14 +100,15 @@ export function sendMessages(dataPool: [{ sender: HoprdNode, relayer: HoprdNode,
       socket.on("open", () => {
         websocketOpened=true;
         console.log(`[Sender][VU ${vu + 1}] Connected via websocket to sender node ${sender.name}`);
+        let counter = 0;
         socket.setInterval(function timeout() {
           if (__ENV.K6_WEBSOCKET_DISCONNECTED === "true") {
             console.log(`[Sender][VU:${vu + 1}] Websocket disconnected. Stopping the interval`);
             socket.close();
             return;
           }
-          const messagePayload: ArrayBuffer = Utils.buildMessagePayload(k6Configuration.targetDestination);
-          //console.log(`[Sender][VU:${senderNodeIndex + 1}] Sending ${hops} hops message from [${sender.name}] to [${receiver.name}]`);
+          const messagePayload: ArrayBuffer = Utils.buildMessagePayload(k6Configuration.targetDestination, counter++);
+          //console.log(`[Sender][VU:${vu}] Sending ${k6Configuration.hops} hops message from [${sender.name}] through [${relayer.name}] to [${receiver.name}] with payload ${messagePayload.byteLength} bytes`);
           socket.sendBinary(messagePayload);
           dataSent.add(messagePayload.byteLength, { ...defaultMetricLabels, sender: sender.name, receiver: receiver.name, relayer: relayer.name });
           messageRequests.add(1, { ...defaultMetricLabels, sender: sender.name, receiver: receiver.name, relayer: relayer.name});
@@ -118,7 +119,7 @@ export function sendMessages(dataPool: [{ sender: HoprdNode, relayer: HoprdNode,
           const startTime = Utils.unpackMessagePayload(new Uint8Array(data), k6Configuration.targetDestination);
           let duration = new Date().getTime() - parseInt(startTime);
           messageLatency.add(duration, {...defaultMetricLabels, sender: sender.name, receiver: receiver.name, relayer: relayer.name});
-          console.log(`[Sender] Message received on ${sender.name} relayed from ${relayer.name} using exit node ${receiver.name} with latency ${duration} ms`);
+          console.log(`[Sender] Message received on entry node ${sender.name} relayed from ${relayer.name} using exit node ${receiver.name} with latency ${duration} ms`);
           sentMessagesSucceed.add(1, {...defaultMetricLabels, sender: sender.name, receiver: receiver.name, relayer: relayer.name});
           dataReceived.add(data.byteLength, {...defaultMetricLabels, sender: sender.name, receiver: receiver.name, relayer: relayer.name});
         } catch (error) {
