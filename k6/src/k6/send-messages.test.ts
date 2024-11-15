@@ -184,13 +184,14 @@ export function sendMessages(dataPool: [{ sender: HoprdNode, relayer: HoprdNode,
       socket.on("open", () => {
         websocketOpened=true;
         console.log(`[Sender][VU ${vu + 1}] Connected via websocket to sender node ${sender.name}`);
+        let counter = 0;
         socket.setInterval(function timeout() {
           if (__ENV.WEBSOCKET_DISCONNECTED === "true") {
             console.log(`[Sender][VU:${vu + 1}] Websocket disconnected. Stopping the interval`);
             socket.close();
             return;
           }
-          const messagePayload: ArrayBuffer = Utils.buildMessagePayload();
+          const messagePayload: ArrayBuffer = Utils.buildMessagePayload(counter++);
           //console.log(`[Sender][VU:${senderNodeIndex + 1}] Sending ${hops} hops message from [${sender.name}] to [${receiver.name}]`);
           socket.sendBinary(messagePayload);
           dataSent.add(messagePayload.byteLength, { ...defaultMetricLabels, sender: sender.name, receiver: receiver.name, relayer: relayer.name });

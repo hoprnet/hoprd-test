@@ -45,8 +45,8 @@ export class Utils {
         return time.toString();
     }
 
-    public static buildMessagePayload(): ArrayBuffer {
-        const messagePayload = `GET /?startTime=${Date.now()} HTTP/1.1\r\nHost: ${getDestination()}\r\n\r\n`;
+    public static buildMessagePayload(counter: number): ArrayBuffer {
+        const messagePayload = `GET /?startTime=${Date.now()}&count=${counter} HTTP/1.1\r\nHost: ${getDestination()}\r\n\r\n`;
         //console.log("Message sent payload:" + JSON.stringify(messagePayload)); 
         return Utils.stringToArrayBuffer(messagePayload)
     }
