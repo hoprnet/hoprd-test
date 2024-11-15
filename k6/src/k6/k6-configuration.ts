@@ -62,8 +62,8 @@ export class K6Configuration {
             }
             this.messageDelay = 1000 / parseInt(__ENV.REQUESTS_PER_SECOND_PER_VU);
         }
-        if (__ENV.K6_DURATION) {
-            const duration = parseInt(__ENV.K6_DURATION);
+        if (__ENV.K6_TEST_DURATION) {
+            const duration = parseInt(__ENV.K6_TEST_DURATION);
             if (!Number.isNaN(duration) && duration > 0) {
                 this.duration = duration;
             } else {

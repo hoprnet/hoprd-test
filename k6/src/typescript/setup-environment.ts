@@ -21,7 +21,7 @@ const topologyName = process.env.K6_TOPOLOGY_NAME || 'many2many';
 const workloadName = process.env.K6_WORKLOAD_NAME || 'sanity-check';
 const testid = process.env.TESTID || 'kubernetes';
 const requestsPerSecondPerVu = parseInt(process.env.K6_REQUESTS_PER_SECOND_PER_VU || '1', 10);
-const duration = parseInt(process.env.K6_DURATION || '30',10);
+const duration = parseInt(process.env.K6_TEST_DURATION || '30',10);
 const vuPerRoute = parseInt(process.env.K6_VU_PER_ROUTE || '1', 10);
 let hoprdNodes: HoprdNode[] = [];
 try {

@@ -30,7 +30,7 @@ spec:
         value: {{ workloadName }}
       - name: K6_REQUESTS_PER_SECOND_PER_VU
         value: "{{ requestsPerSecondPerVu }}"
-      - name: K6_DURATION
+      - name: K6_TEST_DURATION
         value: "{{ duration }}"
       - name: K6_VU_PER_ROUTE
         value: "{{ vuPerRoute }}"
