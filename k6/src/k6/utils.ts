@@ -1,19 +1,7 @@
+import { K6Configuration } from "./k6-configuration";
 
 const MaxPayloadBytes = 400;
 const Alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-
-export enum destinations {
-    ECHO_SERVICE = "k6-echo.k6-operator-system.staging.hoprnet.link",
-    WWW_EXAMPLE_COM = "www.example.com"
-}
-
-export function getDestination(): destinations {
-    if ( __ENV.TARGET_DESTINATION === destinations.WWW_EXAMPLE_COM ) {
-        return destinations.WWW_EXAMPLE_COM;
-    } else {
-        return destinations.ECHO_SERVICE;
-    }
-}
 
 export class Utils {
 
@@ -45,17 +33,17 @@ export class Utils {
         return time.toString();
     }
 
-    public static buildMessagePayload(): ArrayBuffer {
-        const messagePayload = `GET /?startTime=${Date.now()} HTTP/1.1\r\nHost: ${getDestination()}\r\n\r\n`;
+    public static buildMessagePayload(hostDestination: string): ArrayBuffer {
+        const messagePayload = `GET /?startTime=${Date.now()} HTTP/1.1\r\nHost: ${hostDestination}\r\n\r\n`;
         //console.log("Message sent payload:" + JSON.stringify(messagePayload)); 
         return Utils.stringToArrayBuffer(messagePayload)
     }
 
-    public static unpackMessagePayload(messagePayload: ArrayBuffer): string {
+    public static unpackMessagePayload(messagePayload: ArrayBuffer, hostDestination: string): string {
         let httpResponse = Utils.arrayBufferToString(messagePayload);
         //console.log("Message received payload:" + JSON.stringify(httpResponse));
-        switch (getDestination()) {
-            case destinations.ECHO_SERVICE:
+        switch (hostDestination) {
+            case K6Configuration.DEFAULT_ECHO_SERVICE:
                 const body = httpResponse.substring(httpResponse.indexOf("{\"message\""), httpResponse.length);
                 //console.log("Message received body:" + JSON.stringify(body));
                 try {
@@ -64,15 +52,12 @@ export class Utils {
                     console.error("Error parsing message payload: " + httpResponse);
                     throw error;
                 }
-            case destinations.WWW_EXAMPLE_COM:
+            default:
                 if (! httpResponse.startsWith("HTTP/1.1 200 OK") || httpResponse.indexOf("</html>") < 0) {
                     console.error("Error parsing message payload:" + httpResponse);
                     throw new Error("Invalid response");
                 }
                 return Utils.getFakeStartTime();
-            default:
-                console.log("Unknown destination");
-                throw new Error("Invalid response");
         }
     }
 

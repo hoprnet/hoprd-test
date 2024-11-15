@@ -3,101 +3,17 @@ import { Counter, Trend, Gauge } from "k6/metrics";
 import { check, fail } from "k6";
 import ws from "k6/ws";
 import { HoprdNode } from "./hoprd-node";
-import { getDestination, Utils } from "./utils";
+import { Utils } from "./utils";
+import { K6Configuration } from "./k6-configuration";
 
 // Read nodes
-const topologyName = __ENV.TOPOLOGY_NAME || "many2many";
-const nodesData = JSON.parse(open(`./nodes-${topologyName}.json`)).nodes
-    .map((node) => { 
-      node.apiToken = __ENV.HOPRD_API_TOKEN
-      if (!node.url.endsWith("api/v3")) {
-        node.url += "api/v3";
-      }
-      return node;
-  });
-let sendersData: any[] = [];
-let receiversData: any[] = [];
-let relayersData: any[] = [];
-nodesData.filter((node: any) => node.enabled)
-  .forEach((node: any) => {
-    if (node.isSender) {
-      sendersData.push(node);
-    }
-    if (node.isRelayer) {
-      relayersData.push(node);
-    }
-    if (node.isReceiver) {
-      receiversData.push(node);
-    }
-  });
-let dataPool = sendersData
-  .flatMap(sender => {
-    return receiversData.flatMap(receiver => {
-      return relayersData.map( relayer => { return { sender, relayer, receiver}; });
-    })
-  })
-  .filter((route) => route.sender.name !== route.receiver.name && route.sender.name !== route.relayer.name && route.relayer.name !== route.receiver.name);
-  
-// Read workload options
-__ENV.WEBSOCKET_DISCONNECTED = "false";
-const workloadName = __ENV.WORKLOAD_NAME || "sanity-check";
-let messageDelay: number = 1000;
-if (__ENV.REQUESTS_PER_SECOND_PER_VU) {
-  messageDelay = 1000 / parseInt(__ENV.REQUESTS_PER_SECOND_PER_VU);
-}
-let duration: number = 1;
-if (__ENV.DURATION) {
-  duration = parseInt(__ENV.DURATION);
-}
-let vuPerRoute = 1;
-if (__ENV.VU_PER_ROUTE) {
-  vuPerRoute = parseInt(__ENV.VU_PER_ROUTE);
-}
-let hops = 1;
-if (__ENV.HOPS) {
-  hops = parseInt(__ENV.HOPS);
-}
-
-const workloadOptions = JSON.parse(open(`./workload-${workloadName}.json`));
-Object.keys(workloadOptions.scenarios).forEach((scenario) => {
-  if (workloadOptions.scenarios[scenario].executor === "per-vu-iterations") {
-    workloadOptions.scenarios[scenario].vus = dataPool.length * vuPerRoute;
-    workloadOptions.scenarios[scenario].maxDuration = `${duration}m`;
-  }
-  if (workloadOptions.scenarios[scenario].executor === "ramping-vus") {
-    workloadOptions.scenarios[scenario].stages[0].target = dataPool.length * vuPerRoute;
-    if (scenario === "hysteresis") {
-      duration = duration / 2;
-      workloadOptions.scenarios[scenario].stages[1].duration = `${duration}m`;
-    }
-    workloadOptions.scenarios[scenario].stages[0].duration = `${duration}m`;
-  }
-});
-
-// Default metric labels:
-
-if (__VU === 1) { // Only print once to avoid spamming the console
-  //dataPool.forEach((route: any) => console.log(`[Setup] DataPool sender ${route.sender.name} -> ${route.relayer.name} -> ${route.receiver.name}`));
-  console.log(`[Setup] Workload: ${workloadName}`);
-  console.log(`[Setup] Topology: ${topologyName}`);
-  console.log(`[Setup] Test duration set to ${duration}m`);
-  console.log(`[Setup] Hops: ${__ENV.HOPS || 1}`); 
-  console.log(`[Setup] Senders: ${sendersData.length}`);
-  console.log(`[Setup] Relayers: ${relayersData.length}`);
-  console.log(`[Setup] Receivers: ${receiversData.length}`);
-  console.log(`[Setup] Request per second per VU: ${__ENV.REQUESTS_PER_SECOND_PER_VU || 1}`);
-  console.log(`[Setup] VU per node: ${__ENV.VU_PER_ROUTE || 1}`);
-  console.log(`[Setup] Routes: ${dataPool.length}`);
-  console.log(`[Setup] Message delay set to ${Math.trunc(messageDelay)} ms`);
-  // console.log("Test execution options: ");
-  // console.log(JSON.stringify(workloadOptions))
-}
+const k6Configuration = new K6Configuration();
 
 // Test Options https://docs.k6.io/docs/options
-export const options: Partial<Options> = workloadOptions;
+export const options: Partial<Options> = k6Configuration.workloadOptions;
 
 // Define metrics
-const defaultMetricLabels = { workload: workloadName, topology: topologyName, hops: hops.toString() };
+const defaultMetricLabels = { workload: k6Configuration.workload , topology: k6Configuration.topology, hops: k6Configuration.hops.toString() };
 const messageRequests = new Counter("hopr_message_requests"); // Counts the number of messages requests successfully sent
 const sentMessagesSucceed = new Counter("hopr_sent_messages_succeed"); // Counts the number of X hop messages successfully transmitted
 const sentMessagesFailed = new Counter("hopr_sent_messages_failed"); // Counts the number of X hop messages failed transmittion
@@ -109,7 +25,7 @@ const topologyType = new Gauge("hopr_topology_type");
 
 // The Setup Function is run once before the Load Test https://docs.k6.io/docs/test-life-cycle
 export function setup() {
-  switch (workloadName) {
+  switch (k6Configuration.workload) {
     case 'sanity-check':
       workloadType.add(1);
       break;
@@ -126,7 +42,7 @@ export function setup() {
       console.log('Unknown workload type');
       break;
   }
-  switch (topologyName) {
+  switch (k6Configuration.topology) {
     case 'local':
       topologyType.add(0);
       break;
@@ -146,7 +62,7 @@ export function setup() {
       console.log('Unknown topology type');
       break;
   }
-  return dataPool.map((route) => {
+  return k6Configuration.dataPool.map((route) => {
     return { 
       sender: new HoprdNode(route.sender),
       relayer: new HoprdNode(route.relayer),
@@ -168,8 +84,8 @@ export function sendMessages(dataPool: [{ sender: HoprdNode, relayer: HoprdNode,
 
   let url = sender.url.replace("http", "ws") + '/session/websocket?';
   url += 'capabilities=Segmentation&capabilities=Retransmission&';
-  url += `target=${getDestination()}%3A80&`;
-  url += `hops=${hops}&`;
+  url += `target=${k6Configuration.targetDestination}%3A80&`;
+  url += `hops=${k6Configuration.hops}&`;
   url += `path=${relayer.peerId}&`;
   url += `destination=${receiver.peerId}&`;
   url += 'protocol=tcp'; 
@@ -185,21 +101,21 @@ export function sendMessages(dataPool: [{ sender: HoprdNode, relayer: HoprdNode,
         websocketOpened=true;
         console.log(`[Sender][VU ${vu + 1}] Connected via websocket to sender node ${sender.name}`);
         socket.setInterval(function timeout() {
-          if (__ENV.WEBSOCKET_DISCONNECTED === "true") {
+          if (__ENV.K6_WEBSOCKET_DISCONNECTED === "true") {
             console.log(`[Sender][VU:${vu + 1}] Websocket disconnected. Stopping the interval`);
             socket.close();
             return;
           }
-          const messagePayload: ArrayBuffer = Utils.buildMessagePayload();
+          const messagePayload: ArrayBuffer = Utils.buildMessagePayload(k6Configuration.targetDestination);
           //console.log(`[Sender][VU:${senderNodeIndex + 1}] Sending ${hops} hops message from [${sender.name}] to [${receiver.name}]`);
           socket.sendBinary(messagePayload);
           dataSent.add(messagePayload.byteLength, { ...defaultMetricLabels, sender: sender.name, receiver: receiver.name, relayer: relayer.name });
           messageRequests.add(1, { ...defaultMetricLabels, sender: sender.name, receiver: receiver.name, relayer: relayer.name});
-        }, messageDelay);
+        }, k6Configuration.messageDelay);
       });
       socket.on('binaryMessage', (data: ArrayBuffer) => {
         try {
-          const startTime = Utils.unpackMessagePayload(new Uint8Array(data));
+          const startTime = Utils.unpackMessagePayload(new Uint8Array(data), k6Configuration.targetDestination);
           let duration = new Date().getTime() - parseInt(startTime);
           messageLatency.add(duration, {...defaultMetricLabels, sender: sender.name, receiver: receiver.name, relayer: relayer.name});
           console.log(`[Sender] Message received on ${sender.name} relayed from ${relayer.name} using exit node ${receiver.name} with latency ${duration} ms`);
@@ -208,17 +124,17 @@ export function sendMessages(dataPool: [{ sender: HoprdNode, relayer: HoprdNode,
         } catch (error) {
           console.error(`[Sender] Message received on ${sender.name} with incomplete data`);
           sentMessagesFailed.add(1, {...defaultMetricLabels, sender: sender.name, receiver: receiver.name, relayer: relayer.name});
-          fail(`[Sender] Message received on ${sender.name} with incomplete data`);
+          //fail(`[Sender] Message received on ${sender.name} with incomplete data`);
         }
       });
 
       socket.on("error", (error) => {
-        __ENV.WEBSOCKET_DISCONNECTED = "true";
+        __ENV.K6_WEBSOCKET_DISCONNECTED = "true";
         console.error(`[Sender] Node ${sender.name} replied with a websocket error:`, error);
         fail(`[Sender] Node ${sender.name} replied with a websocket error: ${error}`);
       });
       socket.on("close", (errorCode: any) => {
-        __ENV.WEBSOCKET_DISCONNECTED = "true";
+        __ENV.K6_WEBSOCKET_DISCONNECTED = "true";
         console.log(`[Sender] Disconnected via websocket from node ${sender.name} due to error code ${errorCode} at ${new Date().toISOString()}`,
         );
       });

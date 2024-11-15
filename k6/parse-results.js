@@ -2,15 +2,15 @@ const fs = require('fs');
 const Handlebars = require('handlebars');
 
 // Execution details
-// node parse-results.js ${json_file} ${TOPOLOGY_NAME} ${WORKLOAD_NAME} ${REQUESTS_PER_SECOND_PER_VU} ${TESTID} ${DURATION}
+// node parse-results.js ${json_file} ${K6_TOPOLOGY_NAME} ${K6_WORKLOAD_NAME} ${K6_REQUESTS_PER_SECOND_PER_VU} ${TESTID} ${DURATION}
 // node parse-results.js test-execution-20240522-113543.json many2many sanity-check 1 test-2.1.0 30
 const test_result_json = process.argv[2];
 const topologyName = process.argv[3];
 const workloadName = process.argv[4];
-const requests_per_second_per_vu = process.argv[5];
-const test_scenario = process.argv[6];
+const requestsPerSecondPerVu = process.argv[5];
+const testScenario = process.argv[6];
 const duration = process.argv[7];
-const execution_time = test_result_json.replace(/test-execution-/, '').replace(/\.json/, '');
+const executionTime = test_result_json.replace(/test-execution-/, '').replace(/\.json/, '');
 // Read and parse the JSON file
 const data = JSON.parse(fs.readFileSync(test_result_json, 'utf8'));
 const metric_keys = ['data_received', 'data_sent', 'hopr_message_requests', 'hopr_sent_messages_succeed','hopr_message_latency'];
@@ -126,10 +126,10 @@ const mainTemplate = `
 <table style="border: 2px solid black; border-collapse: collapse;"><tbody>
   <tr><td style="border: 1px solid black;">Topology</td><td style="border: 1px solid black;">${topologyName}</td></tr>
   <tr><td style="border: 1px solid black;">Workload</td><td style="border: 1px solid black;">${workloadName}</td></tr>
-  <tr><td style="border: 1px solid black;">Test Scenario</td><td style="border: 1px solid black;">${test_scenario}</td></tr>
-  <tr><td style="border: 1px solid black;">Itreations</td><td style="border: 1px solid black;">${requests_per_second_per_vu}</td></tr>
+  <tr><td style="border: 1px solid black;">Test Scenario</td><td style="border: 1px solid black;">${testScenario}</td></tr>
+  <tr><td style="border: 1px solid black;">Itreations</td><td style="border: 1px solid black;">${requestsPerSecondPerVu}</td></tr>
   <tr><td style="border: 1px solid black;">Duration</td><td style="border: 1px solid black;">${duration}</td></tr>
-  <tr><td style="border: 1px solid black;">End time</td><td style="border: 1px solid black;">${execution_time}</td></tr>
+  <tr><td style="border: 1px solid black;">End time</td><td style="border: 1px solid black;">${executionTime}</td></tr>
 </tbody></table>
 <h3>Counters</h3>
 ${counterHtml}
@@ -140,5 +140,5 @@ ${trendrHtml}
 `;
 
 // Write the resulting HTML to a file
-fs.writeFileSync(`test-execution-${execution_time}.html`, mainTemplate);
+fs.writeFileSync(`test-execution-${executionTime}.html`, mainTemplate);
 //console.log(mainTemplate);

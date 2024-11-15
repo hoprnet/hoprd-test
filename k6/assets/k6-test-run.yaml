@@ -22,9 +22,11 @@ spec:
         cpu: 3
         memory: 3Gi
     env:
-      - name: TOPOLOGY_NAME
+      - name: K6_CLUSTER_NODES
+        value: {{ clusterNodes }}
+      - name: K6_TOPOLOGY_NAME
         value: {{ topologyName }}
-      - name: WORKLOAD_NAME
+      - name: K6_WORKLOAD_NAME
         value: {{ workloadName }}
       - name: REQUESTS_PER_SECOND_PER_VU
         value: "{{ requestsPerSecondPerVu }}"

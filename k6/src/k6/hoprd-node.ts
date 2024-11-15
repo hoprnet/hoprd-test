@@ -15,7 +15,7 @@ export class HoprdNode {
 
   constructor(data) {
     this.name = data.name;
-    this.url = data.url;
+    this.url = data.url + "/api/v3";
     (this.httpParams = {
       headers: {
         "x-auth-token": data.apiToken,
