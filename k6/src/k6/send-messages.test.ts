@@ -3,7 +3,7 @@ import { Counter, Trend, Gauge } from "k6/metrics";
 import { check, fail } from "k6";
 import ws from "k6/ws";
 import { HoprdNode } from "./hoprd-node";
-import { Utils } from "./utils";
+import { buildMessagePayload, unpackMessagePayload } from "./utils";
 import { K6Configuration } from "./k6-configuration";
 
 // Read nodes
@@ -14,9 +14,11 @@ export const options: Partial<Options> = k6Configuration.workloadOptions;
 
 // Define metrics
 const defaultMetricLabels = { workload: k6Configuration.workload , topology: k6Configuration.topology, hops: k6Configuration.hops.toString() };
-const messageRequests = new Counter("hopr_message_requests"); // Counts the number of messages requests successfully sent
+const messageRequestsSucceed = new Counter("hopr_message_requests_succeed"); // Counts the number of messages requests successfully sent
+const messageRequestsFailed = new Counter("hopr_messages_requests_failed"); // Counts the number of X hop messages failed transmittion
 const sentMessagesSucceed = new Counter("hopr_sent_messages_succeed"); // Counts the number of X hop messages successfully transmitted
 const sentMessagesFailed = new Counter("hopr_sent_messages_failed"); // Counts the number of X hop messages failed transmittion
+
 const messageLatency = new Trend("hopr_message_latency");
 const dataSent = new Counter("hopr_data_sent");
 const dataReceived = new Counter("hopr_data_received");
@@ -62,13 +64,18 @@ export function setup() {
       console.log('Unknown topology type');
       break;
   }
-  return k6Configuration.dataPool.map((route) => {
-    return { 
-      sender: new HoprdNode(route.sender),
-      relayer: new HoprdNode(route.relayer),
-      receiver: new HoprdNode(route.receiver) 
-      };
-  });
+  try {
+    return k6Configuration.dataPool.map((route) => {
+      return { 
+        sender: new HoprdNode(route.sender),
+        relayer: new HoprdNode(route.relayer),
+        receiver: new HoprdNode(route.receiver) 
+        };
+    });
+  } catch (error) {
+    console.error(`[Setup] Failed to load data pool:`, error);
+    fail(`Failed to load data pool: ${error}`);
+  }
 }
 
 // Scenario to send messages
@@ -107,16 +114,22 @@ export function sendMessages(dataPool: [{ sender: HoprdNode, relayer: HoprdNode,
             socket.close();
             return;
           }
-          const messagePayload: ArrayBuffer = Utils.buildMessagePayload(k6Configuration.targetDestination, counter++);
-          //console.log(`[Sender][VU:${vu}] Sending ${k6Configuration.hops} hops message from [${sender.name}] through [${relayer.name}] to [${receiver.name}] with payload ${messagePayload.byteLength} bytes`);
-          socket.sendBinary(messagePayload);
-          dataSent.add(messagePayload.byteLength, { ...defaultMetricLabels, sender: sender.name, receiver: receiver.name, relayer: relayer.name });
-          messageRequests.add(1, { ...defaultMetricLabels, sender: sender.name, receiver: receiver.name, relayer: relayer.name});
+          try {
+            const messagePayload: ArrayBuffer = buildMessagePayload(k6Configuration.targetDestination, counter++);
+            //console.log(`[Sender][VU:${vu + 1}] Sending ${k6Configuration.hops} hops message from [${sender.name}] through [${relayer.name}] to [${receiver.name}]`);
+            socket.sendBinary(messagePayload);
+            dataSent.add(messagePayload.byteLength, { ...defaultMetricLabels, sender: sender.name, receiver: receiver.name, relayer: relayer.name });
+            messageRequestsSucceed.add(1, { ...defaultMetricLabels, sender: sender.name, receiver: receiver.name, relayer: relayer.name});
+          } catch (error) {       
+            console.error(`[Sender][VU ${vu + 1}] Failed to send message from [${sender.name}] through [${relayer.name}] to [${receiver.name}]`);
+            console.error(`[Sender][VU:${vu + 1}] Failed to send message:`, error);
+            messageRequestsFailed.add(1, { ...defaultMetricLabels, sender: sender.name, receiver: receiver.name, relayer: relayer.name});
+          }
         }, k6Configuration.messageDelay);
       });
       socket.on('binaryMessage', (data: ArrayBuffer) => {
         try {
-          const startTime = Utils.unpackMessagePayload(new Uint8Array(data), k6Configuration.targetDestination);
+          const startTime = unpackMessagePayload(new Uint8Array(data), k6Configuration.targetDestination);
           let duration = new Date().getTime() - parseInt(startTime);
           messageLatency.add(duration, {...defaultMetricLabels, sender: sender.name, receiver: receiver.name, relayer: relayer.name});
           console.log(`[Sender] Message received on entry node ${sender.name} relayed from ${relayer.name} using exit node ${receiver.name} with latency ${duration} ms`);

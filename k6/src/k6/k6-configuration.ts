@@ -1,9 +1,17 @@
+import { fail } from "k6";
+
+export class Route {
+    public sender: any;
+    public relayer: any;
+    public receiver: any;
+}
+
 export class K6Configuration {
 
     public clusterNodes: string;
     public topology: string;
     public workload: string;
-    public dataPool: any[];
+    public dataPool: Route[];
     public workloadOptions: any;
     public duration: number = 1;
     public hops: number = 1;
@@ -11,7 +19,7 @@ export class K6Configuration {
     public targetDestination: string = "k6-echo.k6-operator-system.staging.hoprnet.link";
     public vuPerRoute: number = 1;
 
-    public constructor(){
+    public constructor() {
         this.loadEnvironmentVariables();
         this.loadJSONFiles();
         this.buildWorkloadOptions();
@@ -21,10 +29,10 @@ export class K6Configuration {
             console.log(`[Setup] Workload: ${this.workload}`);
             console.log(`[Setup] Topology: ${this.topology}`);
             console.log(`[Setup] Test duration set to ${this.duration}m`);
-            console.log(`[Setup] Hops: ${__ENV.HOPS || 1}`); 
-            let uniqueSenders = Array.from((new Set(this.dataPool.map((route)=> route.sender.name))));
-            let uniqueRelayers = Array.from((new Set(this.dataPool.map((route)=> route.relayer.name))));
-            let uniqueReceivers = Array.from((new Set(this.dataPool.map((route)=> route.receiver.name))));
+            console.log(`[Setup] Hops: ${__ENV.HOPS || 1}`);
+            let uniqueSenders = Array.from((new Set(this.dataPool.map((route) => route.sender.name))));
+            let uniqueRelayers = Array.from((new Set(this.dataPool.map((route) => route.relayer.name))));
+            let uniqueReceivers = Array.from((new Set(this.dataPool.map((route) => route.receiver.name))));
             console.log(`[Setup] Senders: ${uniqueSenders.length}`);
             console.log(`[Setup] Relayers: ${uniqueRelayers.length}`);
             console.log(`[Setup] Receivers: ${uniqueReceivers.length}`);
@@ -45,18 +53,39 @@ export class K6Configuration {
 
         __ENV.K6_WEBSOCKET_DISCONNECTED = "false";
         if (__ENV.REQUESTS_PER_SECOND_PER_VU) {
-        this.messageDelay = 1000 / parseInt(__ENV.REQUESTS_PER_SECOND_PER_VU);
+            const rps = parseInt(__ENV.REQUESTS_PER_SECOND_PER_VU);
+            if (!isNaN(rps) && rps > 0) {
+                this.messageDelay = 1000 / rps;
+            } else {
+                fail('[Error] Invalid REQUESTS_PER_SECOND_PER_VU, using default messageDelay.');
+            }
+            this.messageDelay = 1000 / parseInt(__ENV.REQUESTS_PER_SECOND_PER_VU);
         }
         if (__ENV.DURATION) {
-        this.duration = parseInt(__ENV.DURATION);
+            const duration = parseInt(__ENV.DURATION);
+            if (!isNaN(duration) && duration > 0) {
+                this.duration = duration;
+            } else {
+                fail('[ERROR] Invalid DURATION, using default duration.');
+            }
         }
         if (__ENV.VU_PER_ROUTE) {
-        this.vuPerRoute = parseInt(__ENV.VU_PER_ROUTE);
+            const vuPerRoute = parseInt(__ENV.VU_PER_ROUTE);
+            if (!isNaN(vuPerRoute) && vuPerRoute > 0) {
+                this.vuPerRoute = vuPerRoute;
+            } else {
+                fail('[ERROR] Invalid VU_PER_ROUTE, using default vuPerRoute.');
+            }
         }
         if (__ENV.HOPS) {
-        this.hops = parseInt(__ENV.HOPS);
+            const hops = parseInt(__ENV.HOPS);
+            if (!isNaN(hops) && hops > 0) {
+                this.hops = hops;
+            } else {
+                fail('[ERROR] Invalid HOPS, using default hops.');
+            }
         }
-        if ( __ENV.K6_TARGET_DESTINATION) {
+        if (__ENV.K6_TARGET_DESTINATION) {
             this.targetDestination = __ENV.K6_TARGET_DESTINATION;
         }
     }
@@ -69,54 +98,55 @@ export class K6Configuration {
 
         topologyNodesData
             .filter((node: any) => node.enabled)
-            .map((topologyNode) => { 
+            .forEach((topologyNode) => {
                 topologyNode.apiToken = __ENV.HOPRD_API_TOKEN
                 let node = getClusterNodeByName(topologyNode.name);
                 topologyNode.url = node.url;
                 topologyNode.instance = node.instance;
-                return topologyNode;
             });
         const sendersData: any[] = [];
         const relayersData: any[] = [];
         const receiversData: any[] = [];
         topologyNodesData
-        .forEach((node: any) => {
-            if (node.isSender) {
-                sendersData.push(node);
-            }
-            if (node.isRelayer) {
-                relayersData.push(node);
-            }
-            if (node.isReceiver) {
-                receiversData.push(node);
-            }
-        });
+            .forEach((node: any) => {
+                if (node.isSender) {
+                    sendersData.push(node);
+                }
+                if (node.isRelayer) {
+                    relayersData.push(node);
+                }
+                if (node.isReceiver) {
+                    receiversData.push(node);
+                }
+            });
         this.dataPool = sendersData
-        .flatMap(sender => {
-            return receiversData.flatMap(receiver => {
-            return relayersData.map( relayer => { return { sender, relayer, receiver}; });
+            .flatMap(sender => {
+                return receiversData.flatMap(receiver => {
+                    return relayersData.map(relayer => { return { sender, relayer, receiver }; });
+                })
             })
-        })
-        .filter((route) => route.sender.name !== route.receiver.name && route.sender.name !== route.relayer.name && route.relayer.name !== route.receiver.name);
-
-
+            .filter((route) =>
+                route.sender.name !== route.receiver.name &&
+                route.sender.name !== route.relayer.name &&
+                route.relayer.name !== route.receiver.name
+            );
     }
 
     private buildWorkloadOptions(): void {
         this.workloadOptions = JSON.parse(open(`./workload-${this.workload}.json`));
         Object.keys(this.workloadOptions.scenarios).forEach((scenario) => {
-        if (this.workloadOptions.scenarios[scenario].executor === "per-vu-iterations") {
-            this.workloadOptions.scenarios[scenario].vus = this.dataPool.length * this.vuPerRoute;
-            this.workloadOptions.scenarios[scenario].maxDuration = `${this.duration}m`;
-        }
-        if (this.workloadOptions.scenarios[scenario].executor === "ramping-vus") {
-            this.workloadOptions.scenarios[scenario].stages[0].target = this.dataPool.length * this.vuPerRoute;
-            if (scenario === "hysteresis") {
-            this.duration = this.duration / 2;
-            this.workloadOptions.scenarios[scenario].stages[1].duration = `${this.duration}m`;
+            if (this.workloadOptions.scenarios[scenario].executor === "per-vu-iterations") {
+                this.workloadOptions.scenarios[scenario].vus = this.dataPool.length * this.vuPerRoute;
+                this.workloadOptions.scenarios[scenario].maxDuration = `${this.duration}m`;
             }
-            this.workloadOptions.scenarios[scenario].stages[0].duration = `${this.duration}m`;
-        }
+            if (this.workloadOptions.scenarios[scenario].executor === "ramping-vus") {
+                this.workloadOptions.scenarios[scenario].stages[0].target = this.dataPool.length * this.vuPerRoute;
+                if (scenario === "hysteresis") {
+                    const hysteresisDuration = this.duration / 2;
+                    this.workloadOptions.scenarios[scenario].stages[1].duration = `${hysteresisDuration}m`;
+                }
+                this.workloadOptions.scenarios[scenario].stages[0].duration = `${this.duration}m`;
+            }
         });
     }
 

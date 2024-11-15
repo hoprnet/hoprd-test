@@ -1,5 +1,5 @@
 # Stage 1: Build the application using a full Node.js image with build tools
-FROM node:18-alpine AS builder
+FROM node:22-alpine AS builder
 
 # Set the working directory
 WORKDIR /app
@@ -21,7 +21,7 @@ COPY . .
 RUN npm run build
 
 # Stage 2: Create a minimal final image with only the necessary files
-FROM node:18-alpine
+FROM node:22-alpine
 
 # Set the working directory
 WORKDIR /app

@@ -85,18 +85,18 @@ export class HoprdNode {
 
   public async openChannel(peerAddress: string, nodeName: string): Promise<string> {
     if (peerAddress == '') {
-      console.error(`[ERROR] Unable to find peerAddress for node '${nodeName}' in routes for node ${this.data.name}`)
-      process.exit(1);
+      console.error(`[ERROR] Unable to find peer address for node '${nodeName}' in routes for node ${this.data.name}`)
+      throw new Error(`Peer address not found for node '${nodeName}'`);
     }
     const openChannelPayload = Object.assign(this.basePayload, {peerAddress, amount: "100000000000000000", timeout: 1000 * 60 * 3 });
     return this.sdk.api.channels.openChannel(openChannelPayload).then(
       (newChannel: any) => {
-        console.log(`[INFO] Openning outgoing channel from ${this.data.name} to ${nodeName} on Tx: ${newChannel.transactionReceipt}`)
-        return newChannel.channelId
+        console.log(`[INFO] Openning outgoing channel from ${this.data.name} to ${nodeName} on Tx: ${newChannel.transactionReceipt}`);
+        return newChannel.channelId;
       }).catch((error: any) => {
-        console.error(`[ERROR] Unable to open outgoing channel from ${this.data.name} to ${nodeName}`)
-        console.error(`[ERROR]`, error)
-        return ''
+        console.error(`[ERROR] Unable to open outgoing channel from ${this.data.name} to ${nodeName}`);
+        console.error(`[ERROR]`, error);
+        throw error;
       })
   }
 
@@ -132,18 +132,21 @@ export class HoprdNode {
         }
         if (BigInt(channel.balance) < BigInt(10000000000000000)) {
           console.warn(`[WARN] Channel (${channel.id}) balance from ${this.data.name} to ${route.name} is insufficient and cannot be used. Funding it automatically.`)
-          await this.sdk.api.channels.fundChannel(Object.assign(this.basePayload, {channelId: channel.id, amount: "10000000000000000"}));
+          await this.sdk.api.channels.fundChannel(Object.assign(this.basePayload, {channelId: channel.id, amount: "10000000000000000" }))
+          .catch((error: any) => {
+              console.error(`[ERROR] Unable to fund channel ${channel.id} from ${this.data.name}`);
+              console.error("[ERROR]", error);
+          });
         }
       }
     }
     // Prepare to close channels
-    let channelsToClose = this.getOutgoingChannelsToClose(nodes).then((channelsToClose) => {
-      channelsToClose.forEach((channelId) => {
-        console.log(`[INFO] Closing outgoing channel ${channelId} from ${this.data.name}`)
-        //pendingCloseChannels.push(this.closeChannel(channelId))
-      })
-      return channelsToClose;
+    const channelsToClose = await this.getOutgoingChannelsToClose(nodes);
+    channelsToClose.forEach((channelId) => {
+      console.log(`[INFO] Closing outgoing channel ${channelId} from ${this.data.name}`);
+      pendingCloseChannels.push(this.closeChannel(channelId));
     });
+
 
     // Open and close channels
     let openningChannels: string[] = (await Promise.all(pendingOpenChannels));
@@ -171,19 +174,23 @@ export class HoprdNode {
   }
 
   async waitForChannelStatus(channelId: string, desiredStatus: string): Promise<string> {
-    let iteration = 0
-    let channel = channelId
-    const waitingChannel: Promise<string> = new Promise<string>( (resolve) => {
+    let iteration = 0;
+    const maxIterations = 10;
+    let channel = channelId;
+    const waitingChannel: Promise<string> = new Promise<string>( (resolve, reject) => {
       var interval = setInterval(async () => {
           iteration++
           const currentChannels: GetChannelsResponseType = await this.sdk.api.channels.getChannels(this.basePayload)
           const channelStatus = currentChannels.outgoing.find(outgoingChannel => outgoingChannel.id == channel )
-          if (channelStatus?.status == desiredStatus || iteration >= 10) {
-            clearInterval(interval);
-            resolve(channel)
-          } else {
-            console.log(`[INFO] [Iteration ${iteration}] Node ${this.data.name} has '${channelStatus?.status}' channel : ${channel}`)
-          }
+         if (channelStatus?.status == desiredStatus) {
+           clearInterval(interval);
+           resolve(channel);
+         } else if (iteration >= maxIterations) {
+           clearInterval(interval);
+           reject(new Error(`Channel ${channel} did not reach status ${desiredStatus} after ${iteration} iterations.`));
+         } else {
+           console.log(`[INFO] [Iteration ${iteration}] Node ${this.data.name} has '${channelStatus?.status}' channel : ${channel}`);
+         }
         }, 60 * 1000)
     })
     return (await waitingChannel)

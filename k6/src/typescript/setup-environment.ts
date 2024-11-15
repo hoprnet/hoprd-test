@@ -4,13 +4,15 @@ import { HoprdNode } from './hoprd-node';
 import { checkNodes, setupChannels } from './setup-tasks';
 
 const setupEnvironment = async (nodes: HoprdNode[]) => {
-
-  // Check nodes
-  await checkNodes(nodes, 10)
-
-  // Setup channels
-  await setupChannels(nodes)  
-
+  try {
+    // Check nodes
+    await checkNodes(nodes, 10)
+    // Setup channels
+    await setupChannels(nodes)  
+  } catch (error) {
+    console.error('Environment setup tasks failed:', error);
+    throw error; // Re-throw to be caught by the Promise chain
+  }
 }
 
 // Main
@@ -47,5 +49,8 @@ Promise.all(enabledNodes).then((hoprdNodes: HoprdNode[]) => {
     const k6TestResultsTemplateParsed = k6TestResultsTemplate({ clusterNodes, topologyName, workloadName, requestsPerSecondPerVu, testid, duration });
     fs.writeFileSync(`./k6-test-results.yaml`, k6TestResultsTemplateParsed)
 
-  }).catch((err) => console.error(err))
+  }).catch((error) => {
+    console.error('Failed to generate k6 manifest files:', error);
+    console.error(error)
+  });
 })

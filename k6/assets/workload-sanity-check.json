@@ -16,8 +16,10 @@
   },
   "setupTimeout": "3600000",
   "thresholds": {
-    "hopr_message_requests": [],
-    "hopr_sent_messages_succeed": [],
-    "hopr_message_latency": ["avg<400", "p(90)<500", "p(95)<600"]
+    "hopr_message_requests_succeed": ["rate>0.99"],
+    "hopr_messages_requests_failed": ["rate<0.01"],
+    "hopr_sent_messages_succeed": ["rate>0.97"],
+    "hopr_sent_messages_failed": ["rate<0.01"],
+    "hopr_message_latency": ["avg<300", "p(90)<400", "p(95)<500"]
   }
 }
