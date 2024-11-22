@@ -60,7 +60,6 @@ export class K6Configuration {
             } else {
                 fail('[Error] Invalid REQUESTS_PER_SECOND_PER_VU, using default messageDelay.');
             }
-            this.messageDelay = 1000 / parseInt(__ENV.REQUESTS_PER_SECOND_PER_VU);
         }
         if (__ENV.K6_TEST_DURATION) {
             const duration = parseInt(__ENV.K6_TEST_DURATION);
