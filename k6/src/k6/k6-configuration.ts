@@ -53,8 +53,8 @@ export class K6Configuration {
         this.workload = __ENV.K6_WORKLOAD_NAME || "sanity-check";
 
         __ENV.K6_WEBSOCKET_DISCONNECTED = "false";
-        if (__ENV.REQUESTS_PER_SECOND_PER_VU) {
-            const rps = parseInt(__ENV.REQUESTS_PER_SECOND_PER_VU);
+        if (__ENV.K6_REQUESTS_PER_SECOND_PER_VU) {
+            const rps = parseInt(__ENV.K6_REQUESTS_PER_SECOND_PER_VU);
             if (!Number.isNaN(rps) && rps > 0) {
                 this.messageDelay = 1000 / rps;
             } else {

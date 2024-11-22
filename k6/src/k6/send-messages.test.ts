@@ -13,59 +13,20 @@ const k6Configuration = new K6Configuration();
 export const options: Partial<Options> = k6Configuration.workloadOptions;
 
 // Define metrics
-const defaultMetricLabels = { workload: k6Configuration.workload , topology: k6Configuration.topology, hops: k6Configuration.hops.toString() };
 const messageRequestsSucceed = new Counter("hopr_message_requests_succeed"); // Counts the number of messages requests successfully sent
 const messageRequestsFailed = new Counter("hopr_messages_requests_failed"); // Counts the number of X hop messages failed transmittion
 const sentMessagesSucceed = new Counter("hopr_sent_messages_succeed"); // Counts the number of X hop messages successfully transmitted
 const sentMessagesFailed = new Counter("hopr_sent_messages_failed"); // Counts the number of X hop messages failed transmittion
-
 const messageLatency = new Trend("hopr_message_latency");
 const dataSent = new Counter("hopr_data_sent");
 const dataReceived = new Counter("hopr_data_received");
-const workloadType = new Gauge("hopr_workload_type");
-const topologyType = new Gauge("hopr_topology_type");
+const executionInfoMetric = new Gauge("hopr_execution_info");
 
 // The Setup Function is run once before the Load Test https://docs.k6.io/docs/test-life-cycle
 export function setup() {
-  switch (k6Configuration.workload) {
-    case 'sanity-check':
-      workloadType.add(1);
-      break;
-    case 'constant':
-      workloadType.add(2);
-      break;
-    case 'incremental':
-      workloadType.add(3);
-      break;
-    case 'hysteresis':
-      workloadType.add(4);
-      break;
-    default:
-      console.log('Unknown workload type');
-      break;
-  }
-  switch (k6Configuration.topology) {
-    case 'local':
-      topologyType.add(0);
-      break;
-    case 'many2many':
-      topologyType.add(1);
-      break;
-    case 'sender':
-      topologyType.add(2);
-      break;
-    case 'receiver':
-      topologyType.add(3);
-      break;
-    case 'relayer':
-      topologyType.add(4);
-      break;
-    default:
-      console.log('Unknown topology type');
-      break;
-  }
+  let routes: { sender: HoprdNode, relayer: HoprdNode, receiver: HoprdNode }[] = [];
   try {
-    return k6Configuration.dataPool.map((route) => {
+    routes = k6Configuration.dataPool.map((route) => {
       return { 
         sender: new HoprdNode(route.sender),
         relayer: new HoprdNode(route.relayer),
@@ -76,15 +37,30 @@ export function setup() {
     console.error(`[Setup] Failed to load data pool:`, error);
     fail(`Failed to load data pool: ${error}`);
   }
+
+
+  const executionInfoMetricLabels = { 
+    duration: k6Configuration.duration.toString(),
+    version: routes[0].sender.getVersion(), 
+    network: routes[0].sender.getNetwork(),
+    topology: k6Configuration.topology,
+    workload: k6Configuration.workload,
+    hops: k6Configuration.hops.toString(),
+    routes: routes.length.toString(),
+    vu: k6Configuration.vuPerRoute.toString(), 
+    rps: (1000/k6Configuration.messageDelay).toFixed(2).toString(),
+  };
+  executionInfoMetric.add(Date.now(), executionInfoMetricLabels);
+  return routes;
 }
 
 // Scenario to send messages
-export function sendMessages(dataPool: [{ sender: HoprdNode, relayer: HoprdNode, receiver: HoprdNode }]) {
+export function sendMessages(routes: [{ sender: HoprdNode, relayer: HoprdNode, receiver: HoprdNode }]) {
 
-  const vu = Math.ceil((__VU - 1) % dataPool.length);
-  const sender = dataPool[vu].sender;
-  const relayer = dataPool[vu].relayer;
-  const receiver = dataPool[vu].receiver;
+  const vu = Math.ceil((__VU - 1) % routes.length);
+  const sender = routes[vu].sender;
+  const relayer = routes[vu].relayer;
+  const receiver = routes[vu].receiver;
   let websocketOpened = false;
   //console.log(`VU[${senderNodeIndex}] on scenario[${execution.scenario.name}]`)
 
@@ -102,11 +78,11 @@ export function sendMessages(dataPool: [{ sender: HoprdNode, relayer: HoprdNode,
   //console.log(`Url: ${url}`);
 
   //Open websocket connection to receiver node
-  console.log(`[Sender][VU ${vu + 1}] Connecting sender ${sender.name} via websocket to ${receiver.name}`);
+  //console.log(`[Sender][VU ${vu + 1}] Connecting via websocket, sender=${sender.name}, relayer=${relayer.name}, receiver=${receiver.name}`);
   const websocketResponse = ws.connect(url,sender.httpParams,function (socket) {
       socket.on("open", () => {
         websocketOpened=true;
-        console.log(`[Sender][VU ${vu + 1}] Connected via websocket to sender node ${sender.name}`);
+        console.log(`[Sender][VU ${vu + 1}] Connected via websocket, sender=${sender.name}, relayer=${relayer.name}, receiver=${receiver.name}`);
         let counter = 0;
         socket.setInterval(function timeout() {
           if (__ENV.K6_WEBSOCKET_DISCONNECTED === "true") {
@@ -118,12 +94,12 @@ export function sendMessages(dataPool: [{ sender: HoprdNode, relayer: HoprdNode,
             const messagePayload: ArrayBuffer = buildMessagePayload(k6Configuration.targetDestination, counter++);
             //console.log(`[Sender][VU:${vu + 1}] Sending ${k6Configuration.hops} hops message from [${sender.name}] through [${relayer.name}] to [${receiver.name}]`);
             socket.sendBinary(messagePayload);
-            dataSent.add(messagePayload.byteLength, { ...defaultMetricLabels, sender: sender.name, receiver: receiver.name, relayer: relayer.name });
-            messageRequestsSucceed.add(1, { ...defaultMetricLabels, sender: sender.name, receiver: receiver.name, relayer: relayer.name});
+            dataSent.add(messagePayload.byteLength, { sender: sender.name, receiver: receiver.name, relayer: relayer.name });
+            messageRequestsSucceed.add(1, { sender: sender.name, receiver: receiver.name, relayer: relayer.name });
           } catch (error) {       
             console.error(`[Sender][VU ${vu + 1}] Failed to send message from [${sender.name}] through [${relayer.name}] to [${receiver.name}]`);
             console.error(`[Sender][VU:${vu + 1}] Failed to send message:`, error);
-            messageRequestsFailed.add(1, { ...defaultMetricLabels, sender: sender.name, receiver: receiver.name, relayer: relayer.name});
+            messageRequestsFailed.add(1, { sender: sender.name, receiver: receiver.name, relayer: relayer.name});
           }
         }, k6Configuration.messageDelay);
       });
@@ -131,14 +107,14 @@ export function sendMessages(dataPool: [{ sender: HoprdNode, relayer: HoprdNode,
         try {
           const startTime = unpackMessagePayload(new Uint8Array(data), k6Configuration.targetDestination);
           let duration = new Date().getTime() - parseInt(startTime);
-          messageLatency.add(duration, {...defaultMetricLabels, sender: sender.name, receiver: receiver.name, relayer: relayer.name});
-          console.log(`[Sender] Message received on entry node ${sender.name} relayed from ${relayer.name} using exit node ${receiver.name} with latency ${duration} ms`);
-          sentMessagesSucceed.add(1, {...defaultMetricLabels, sender: sender.name, receiver: receiver.name, relayer: relayer.name});
-          dataReceived.add(data.byteLength, {...defaultMetricLabels, sender: sender.name, receiver: receiver.name, relayer: relayer.name});
+          messageLatency.add(duration, { sender: sender.name, receiver: receiver.name, relayer: relayer.name});
+          //console.log(`[Sender] Message received on entry node ${sender.name} relayed from ${relayer.name} using exit node ${receiver.name} with latency ${duration} ms`);
+          sentMessagesSucceed.add(1, {job: sender.nodeName, sender: sender.name, receiver: receiver.name, relayer: relayer.name});
+          dataReceived.add(data.byteLength, {sender: sender.name, receiver: receiver.name, relayer: relayer.name});
         } catch (error) {
           console.error(`[Sender] Message received on ${sender.name} with incomplete data`);
-          sentMessagesFailed.add(1, {...defaultMetricLabels, sender: sender.name, receiver: receiver.name, relayer: relayer.name});
-          //fail(`[Sender] Message received on ${sender.name} with incomplete data`);
+          sentMessagesFailed.add(1, {sender: sender.name, receiver: receiver.name, relayer: relayer.name});
+          fail(`[Sender] Message received on ${sender.name} with incomplete data`);
         }
       });
 
@@ -161,6 +137,6 @@ export function sendMessages(dataPool: [{ sender: HoprdNode, relayer: HoprdNode,
 }
 
 // The Teardown Function is run once after the Load Test https://docs.k6.io/docs/test-life-cycle
-export function teardown(dataPool: [{ sender: HoprdNode, receiver: HoprdNode }]) {
+export function teardown(routes: [{ sender: HoprdNode, relayer: HoprdNode, receiver: HoprdNode }]) {
   console.log("[Teardown] Load test finished",);
 }

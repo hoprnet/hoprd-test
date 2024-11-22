@@ -4,6 +4,7 @@ import { fail } from "k6";
 // This class cannot implement async methods as it is used in the k6 script
 export class HoprdNode {
   public name: string;
+  public nodeName: string;
   public url: string;
   public enabled: boolean;
   public isSender: boolean;
@@ -29,14 +30,15 @@ export class HoprdNode {
       (this.enabled = data.enabled),
       (this.isSender = data.isSender),
       (this.isRelayer = data.isRelayer),
+      (this.nodeName = data.instance),
       (this.isReceiver = data.isReceiver);
-    this.getAddress(data);
+    this.getAddress(data.apiToken);
   }
 
-  private getAddress(data) {
+  private getAddress(apiToken) {
     const httpParams = {
       headers: {
-        "x-auth-token": data.apiToken,
+        "x-auth-token": apiToken,
         "Content-Type": "application/json",
       },
       tags: {
@@ -52,6 +54,32 @@ export class HoprdNode {
       console.error(`Response: ${JSON.parse(response.body)}`);
       console.error(`Response status: ${response.status}`);
       fail(`Unable to get node addresses for '${this.name}'`);
+    }
+  }
+
+  public getNetwork(): string {
+    const response: RefinedResponse<"text"> = http.get(`${this.url}/node/info`,this.httpParams);
+    if (response.status === 200) {
+      const nodeInfo = JSON.parse(response.body);
+      console.log(`[Setup] Network: ${nodeInfo.network}`);
+      return nodeInfo.network;
+    } else {
+      console.error(`Response: ${JSON.parse(response.body)}`);
+      console.error(`Response status: ${response.status}`);
+      fail(`Unable to get node info for '${this.name}'`);
+    }
+  }
+
+  public getVersion() {
+    const response: RefinedResponse<"text"> = http.get(`${this.url}/node/version`,this.httpParams);
+    if (response.status === 200) {
+      const nodeVersion = JSON.parse(response.body);
+      console.log(`[Setup] Version: ${nodeVersion.version}`);
+      return nodeVersion.version;
+    } else {
+      console.error(`Response: ${JSON.parse(response.body)}`);
+      console.error(`Response status: ${response.status}`);
+      fail(`Unable to get node version for '${this.name}'`);
     }
   }
 }

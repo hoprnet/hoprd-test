@@ -1,17 +1,20 @@
 import * as fs from 'fs';
 import Handlebars from "handlebars";
 import { HoprdNode } from './hoprd-node';
-import { checkNodes, setupChannels } from './setup-tasks';
+import { checkNodes, setupChannels, sendTestMessages } from './setup-tasks';
 
 const setupEnvironment = async (nodes: HoprdNode[]) => {
   try {
     // Check nodes
     await checkNodes(nodes, 10)
     // Setup channels
-    await setupChannels(nodes)  
+    await setupChannels(nodes) 
+
+    // Send test messages
+    await sendTestMessages(nodes)
   } catch (error) {
     console.error('Environment setup tasks failed:', error);
-    throw error; // Re-throw to be caught by the Promise chain
+    throw error;
   }
 }
 
