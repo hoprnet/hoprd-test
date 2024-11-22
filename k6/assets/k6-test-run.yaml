@@ -2,7 +2,7 @@
 apiVersion: k6.io/v1alpha1
 kind: TestRun
 metadata:
-  name: k6-hoprd-{{ nodes }}-{{ workloadName }}
+  name: k6-hoprd-{{ clusterNodes }}-{{ workloadName }}
   namespace: k6-operator-system
 spec:
   parallelism: 1
