@@ -235,7 +235,7 @@ export class HoprdNode {
           resolve(true);
         } else {
           console.error(`Message failed, sender=${sender}, relayer=${relayer.data.name}, receiver=${receiver.data.name}`);
-          reject(false);
+          resolve(false);
         }
         ws.close(); // Close connection after receiving the response
       };
@@ -244,7 +244,7 @@ export class HoprdNode {
       ws.onerror = function error(error: any) {
         console.error(`Message failed, sender=${sender}, relayer=${relayer.data.name}, receiver=${receiver.data.name}`);
         console.error("WebSocket error:", error);
-        reject(false); // Reject the promise on error
+        resolve(false);
       };
 
       // Event: Connection closed
