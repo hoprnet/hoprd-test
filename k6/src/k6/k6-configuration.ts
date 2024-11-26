@@ -37,11 +37,11 @@ export class K6Configuration {
             console.log(`[Setup] Senders: ${uniqueSenders.length}`);
             console.log(`[Setup] Relayers: ${uniqueRelayers.length}`);
             console.log(`[Setup] Receivers: ${uniqueReceivers.length}`);
-            console.log(`[Setup] Request per second per VU: ${__ENV.REQUESTS_PER_SECOND_PER_VU || 1}`);
-            console.log(`[Setup] VU per node: ${__ENV.VU_PER_ROUTE || 1}`);
             console.log(`[Setup] Routes: ${this.dataPool.length}`);
-            console.log(`[Setup] Target destination: ${this.targetDestination}`);
+            console.log(`[Setup] VU per route: ${__ENV.K6_VU_PER_ROUTE || 1}`);
+            console.log(`[Setup] Request per second per VU: ${__ENV.K6_REQUESTS_PER_SECOND_PER_VU || 1}`);
             console.log(`[Setup] Message delay set to ${Math.trunc(this.messageDelay)} ms`);
+            console.log(`[Setup] Target destination: ${this.targetDestination}`);
             // console.log("Test execution options: ");
             // console.log(JSON.stringify(workloadOptions))
         }
@@ -51,14 +51,14 @@ export class K6Configuration {
         this.clusterNodes = __ENV.K6_CLUSTER_NODES || "core";
         this.topology = __ENV.K6_TOPOLOGY_NAME || "many2many";
         this.workload = __ENV.K6_WORKLOAD_NAME || "sanity-check";
-
         __ENV.K6_WEBSOCKET_DISCONNECTED = "false";
+
         if (__ENV.K6_REQUESTS_PER_SECOND_PER_VU) {
             const rps = parseInt(__ENV.K6_REQUESTS_PER_SECOND_PER_VU);
             if (!Number.isNaN(rps) && rps > 0) {
                 this.messageDelay = 1000 / rps;
             } else {
-                fail('[Error] Invalid REQUESTS_PER_SECOND_PER_VU, using default messageDelay.');
+                fail('[Error] Invalid K6_REQUESTS_PER_SECOND_PER_VU, using default messageDelay.');
             }
         }
         if (__ENV.K6_TEST_DURATION) {
@@ -69,12 +69,12 @@ export class K6Configuration {
                 fail('[ERROR] Invalid DURATION, using default duration.');
             }
         }
-        if (__ENV.VU_PER_ROUTE) {
-            const vuPerRoute = parseInt(__ENV.VU_PER_ROUTE);
+        if (__ENV.K6_VU_PER_ROUTE) {
+            const vuPerRoute = parseInt(__ENV.K6_VU_PER_ROUTE);
             if (!Number.isNaN(vuPerRoute) && vuPerRoute > 0) {
                 this.vuPerRoute = vuPerRoute;
             } else {
-                fail('[ERROR] Invalid VU_PER_ROUTE, using default vuPerRoute.');
+                fail('[ERROR] Invalid K6_VU_PER_ROUTE, using default vuPerRoute.');
             }
         }
         if (__ENV.HOPS) {

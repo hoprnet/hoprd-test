@@ -3,7 +3,7 @@ import { Counter, Trend, Gauge } from "k6/metrics";
 import { check, fail } from "k6";
 import ws from "k6/ws";
 import { HoprdNode } from "./hoprd-node";
-import { buildMessagePayload, unpackMessagePayload } from "./utils";
+import { arrayBufferToString, buildMessagePayload, unpackMessagePayload } from "./utils";
 import { K6Configuration } from "./k6-configuration";
 
 // Read nodes
@@ -79,10 +79,11 @@ export function sendMessages(routes: [{ sender: HoprdNode, relayer: HoprdNode, r
 
   //Open websocket connection to receiver node
   //console.log(`[Sender][VU ${vu + 1}] Connecting via websocket, sender=${sender.name}, relayer=${relayer.name}, receiver=${receiver.name}`);
+  let bufferPartialMessage = ""; // Accumulates partial messages
   const websocketResponse = ws.connect(url,sender.httpParams,function (socket) {
       socket.on("open", () => {
         websocketOpened=true;
-        console.log(`[Sender][VU ${vu + 1}] Connected via websocket, sender=${sender.name}, relayer=${relayer.name}, receiver=${receiver.name}`);
+        //console.log(`[Sender][VU ${vu + 1}] Connected via websocket, sender=${sender.name}, relayer=${relayer.name}, receiver=${receiver.name}`);
         let counter = 0;
         socket.setInterval(function timeout() {
           if (__ENV.K6_WEBSOCKET_DISCONNECTED === "true") {
@@ -104,15 +105,30 @@ export function sendMessages(routes: [{ sender: HoprdNode, relayer: HoprdNode, r
         }, k6Configuration.messageDelay);
       });
       socket.on('binaryMessage', (data: ArrayBuffer) => {
+        const receivedData = arrayBufferToString(new Uint8Array(data)).trim();
+        if (bufferPartialMessage.length > 0) {
+          //console.debug(`[Sender][VU ${vu + 1}][Begin] Partial message received on ${sender.name} with data: ${bufferPartialMessage}`);
+          bufferPartialMessage += receivedData;
+          //console.debug(`[Sender][VU ${vu + 1}][Parsed] Partial message received on ${sender.name} with data: ${bufferPartialMessage}`);
+        } else {
+          bufferPartialMessage = receivedData;
+        }
         try {
-          const startTime = unpackMessagePayload(new Uint8Array(data), k6Configuration.targetDestination);
-          let duration = new Date().getTime() - parseInt(startTime);
-          messageLatency.add(duration, { sender: sender.name, receiver: receiver.name, relayer: relayer.name});
-          //console.log(`[Sender] Message received on entry node ${sender.name} relayed from ${relayer.name} using exit node ${receiver.name} with latency ${duration} ms`);
-          sentMessagesSucceed.add(1, {job: sender.nodeName, sender: sender.name, receiver: receiver.name, relayer: relayer.name});
-          dataReceived.add(data.byteLength, {sender: sender.name, receiver: receiver.name, relayer: relayer.name});
+          const {startTimes, partialMessage } = unpackMessagePayload(bufferPartialMessage, k6Configuration.targetDestination);
+          startTimes.forEach((startTime) => {
+            let duration = new Date().getTime() - parseInt(startTime);
+            messageLatency.add(duration, { sender: sender.name, receiver: receiver.name, relayer: relayer.name});
+            //console.log(`[Sender] Message received on entry node ${sender.name} relayed from ${relayer.name} using exit node ${receiver.name} with latency ${duration} ms`);
+            sentMessagesSucceed.add(1, {job: sender.nodeName, sender: sender.name, receiver: receiver.name, relayer: relayer.name});
+            dataReceived.add(data.byteLength, {sender: sender.name, receiver: receiver.name, relayer: relayer.name});
+          });
+          bufferPartialMessage = partialMessage; // Update the buffer with the partial message
+          if (partialMessage.length > 0) {
+            //console.debug(`[Sender][VU ${vu + 1}][End] Partial message received on ${sender.name} with data: ${partialMessage}`);
+          }
         } catch (error) {
-          console.error(`[Sender] Message received on ${sender.name} with incomplete data`);
+          console.error(`[Sender][VU ${vu + 1}] Message received on ${sender.name} with incomplete data bufferPartialMessage=${bufferPartialMessage}`);
+          console.error(`[Sender][VU ${vu + 1}] Message received on ${sender.name} with incomplete data data=${receivedData}`);
           sentMessagesFailed.add(1, {sender: sender.name, receiver: receiver.name, relayer: relayer.name});
           fail(`[Sender] Message received on ${sender.name} with incomplete data`);
         }

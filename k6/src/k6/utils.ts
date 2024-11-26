@@ -11,7 +11,7 @@ function stringToArrayBuffer(str: string): ArrayBuffer {
     return buffer;
 }
 
-function arrayBufferToString(buffer: ArrayBuffer): string {
+export function arrayBufferToString(buffer: ArrayBuffer): string {
     const bufferView = new Uint8Array(buffer);
     let str = '';
     for (let i = 0; i < bufferView.length; i++) {
@@ -35,26 +35,41 @@ export function buildMessagePayload(targetDestination: string, counter: number):
     return stringToArrayBuffer(messagePayload)
 }
 
-export function unpackMessagePayload(messagePayload: ArrayBuffer, hostDestination: string): string {
-    let httpResponse = arrayBufferToString(messagePayload);
+export function unpackMessagePayload(messages: string, hostDestination: string): {startTimes: string[], partialMessage: string} {
     //console.log("Message received payload:" + JSON.stringify(httpResponse));
     switch (hostDestination) {
         case "k6-echo.k6-operator-system.staging.hoprnet.link": {
-            const body = httpResponse.substring(httpResponse.indexOf("{\"message\""), httpResponse.length);
-            //console.log("Message received body:" + JSON.stringify(body));
-            try {
-                return JSON.parse(body).message.startTime;
-            } catch (error) {
-                console.error("Error parsing message payload: " + httpResponse);
-                throw error;
+            const messageParts = messages.split("HTTP/1.1 200")
+                .filter((message: string) => message.length > 0)
+                .map((message: string) => {
+                    if (message.indexOf("{\"message\"") > 0 && message.indexOf("\"}}") > 0) { // Is a complete message
+                        try {
+                            const responseBody = message.substring(message.indexOf("{\"message\""), message.length);
+                            return JSON.parse(responseBody).message.startTime;
+                        } catch (error) {
+                            console.error("Error parsing JSON message payload:" + message);
+                            throw new Error("Invalid JSON format");
+                        }
+                    } else { // Is a partial message
+                        return "HTTP/1.1 200" + message;
+                    }
+                });
+            // Check if last element is a number or a partial message
+            const lastMessage = messageParts[messageParts.length-1];
+            if (isNaN(lastMessage)) { // Is partial message
+                let response = { startTimes: messageParts.slice(0, messageParts.length-1), partialMessage: lastMessage }
+                //console.log("Partial message response: " + JSON.stringify(response));
+                return response;
+            } else { // Is a number
+                return { startTimes: messageParts, partialMessage: '' };
             }
         }
         default: {
-            if (!httpResponse.startsWith("HTTP/1.1 200 OK") || httpResponse.indexOf("</html>") < 0) {
-                console.error("Error parsing message payload:" + httpResponse);
+            if (messages.indexOf("</html>") < 0) {
+                console.error("Error parsing message payload:" + messages);
                 throw new Error("Invalid response");
             }
-            return getFakeStartTime();
+            return { startTimes: [getFakeStartTime()], partialMessage: '' };
         }
     }
 }
