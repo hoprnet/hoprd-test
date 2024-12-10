@@ -29,10 +29,17 @@ function getFakeStartTime(): string {
     return time.toString();
 }
 
-export function buildMessagePayload(targetDestination: string, counter: number): ArrayBuffer {
+export function buildHTTPMessagePayload(targetDestination: string, counter: number): ArrayBuffer {
     const messagePayload = `GET /?startTime=${Date.now()}&count=${counter} HTTP/1.1\r\nHost: ${targetDestination}\r\n\r\n`;
     //console.log("Message sent payload:" + JSON.stringify(messagePayload)); 
     return stringToArrayBuffer(messagePayload)
+}
+
+export function buildTCPMessagePayload(): ArrayBuffer {
+    const messagePayload = {
+        startTime: Date.now()
+    };
+    return stringToArrayBuffer(JSON.stringify(messagePayload))
 }
 
 export function unpackMessagePayload(messages: string, hostDestination: string): {startTimes: string[], partialMessage: string} {

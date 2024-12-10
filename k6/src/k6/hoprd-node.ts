@@ -82,4 +82,28 @@ export class HoprdNode {
       fail(`Unable to get node version for '${this.name}'`);
     }
   }
+
+
+  public openSession(relayer: string, receiver: string, protocol: string, target: string): string {
+    const url = `${this.url}/session/${protocol}`;
+    const payload = JSON.stringify({
+        destination: receiver,
+        target: { Plain: `${target}` },
+        capabilities: ["Segmentation", "Retransmission"],
+        path: relayer
+      });
+    console.log(`Payload: ${payload}`);
+    console.log(`URL: ${url}`);
+    console.log(`HTTP Params: ${JSON.stringify(this.httpParams)}`);
+    const response: RefinedResponse<"text"> = http.post(url, payload, this.httpParams);
+    if (response.status === 200) {
+      console.log(`[Setup] Session opened: ${response.body}`);
+      const session = JSON.parse(response.body);
+      return `${session.ip}:${session.port}`;
+    } else {
+      console.error(`Response: ${JSON.parse(response.body)}`);
+      console.error(`Response status: ${response.status}`);
+      fail(`Unable to open session for '${this.name}'`);
+    }
+  }
 }

@@ -3,7 +3,7 @@ import { Counter, Trend, Gauge } from "k6/metrics";
 import { check, fail } from "k6";
 import ws from "k6/ws";
 import { HoprdNode } from "./hoprd-node";
-import { arrayBufferToString, buildMessagePayload, unpackMessagePayload } from "./utils";
+import { arrayBufferToString, buildHTTPMessagePayload, unpackMessagePayload } from "./utils";
 import { K6Configuration } from "./k6-configuration";
 
 // Read nodes
@@ -67,7 +67,7 @@ export function sendMessages(routes: [{ sender: HoprdNode, relayer: HoprdNode, r
 
   let url = sender.url.replace("http", "ws") + '/session/websocket?';
   url += 'capabilities=Segmentation&capabilities=Retransmission&';
-  url += `target=${k6Configuration.targetDestination}%3A80&`;
+  url += `target=${k6Configuration.targetDestination}&`;
   url += `hops=${k6Configuration.hops}&`;
   url += `path=${relayer.peerId}&`;
   url += `destination=${receiver.peerId}&`;
@@ -92,7 +92,7 @@ export function sendMessages(routes: [{ sender: HoprdNode, relayer: HoprdNode, r
             return;
           }
           try {
-            const messagePayload: ArrayBuffer = buildMessagePayload(k6Configuration.targetDestination, counter++);
+            const messagePayload: ArrayBuffer = buildHTTPMessagePayload(k6Configuration.targetDestination, counter++);
             //console.log(`[Sender][VU:${vu + 1}] Sending ${k6Configuration.hops} hops message from [${sender.name}] through [${relayer.name}] to [${receiver.name}]`);
             socket.sendBinary(messagePayload);
             dataSent.add(messagePayload.byteLength, { sender: sender.name, receiver: receiver.name, relayer: relayer.name });

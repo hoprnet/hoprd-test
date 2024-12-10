@@ -17,7 +17,7 @@ export class K6Configuration {
     public duration: number = 1;
     public hops: number = 1;
     public messageDelay: number = 1000;
-    public targetDestination: string = "k6-echo.k6-operator-system.staging.hoprnet.link";
+    public targetDestination: string = "k6-echo.k6-operator-system.staging.hoprnet.link%3A80";
     public vuPerRoute: number = 1;
 
     public constructor() {
@@ -86,7 +86,7 @@ export class K6Configuration {
             }
         }
         if (__ENV.K6_TARGET_DESTINATION) {
-            this.targetDestination = __ENV.K6_TARGET_DESTINATION;
+            this.targetDestination = encodeURIComponent(__ENV.K6_TARGET_DESTINATION);
         }
     }
 

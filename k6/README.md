@@ -78,15 +78,15 @@ The default throughtput is to send 1 message per second per route(web-socket con
 
 ## Running tests
 
+- Set the environment variable `K6_CLUSTER_NODES` with any of the available clusters if you need other than `core` nodes.
 - Set the environment variable `HOPRD_API_TOKEN` with the token setup on the target nodes before execute thes commands.
 - Set the test duration with environment variable `K6_TEST_DURATION` if you need other than 1m duration
 - Set the workload with environment variable: `K6_WORKLOAD_NAME`, if you need other than `constant`
 - Set the topology with environment variable: `K6_TOPOLOGY_NAME`, if you need other than `many2many`
 - Set the vu per route with environment variable: `K6_VU_PER_ROUTE`, if you need other than `1`
 - Set the requests per VU per route with environment variable: `K6_REQUESTS_PER_SECOND_PER_VU`, if you need other than `1`
-- `npm run test:local`: Execute constant traffic test using previously started local cluster. Used for development purposes of load testing scenarios
-- `npm run setup:many2many`: Setup the nodes topology many2many
-- `npm run test:many2many`: Executes constant traffic test using many 2 many topology
+- `npm run test:websocket`: Execute the uhttp websocket scenario.
+- `npm run setup:websocket`: Setup the nodes for the websocket scenario
 
 ## Running remotely
 
