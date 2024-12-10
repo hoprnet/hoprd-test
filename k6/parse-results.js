@@ -2,18 +2,18 @@ const fs = require('fs');
 const Handlebars = require('handlebars');
 
 // Execution details
-// node parse-results.js ${json_file} ${NODES} ${WORKLOAD_NAME} ${SCENARIO_ITERATIONS} ${TESTID} ${DURATION}
+// node parse-results.js ${json_file} ${K6_TOPOLOGY_NAME} ${K6_WORKLOAD_NAME} ${K6_REQUESTS_PER_SECOND_PER_VU} ${TESTID} ${DURATION}
 // node parse-results.js test-execution-20240522-113543.json many2many sanity-check 1 test-2.1.0 30
 const test_result_json = process.argv[2];
-const network = process.argv[3];
-const workload_name = process.argv[4];
-const scenario_iterations = process.argv[5];
-const test_scenario = process.argv[6];
+const topologyName = process.argv[3];
+const workloadName = process.argv[4];
+const requestsPerSecondPerVu = process.argv[5];
+const testScenario = process.argv[6];
 const duration = process.argv[7];
-const execution_time = test_result_json.replace(/test-execution-/, '').replace(/\.json/, '');
+const executionTime = test_result_json.replace(/test-execution-/, '').replace(/\.json/, '');
 // Read and parse the JSON file
 const data = JSON.parse(fs.readFileSync(test_result_json, 'utf8'));
-const metric_keys = ['data_received', 'data_sent', 'hopr_message_requests_succeed', 'hopr_message_requests_failed', 'hopr_sent_messages_succeed','hopr_message_latency'];
+const metric_keys = ['data_received', 'data_sent', 'hopr_message_requests', 'hopr_sent_messages_succeed','hopr_message_latency'];
 
 metrics = Object.entries(data.metrics).filter(([key, metric]) => {
   if(metric_keys.includes(key)) {
@@ -27,7 +27,7 @@ metrics = Object.entries(data.metrics).filter(([key, metric]) => {
       thresholds: metric.thresholds
     }
   }
-  if(key === 'hopr_message_requests_succeed' || key === 'hopr_message_requests_failed' || key === 'hopr_sent_messages_succeed') {
+  if(key === 'hopr_message_requests' || key === 'hopr_sent_messages_succeed') {
     metric = {
       count: metric.count > 1000 ? `${(metric.count / 1000).toFixed(2)} K` : metric.count,
       rate: `${metric.rate.toFixed(2)} req/s`,
@@ -124,12 +124,12 @@ const mainTemplate = `
 <h1>Load Testing results</h1>
 <h3>Details</h3>
 <table style="border: 2px solid black; border-collapse: collapse;"><tbody>
-  <tr><td style="border: 1px solid black;">Network</td><td style="border: 1px solid black;">${network}</td></tr>
-  <tr><td style="border: 1px solid black;">Workload</td><td style="border: 1px solid black;">${workload_name}</td></tr>
-  <tr><td style="border: 1px solid black;">Test Scenario</td><td style="border: 1px solid black;">${test_scenario}</td></tr>
-  <tr><td style="border: 1px solid black;">Itreations</td><td style="border: 1px solid black;">${scenario_iterations}</td></tr>
+  <tr><td style="border: 1px solid black;">Topology</td><td style="border: 1px solid black;">${topologyName}</td></tr>
+  <tr><td style="border: 1px solid black;">Workload</td><td style="border: 1px solid black;">${workloadName}</td></tr>
+  <tr><td style="border: 1px solid black;">Test Scenario</td><td style="border: 1px solid black;">${testScenario}</td></tr>
+  <tr><td style="border: 1px solid black;">Itreations</td><td style="border: 1px solid black;">${requestsPerSecondPerVu}</td></tr>
   <tr><td style="border: 1px solid black;">Duration</td><td style="border: 1px solid black;">${duration}</td></tr>
-  <tr><td style="border: 1px solid black;">End time</td><td style="border: 1px solid black;">${execution_time}</td></tr>
+  <tr><td style="border: 1px solid black;">End time</td><td style="border: 1px solid black;">${executionTime}</td></tr>
 </tbody></table>
 <h3>Counters</h3>
 ${counterHtml}
@@ -140,5 +140,5 @@ ${trendrHtml}
 `;
 
 // Write the resulting HTML to a file
-fs.writeFileSync(`test-execution-${execution_time}.html`, mainTemplate);
+fs.writeFileSync(`test-execution-${executionTime}.html`, mainTemplate);
 //console.log(mainTemplate);

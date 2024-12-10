@@ -1,0 +1,29 @@
+{
+  "nodes": [
+    {
+      "name": "node-1",
+      "instance": "local-node1",
+      "url": "http://127.0.0.1:19091"
+    },
+    {
+      "name": "node-2",
+      "instance": "local-node2",
+      "url": "http://127.0.0.1:19092"
+    },
+    {
+      "name": "node-3",
+      "instance": "local-node3",
+      "url": "http://127.0.0.1:19093"
+    },
+    {
+      "name": "node-4",
+      "instance": "local-node4",
+      "url": "http://127.0.0.1:19094"
+    },
+    {
+      "name": "node-5",
+      "instance": "local-node5",
+      "url": "http://127.0.0.1:19095"
+    }
+  ]
+}

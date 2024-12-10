@@ -1,0 +1,44 @@
+{
+  "nodes": [
+    {
+      "name": "node-1",
+      "instance": "uhttp-green-node-1",
+      "url": "https://uhttp-green-node-1.uhttp.staging.hoprnet.link"
+    },
+    {
+      "name": "node-2",
+      "instance": "uhttp-green-node-2",
+      "url": "https://uhttp-green-node-2.uhttp.staging.hoprnet.link"
+    },
+    {
+      "name": "node-3",
+      "instance": "uhttp-green-node-3",
+      "url": "https://uhttp-green-node-3.uhttp.staging.hoprnet.link"
+    },
+    {
+      "name": "node-4",
+      "instance": "uhttp-green-node-4",
+      "url": "https://uhttp-green-node-4.uhttp.staging.hoprnet.link"
+    },
+    {
+      "name": "node-5",
+      "instance": "uhttp-green-node-5",
+      "url": "https://uhttp-green-node-5.uhttp.staging.hoprnet.link"
+    },
+    {
+      "name": "node-6",
+      "instance": "uhttp-green-node-6",
+      "url": "https://uhttp-green-node-6.uhttp.staging.hoprnet.link"
+    },
+    {
+      "name": "node-7",
+      "instance": "uhttp-green-node-7",
+      "url": "https://uhttp-green-node-7.uhttp.staging.hoprnet.link"
+    },
+    {
+      "name": "node-8",
+      "instance": "uhttp-green-node-8",
+      "url": "https://uhttp-green-node-8.uhttp.staging.hoprnet.link"
+    }
+  ]
+}

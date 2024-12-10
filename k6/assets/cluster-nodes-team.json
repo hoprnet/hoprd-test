@@ -1,0 +1,44 @@
+{
+  "nodes": [
+    {
+      "name": "node-1",
+      "instance": "hoprd-andrius-dappnode",
+      "url": "http://85.206.96.234:3009"
+    },
+    {
+      "name": "node-2",
+      "instance": "hoprd-andrius-vps",
+      "url": "http://173.249.13.193:3009"
+    },
+    {
+      "name": "node-3",
+      "instance": "hoprd-ausias",
+      "url": "http://85.49.63.139:3101"
+    },
+    {
+      "name": "node-4",
+      "instance": "hoprd-ronny",
+      "url": "http://178.254.33.145:3002"
+    },
+    {
+      "name": "node-5",
+      "instance": "hoprd-tibor",
+      "url": "http://65.109.137.126:3002"
+    },
+    {
+      "name": "node-6",
+      "instance": "hoprd-michal",
+      "url": "http://vlabs.ddns.net:3101"
+    },
+    {
+      "name": "node-7",
+      "instance": "hoprd-jean",
+      "url": "http://91.132.145.250:3101"
+    },
+    {
+      "name": "node-8",
+      "instance": "hoprd-q",
+      "url": "http://45.76.177.147:3101"
+    }
+  ]
+}

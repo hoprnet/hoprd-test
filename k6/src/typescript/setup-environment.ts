@@ -1,73 +1,76 @@
 import * as fs from 'fs';
 import Handlebars from "handlebars";
 import { HoprdNode } from './hoprd-node';
+import { checkNodes, setupChannels, sendTestMessages } from './setup-tasks';
 
 const setupEnvironment = async (nodes: HoprdNode[]) => {
-  const maxRetries = 10;
-  let retries = 0;
-  let checkNodes: Promise<{node: HoprdNode, status: boolean}>[] = nodes.map((node:HoprdNode) => node.check().then(status => ({node, status})));
-  while (checkNodes.length > 0 && retries < maxRetries) {
-    const results: {node: HoprdNode, status: boolean}[] = await Promise.all(checkNodes);
-    
-    // Filter out the nodes that were checked successfully
-    checkNodes = results.filter(result => !result.status).map(result => result.node.check().then(status => ({node: result.node, status})));
+  try {
+    // Check nodes
+    await checkNodes(nodes, 10)
+    // Setup channels
+    await setupChannels(nodes) 
 
-    if (checkNodes.length > 0) {
-      if (retries < maxRetries - 1) { // if it's not the last iteration
-        console.error(`[ERROR] Retrying in 60 seconds...`)
-        await new Promise(resolve => setTimeout(resolve, 60000));
-      } else {
-        console.error(`[ERROR] Review the previous errors checking nodes. Exiting after ${maxRetries} attempts.`)
-        process.exit(1);
-      }
-    }
-    retries++;
+    // Send test messages
+    await sendTestMessages(nodes)
+  } catch (error) {
+    console.error('Environment setup tasks failed:', error);
+    throw error;
   }
-
-  // Open channels nodes
-  const enabledNodes: HoprdNode[] = nodes.filter((node:HoprdNode) => node.data.enabled)
-  const openChannels: Promise<string[]> [] = []
-  nodes.forEach((node:HoprdNode) => { openChannels.push(node.openChannels(enabledNodes))})
-
-  const nodePendingTransactions: string[][] = await Promise.all(openChannels)
-    if (nodePendingTransactions.flat().length > 0 ) {
-      console.error(`[ERROR] There are ${nodePendingTransactions.flat().length} channels pending to be openned`)
-      process.exit(1);
-    }
 }
 
 // Main
-const nodes = process.env.NODES || 'many2many'
-const workloadName = process.env.WORKLOAD_NAME || 'sanity-check'
-const testid = process.env.TESTID || 'kubernetes'
-const iterations = process.env.SCENARIO_ITERATIONS || 1
-const duration = process.env.SCENARIO_DURATION || "30"
-const hoprdNodeThreads = process.env.HOPRD_NODE_THREADS || 1
-const nodesData = JSON.parse(fs.readFileSync(`assets/nodes-${nodes}.json`).toString())
-const enabledNodes: HoprdNode[] = nodesData.nodes
-  .filter((node: any) => node.enabled)
-  .map(async (node: any) => {
-  let hoprdNode = new HoprdNode(node);
-  await hoprdNode.init();
-  return hoprdNode;
-});
-nodesData.nodes.filter((node: any) => !node.enabled).forEach((node: any) => { console.log(`[INFO] Node ${node.name} is disabled`) })
+const clusterNodes = process.env.K6_CLUSTER_NODES || "core";
+const topologyName = process.env.K6_TOPOLOGY_NAME || 'many2many';
+const workloadName = process.env.K6_WORKLOAD_NAME || 'sanity-check';
+const testid = process.env.TESTID || 'kubernetes';
+const requestsPerSecondPerVu = parseInt(process.env.K6_REQUESTS_PER_SECOND_PER_VU || '1', 10);
+const duration = parseInt(process.env.K6_TEST_DURATION || '30',10);
+const vuPerRoute = parseInt(process.env.K6_VU_PER_ROUTE || '1', 10);
+let hoprdNodes: HoprdNode[] = [];
+try {
+  const clusterNodesData = JSON.parse(fs.readFileSync(`assets/cluster-nodes-${clusterNodes}.json`).toString()).nodes;
+  const topologyNodesData = JSON.parse(fs.readFileSync(`assets/topology-${topologyName}.json`).toString()).nodes;
+  const getClusterNodeByName = (nodeName: string) => clusterNodesData.filter((node: any) => node.name === nodeName)[0];
+  hoprdNodes = topologyNodesData
+        .filter((node: any) => {
+          if (!node.enabled) {
+            console.log(`[WARN] Skipping node ${node.name} as it is disabled`)
+          }
+          return node.enabled;
+        })
+        .map(async (topologyNode: any) => {
+            topologyNode.apiToken = process.env.HOPRD_API_TOKEN
+            let node = getClusterNodeByName(topologyNode.name);
+            topologyNode.url = node.url;
+            topologyNode.instance = node.instance;
+            let hoprdNode = new HoprdNode(topologyNode);
+            await hoprdNode.init();
+            return hoprdNode;
+        });
+} catch (error) {
+  console.error(`Failed to read or parse nodes data files for topology ${topologyName} and workload ${workloadName}:`, error);
+  process.exit(1);
+}
 
-Promise.all(enabledNodes).then((hoprdNodes: HoprdNode[]) => {
+
+Promise.all(hoprdNodes).then((hoprdNodes: HoprdNode[]) => {
   setupEnvironment(hoprdNodes).then(() => {
     console.log('[INFO] Environment fully setup')
 
     // Generate k6 test run file
     const k6TestRunTemplateData = fs.readFileSync(`assets/k6-test-run.yaml`).toString()
     const k6TestRunTemplate = Handlebars.compile(k6TestRunTemplateData);
-    const k6TestRunTemplateParsed = k6TestRunTemplate({ nodes, workloadName, iterations, testid, duration, hoprdNodeThreads });
+    const k6TestRunTemplateParsed = k6TestRunTemplate({ clusterNodes, topologyName, workloadName, requestsPerSecondPerVu, testid, duration, vuPerRoute });
     fs.writeFileSync(`./k6-test-run.yaml`, k6TestRunTemplateParsed)
 
     // Generate k6 test results file
     const k6TestResultsTemplateData = fs.readFileSync(`assets/k6-test-results.yaml`).toString()
     const k6TestResultsTemplate = Handlebars.compile(k6TestResultsTemplateData);
-    const k6TestResultsTemplateParsed = k6TestResultsTemplate({ nodes, workloadName, iterations, testid, duration });
+    const k6TestResultsTemplateParsed = k6TestResultsTemplate({ clusterNodes, topologyName, workloadName, requestsPerSecondPerVu, testid, duration });
     fs.writeFileSync(`./k6-test-results.yaml`, k6TestResultsTemplateParsed)
 
-  }).catch((err) => console.error(err))
+  }).catch((error) => {
+    console.error('Failed to generate k6 manifest files:', error);
+    console.error(error)
+  });
 })

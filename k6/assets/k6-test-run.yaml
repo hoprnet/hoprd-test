@@ -1,8 +1,8 @@
 ---
 apiVersion: k6.io/v1alpha1
-kind: K6
+kind: TestRun
 metadata:
-  name: k6-hoprd-{{ nodes }}-{{ workloadName }}
+  name: k6-hoprd-{{ clusterNodes }}-{{ workloadName }}
   namespace: k6-operator-system
 spec:
   parallelism: 1
@@ -16,27 +16,29 @@ spec:
       runAsUser: 0
     resources:
       limits:
-        cpu: 2
-        memory: 2Gi
+        cpu: 3
+        memory: 3Gi
       requests:
-        cpu: 2
-        memory: 2Gi
+        cpu: 3
+        memory: 3Gi
     env:
-      - name: NODES
-        value: {{ nodes }}
-      - name: WORKLOAD_NAME
+      - name: K6_CLUSTER_NODES
+        value: {{ clusterNodes }}
+      - name: K6_TOPOLOGY_NAME
+        value: {{ topologyName }}
+      - name: K6_WORKLOAD_NAME
         value: {{ workloadName }}
-      - name: SCENARIO_ITERATIONS
-        value: "{{ iterations }}"
-      - name: SCENARIO_DURATION
+      - name: K6_REQUESTS_PER_SECOND_PER_VU
+        value: "{{ requestsPerSecondPerVu }}"
+      - name: K6_TEST_DURATION
         value: "{{ duration }}"
-      - name: HOPRD_NODE_THREADS
-        value: "{{ hoprdNodeThreads }}"
+      - name: K6_VU_PER_ROUTE
+        value: "{{ vuPerRoute }}"
       - name: HOPRD_API_TOKEN
         valueFrom:
           secretKeyRef:
             name: hoprd-api-tokens
-            key: {{ nodes }}
+            key: {{ clusterNodes }}
       - name: K6_PROMETHEUS_RW_SERVER_URL
         value: http://kube-prometheus-stack-prometheus.monitoring.svc:9090/api/v1/write
       - name: K6_PROMETHEUS_RW_TREND_AS_NATIVE_HISTOGRAM

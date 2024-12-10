@@ -1,30 +1,14 @@
 {
   "scenarios": {
-    "receive_messages": {
-      "executor": "per-vu-iterations",
-      "vus": 1,
-      "iterations": 1,
-      "maxDuration": "31m10s",
-      "gracefulStop": "15s",
-      "exec": "receiveMessages",
-      "tags": { 
-        "scenario": "receive_messages"
-      }
-    },
     "constant_load": {
-      "executor": "ramping-arrival-rate",
-      "startTime": "10s",
-      "timeUnit": "1s",
-      "stages": [
-        { "target": 200, "duration": "1m" },
-        { "target": 200, "duration": "30m" },
-        { "target": 0, "duration": "1m" }
-      ],
-      "preAllocatedVUs": 100,
+      "executor": "per-vu-iterations",
+      "vus": 20,
+      "iterations": 1,
+      "maxDuration": "1m",
       "env": {
         "HOPS": "1"
       },
-      "exec": "multipleHopMessage",
+      "exec": "sendMessages",
       "tags": { 
         "scenario": "send_one_hop"
       }
@@ -33,8 +17,9 @@
   "setupTimeout": "3600000",
   "thresholds": {
     "hopr_message_requests_succeed": ["rate>0.99"],
-    "hopr_message_requests_failed": ["rate<0.01"],
+    "hopr_messages_requests_failed": ["rate<0.01"],
     "hopr_sent_messages_succeed": ["rate>0.97"],
+    "hopr_sent_messages_failed": ["rate<0.01"],
     "hopr_message_latency": ["avg<300", "p(90)<400", "p(95)<500"]
   }
 }

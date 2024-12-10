@@ -22,7 +22,7 @@ spec:
               find . -type f  -name "test-execution-*.json" | grep -v ${json_file} | xargs rm 2> /dev/null
               npm install handlebars
               curl -s https://raw.githubusercontent.com/hoprnet/hoprd-test/main/k6/parse-results.js -o /test-results/k6/parse-results.js
-              node /test-results/k6/parse-results.js ${json_file} {{ nodes }} {{ workloadName }} {{ iterations }} {{ testid }} {{ duration}}
+              node /test-results/k6/parse-results.js ${json_file} {{ nodes }} {{ workloadName }} {{ requests_per_second_per_vu }} {{ testid }} {{ duration}}
               break
             else
               echo "Waiting for test to finish..."
