@@ -1,6 +1,8 @@
 import http, { RefinedParams, RefinedResponse, ResponseType } from "k6/http";
 import { fail } from "k6";
 
+const KUBERNETES_LOAD_BALANCER_IP="34.141.24.46"
+
 // This class cannot implement async methods as it is used in the k6 script
 export class HoprdNode {
   public name: string;
@@ -51,7 +53,7 @@ export class HoprdNode {
       this.peerAddress = addresses.native;
       this.peerId = addresses.hopr;
     } else {
-      console.error(`Response: ${JSON.parse(response.body)}`);
+      console.error(`Response: ${response.body}`);
       console.error(`Response status: ${response.status}`);
       fail(`Unable to get node addresses for '${this.name}'`);
     }
@@ -64,7 +66,7 @@ export class HoprdNode {
       console.log(`[Setup] Network: ${nodeInfo.network}`);
       return nodeInfo.network;
     } else {
-      console.error(`Response: ${JSON.parse(response.body)}`);
+      console.error(`Response: ${response.body}`);
       console.error(`Response status: ${response.status}`);
       fail(`Unable to get node info for '${this.name}'`);
     }
@@ -77,7 +79,7 @@ export class HoprdNode {
       console.log(`[Setup] Version: ${nodeVersion.version}`);
       return nodeVersion.version;
     } else {
-      console.error(`Response: ${JSON.parse(response.body)}`);
+      console.error(`Response: ${response.body}`);
       console.error(`Response status: ${response.status}`);
       fail(`Unable to get node version for '${this.name}'`);
     }
@@ -86,24 +88,61 @@ export class HoprdNode {
 
   public openSession(relayer: string, receiver: string, protocol: string, target: string): string {
     const url = `${this.url}/session/${protocol}`;
-    const payload = JSON.stringify({
-        destination: receiver,
-        target: { Plain: `${target}` },
-        capabilities: ["Segmentation", "Retransmission"],
-        path: relayer
-      });
-    console.log(`Payload: ${payload}`);
-    console.log(`URL: ${url}`);
-    console.log(`HTTP Params: ${JSON.stringify(this.httpParams)}`);
-    const response: RefinedResponse<"text"> = http.post(url, payload, this.httpParams);
-    if (response.status === 200) {
-      console.log(`[Setup] Session opened: ${response.body}`);
-      const session = JSON.parse(response.body);
-      return `${session.ip}:${session.port}`;
+    let listenHost = this.getSessionRequest(url, protocol, target);
+    if (listenHost == '') {
+      listenHost = this.openSessionRequest(url, relayer, receiver, target);
+    }
+    return listenHost;
+  }
+
+  private getSessionRequest(url: string, protocol: string, target: string): string {
+    const getResponse: RefinedResponse<"text"> = http.get(url, this.httpParams);
+    if (getResponse.status === 200) {
+      const sessions: {target: string, protocol: string, ip: string, port: number}[] = JSON.parse(getResponse.body);
+      console.log(`[Setup] Sessions: ${JSON.stringify(sessions)}`);
+      const openedSession = sessions.filter((session) => session.target == target && session.protocol == protocol)
+      if (openedSession.length == 1) {
+        let listenHost;
+        if (openedSession[0].ip === '0.0.0.0') {
+          listenHost=`${KUBERNETES_LOAD_BALANCER_IP}:${openedSession[0].port}`;
+        } else {
+          listenHost = `${openedSession[0].ip}:${openedSession[0].port}`;
+        }
+        console.log(`[Setup] Session already openened at: ${listenHost}`)
+        return listenHost;
+      } else {
+        return '';
+      }
     } else {
-      console.error(`Response: ${JSON.parse(response.body)}`);
-      console.error(`Response status: ${response.status}`);
+      console.error(`Response: ${getResponse.body}`);
+      console.error(`Response status: ${getResponse.status}`);
       fail(`Unable to open session for '${this.name}'`);
     }
+  }
+
+  private openSessionRequest(url: string, relayer: string, receiver: string, target: string): string {
+        const payload = JSON.stringify({
+            destination: receiver,
+            target: { Plain: `${target}` },
+            capabilities: ["Segmentation", "Retransmission"],
+            path: { IntermediatePath: [relayer]}
+          });
+        console.log(`[Setup] Opening new session: ${payload}`);
+        const postResponse: RefinedResponse<"text"> = http.post(url, payload, this.httpParams);
+        if (postResponse.status === 200) {
+          const session = JSON.parse(postResponse.body);
+          let listenHost;
+          if (session.ip === '0.0.0.0') {
+            listenHost=`${KUBERNETES_LOAD_BALANCER_IP}:${session.port}`;
+          } else {
+            listenHost = `${session.ip}:${session.port}`;
+          }
+          console.log(`[Setup] New session opened: ${listenHost}`);
+          return listenHost;
+        } else {
+          console.error(`Response: ${postResponse.body}`);
+          console.error(`Response status: ${postResponse.status}`);
+          fail(`Unable to open session for '${this.name}'`);
+        }
   }
 }

@@ -16,12 +16,11 @@ export class K6Configuration {
     public workloadOptions: any;
     public duration: number = 1;
     public hops: number = 1;
-    public messageDelay: number = 1000;
-    public targetDestination: string = "k6-echo.k6-operator-system.staging.hoprnet.link%3A80";
+    public targetDestination: string = "echo-http.k6-operator-system.staging.hoprnet.link:80";
     public vuPerRoute: number = 1;
 
     public constructor() {
-        this.loadEnvironmentVariables();
+        this.loadK6EnvironmentVariables();
         this.loadJSONFiles();
         this.buildWorkloadOptions();
         if (__VU === 1) { // Only print once to avoid spamming the console
@@ -39,28 +38,22 @@ export class K6Configuration {
             console.log(`[Setup] Receivers: ${uniqueReceivers.length}`);
             console.log(`[Setup] Routes: ${this.dataPool.length}`);
             console.log(`[Setup] VU per route: ${__ENV.K6_VU_PER_ROUTE || 1}`);
-            console.log(`[Setup] Request per second per VU: ${__ENV.K6_REQUESTS_PER_SECOND_PER_VU || 1}`);
-            console.log(`[Setup] Message delay set to ${Math.trunc(this.messageDelay)} ms`);
             console.log(`[Setup] Target destination: ${this.targetDestination}`);
             // console.log("Test execution options: ");
             // console.log(JSON.stringify(workloadOptions))
         }
     }
 
-    private loadEnvironmentVariables(): void {
+    private loadK6EnvironmentVariables(): void {
         this.clusterNodes = __ENV.K6_CLUSTER_NODES || "core";
         this.topology = __ENV.K6_TOPOLOGY_NAME || "many2many";
         this.workload = __ENV.K6_WORKLOAD_NAME || "sanity-check";
         __ENV.K6_WEBSOCKET_DISCONNECTED = "false";
 
-        if (__ENV.K6_REQUESTS_PER_SECOND_PER_VU) {
-            const rps = parseInt(__ENV.K6_REQUESTS_PER_SECOND_PER_VU);
-            if (!Number.isNaN(rps) && rps > 0) {
-                this.messageDelay = 1000 / rps;
-            } else {
-                fail('[Error] Invalid K6_REQUESTS_PER_SECOND_PER_VU, using default messageDelay.');
-            }
+        if (! __ENV.HOPRD_API_TOKEN) {
+                fail('[Error] The environment variable "HOPRD_API_TOKEN" must be set.');
         }
+
         if (__ENV.K6_TEST_DURATION) {
             const duration = parseInt(__ENV.K6_TEST_DURATION);
             if (!Number.isNaN(duration) && duration > 0) {
@@ -86,7 +79,7 @@ export class K6Configuration {
             }
         }
         if (__ENV.K6_TARGET_DESTINATION) {
-            this.targetDestination = encodeURIComponent(__ENV.K6_TARGET_DESTINATION);
+            this.targetDestination = __ENV.K6_TARGET_DESTINATION
         }
     }
 

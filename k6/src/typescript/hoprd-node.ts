@@ -209,9 +209,9 @@ export class HoprdNode {
   public async sendMessage(relayer: HoprdNode, receiver: HoprdNode): Promise<boolean> {
     let url = this.basePayload.apiEndpoint.replace("http", "ws") + '/api/v3/session/websocket?';
     url += 'capabilities=Segmentation&capabilities=Retransmission&';
-    url += `target=k6-echo.k6-operator-system.staging.hoprnet.link%3A80&`;
+    url += `target=k6-echo.k6-operator-system.staging.hoprnet.link:80&`;
     url += `hops=1&`;
-    url += `path=${relayer.peerId}&`;
+    url += `IntermediatePath=${relayer.peerId}&`;
     url += `destination=${receiver.peerId}&`;
     url += 'protocol=tcp';
     url += '&apiToken=' + this.basePayload.apiToken;

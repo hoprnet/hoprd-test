@@ -2,12 +2,13 @@
   "name": "echo-service",
   "version": "1.0.0",
   "description": "",
-  "main": "index.js",
+  "main": "tcp-download.js",
   "scripts": {
     "build": "tsc",
-    "start": "node dist/index.js",
+    "http": "node dist/http.js",
+    "tcp:download": "node dist/tcp-download.js",
+    "tcp:upload": "node dist/tcp-upload.js",
     "websocket": "node dist/websocket.js",
-    "dev": "ts-node src/index.ts",
     "docker:build": "docker build --platform linux/amd64 -t europe-west3-docker.pkg.dev/hoprassociation/docker-images/hoprd-k6-echo-service .",
     "docker:push": "docker push europe-west3-docker.pkg.dev/hoprassociation/docker-images/hoprd-k6-echo-service"
   },

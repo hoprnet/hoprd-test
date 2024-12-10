@@ -2,7 +2,7 @@ const MaxPayloadBytes = 400;
 const Alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
 
 // Function to convert string to Uint8Array
-function stringToArrayBuffer(str: string): ArrayBuffer {
+export function stringToArrayBuffer(str: string): ArrayBuffer {
     const buffer = new ArrayBuffer(str.length);
     const bufferView = new Uint8Array(buffer);
     for (let i = 0; i < str.length; i++) {
@@ -33,13 +33,6 @@ export function buildHTTPMessagePayload(targetDestination: string, counter: numb
     const messagePayload = `GET /?startTime=${Date.now()}&count=${counter} HTTP/1.1\r\nHost: ${targetDestination}\r\n\r\n`;
     //console.log("Message sent payload:" + JSON.stringify(messagePayload)); 
     return stringToArrayBuffer(messagePayload)
-}
-
-export function buildTCPMessagePayload(): ArrayBuffer {
-    const messagePayload = {
-        startTime: Date.now()
-    };
-    return stringToArrayBuffer(JSON.stringify(messagePayload))
 }
 
 export function unpackMessagePayload(messages: string, hostDestination: string): {startTimes: string[], partialMessage: string} {

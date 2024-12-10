@@ -17,6 +17,7 @@
     "isolatedModules": true,
     "noImplicitAny": true,
     "noImplicitThis": true,
+    "typeRoots": ["./node_modules/@types", "./types"],
 
     "noUnusedLocals": true,
     "noUnusedParameters": true,

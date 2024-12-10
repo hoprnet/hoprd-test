@@ -1,16 +1,16 @@
 import { Options } from "k6/options";
 import { Counter, Trend, Gauge } from "k6/metrics";
-import {  fail } from "k6";
+import { fail } from "k6";
 import tcp from 'k6/x/tcp';
 import { HoprdNode } from "./hoprd-node";
-import { arrayBufferToString, buildHTTPMessagePayload, buildTCPMessagePayload, unpackMessagePayload } from "./utils";
-import { K6Configuration } from "./k6-configuration";
+import { stringToArrayBuffer } from './utils'
+import { TCPConfiguration } from "./tcp-configuration";
 
 // Read nodes
-const k6Configuration = new K6Configuration();
+const configuration = new TCPConfiguration();
 
 // Test Options https://docs.k6.io/docs/options
-export const options: Partial<Options> = k6Configuration.workloadOptions;
+export const options: Partial<Options> = configuration.workloadOptions;
 
 // Define metrics
 const messageRequestsSucceed = new Counter("hopr_message_requests_succeed"); // Counts the number of messages requests successfully sent
@@ -26,11 +26,11 @@ const executionInfoMetric = new Gauge("hopr_execution_info");
 export function setup() {
   let routes: { sender: HoprdNode, relayer: HoprdNode, receiver: HoprdNode }[] = [];
   try {
-    routes = k6Configuration.dataPool.map((route) => {
+    routes = configuration.dataPool.map((route) => {
       return { 
         sender: new HoprdNode(route.sender),
         relayer: new HoprdNode(route.relayer),
-        receiver: new HoprdNode(route.receiver) 
+        receiver: new HoprdNode(route.receiver)
         };
     });
   } catch (error) {
@@ -40,15 +40,14 @@ export function setup() {
 
 
   const executionInfoMetricLabels = { 
-    duration: k6Configuration.duration.toString(),
+    duration: configuration.duration.toString(),
     version: routes[0].sender.getVersion(), 
     network: routes[0].sender.getNetwork(),
-    topology: k6Configuration.topology,
-    workload: k6Configuration.workload,
-    hops: k6Configuration.hops.toString(),
+    topology: configuration.topology,
+    workload: configuration.workload,
+    hops: configuration.hops.toString(),
     routes: routes.length.toString(),
-    vu: k6Configuration.vuPerRoute.toString(), 
-    rps: (1000/k6Configuration.messageDelay).toFixed(2).toString(),
+    vu: configuration.vuPerRoute.toString(), 
   };
   executionInfoMetric.add(Date.now(), executionInfoMetricLabels);
   return routes.map((route) => {
@@ -56,7 +55,7 @@ export function setup() {
     sender: route.sender,
     relayer: route.relayer,
     receiver: route.receiver,
-    session: route.sender.openSession(route.relayer.peerId, route.receiver.peerId, "tcp", k6Configuration.targetDestination)
+    session: route.sender.openSession(route.relayer.peerId, route.receiver.peerId, "tcp", configuration.targetDestination)
     }
   });
 }
@@ -69,42 +68,52 @@ export function sendMessages(routes: [{ sender: HoprdNode, relayer: HoprdNode, r
   const relayer = routes[vu].relayer;
   const receiver = routes[vu].receiver;
   const tcpListenHost = routes[vu].session;
-  
+  //console.log(`[Sender][VU ${vu + 1}] Connecting via tcp session, sender=${sender.name}, relayer=${relayer.name}, receiver=${receiver.name}`);
 
-  //const tcpListenHost = sender.openSession(relayer.peerId, receiver.peerId, "tcp", k6Configuration.targetDestination);
-  const tcpConnection = tcp.connect(tcpListenHost);
-  console.log(`[Sender][VU ${vu + 1}] Connected via tcp session, sender=${sender.name}, relayer=${relayer.name}, receiver=${receiver.name}`);
-  const intervalId = setInterval(() => {
-    console.log('This runs periodically');
-    try{
-      const startTime = Date.now();
-      tcp.writeLn(tcpConnection, buildTCPMessagePayload());
-      dataSent.add(1, { sender: sender.name, receiver: receiver.name, relayer: relayer.name });
-      messageRequestsSucceed.add(1, { sender: sender.name, receiver: receiver.name, relayer: relayer.name });
-      //let res = String.fromCharCode(...tcp.read(tcpConnection, 1024))
-      let response = tcp.read(tcpConnection, 1024)
-      console.log(`Response: ${response}`);
-      let duration = new Date().getTime() - startTime;
-      messageLatency.add(duration, { sender: sender.name, receiver: receiver.name, relayer: relayer.name});
-      sentMessagesSucceed.add(1, {job: sender.nodeName, sender: sender.name, receiver: receiver.name, relayer: relayer.name});
-      dataReceived.add(1, {sender: sender.name, receiver: receiver.name, relayer: relayer.name});
-
-    } catch(error) {
-      console.error(`[Sender][VU ${vu + 1}] Failed to send message from [${sender.name}] through [${relayer.name}] to [${receiver.name}]`);
-      console.error(`[Sender][VU:${vu + 1}] Failed to send message:`, error);
-      messageRequestsFailed.add(1, { sender: sender.name, receiver: receiver.name, relayer: relayer.name});
-      sentMessagesFailed.add(1, {sender: sender.name, receiver: receiver.name, relayer: relayer.name});
-
-    }
-  }, k6Configuration.messageDelay);
-
-  const timeoutId = setTimeout(() => {
+  const downloadSettings = {
+    size: configuration.payloadSize, 
+    throughput: configuration.throughput,
+    sessionPath: sender.name + ' => ' + relayer.name + ' => ' + receiver.name
+  }
+  let tcpConnection;
+  let testRunning = true;
+  setTimeout(() => {
     console.log('This runs during the whole test');
     tcp.close(tcpConnection);
-    // clear the timeout and interval to exit k6
-    clearInterval(intervalId);
-    clearTimeout(timeoutId);
-  }, k6Configuration.duration * 60 * 1000);
+    testRunning = false;
+  }, configuration.duration * 60 * 1000);
+
+  while (testRunning) {
+    console.log('Opening tcp connection')
+    tcpConnection = tcp.connect(tcpListenHost);
+    console.log('TCP Connection opened')
+    tcp.writeLn(tcpConnection, stringToArrayBuffer(JSON.stringify(downloadSettings)));
+    console.log('Start downloading data')
+    const initialStartTime = Date.now();
+    try {
+        while (testRunning) {
+          const readStartTime = Date.now();
+          const chunk = tcp.read(tcpConnection, configuration.readStreamSize);
+          console.log(`Read data with length ${chunk.byteLength}`)
+          if (!chunk) { // Connection closed or no more data
+            let downloadDuration = (new Date().getTime() - initialStartTime) / 1000;
+            console.log(`[Sender][VU ${__VU +1}] Finished to download ${downloadSettings.size} bytes. in ${downloadDuration.toFixed(2)} seconds`);
+            break;
+          }
+          let readDuration = new Date().getTime() - readStartTime;
+          messageLatency.add(readDuration, { sender: sender.name, receiver: receiver.name, relayer: relayer.name});
+          dataReceived.add(chunk.byteLength, {sender: sender.name, receiver: receiver.name, relayer: relayer.name});
+          sentMessagesSucceed.add(1, {job: sender.nodeName, sender: sender.name, receiver: receiver.name, relayer: relayer.name});
+        }
+      } catch (err) {
+        console.error(`[Sender][VU ${vu + 1}] Failed to download file via [${sender.name}] => [${relayer.name}] => [${receiver.name}]`);
+        console.error(`[Sender][VU:${vu + 1}] Failed to send message:`, err);
+        sentMessagesFailed.add(1, {sender: sender.name, receiver: receiver.name, relayer: relayer.name});
+        testRunning = false;
+      } finally {
+        tcp.close(tcpConnection);
+      }
+    }
 }
 
 // The Teardown Function is run once after the Load Test https://docs.k6.io/docs/test-life-cycle

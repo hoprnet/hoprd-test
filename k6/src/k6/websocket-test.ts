@@ -4,13 +4,13 @@ import { check, fail } from "k6";
 import ws from "k6/ws";
 import { HoprdNode } from "./hoprd-node";
 import { arrayBufferToString, buildHTTPMessagePayload, unpackMessagePayload } from "./utils";
-import { K6Configuration } from "./k6-configuration";
+import { WebSocketConfiguration } from "./websocket-configuration";
 
 // Read nodes
-const k6Configuration = new K6Configuration();
+const configuration = new WebSocketConfiguration();
 
 // Test Options https://docs.k6.io/docs/options
-export const options: Partial<Options> = k6Configuration.workloadOptions;
+export const options: Partial<Options> = configuration.workloadOptions;
 
 // Define metrics
 const messageRequestsSucceed = new Counter("hopr_message_requests_succeed"); // Counts the number of messages requests successfully sent
@@ -26,7 +26,7 @@ const executionInfoMetric = new Gauge("hopr_execution_info");
 export function setup() {
   let routes: { sender: HoprdNode, relayer: HoprdNode, receiver: HoprdNode }[] = [];
   try {
-    routes = k6Configuration.dataPool.map((route) => {
+    routes = configuration.dataPool.map((route) => {
       return { 
         sender: new HoprdNode(route.sender),
         relayer: new HoprdNode(route.relayer),
@@ -40,15 +40,15 @@ export function setup() {
 
 
   const executionInfoMetricLabels = { 
-    duration: k6Configuration.duration.toString(),
+    duration: configuration.duration.toString(),
     version: routes[0].sender.getVersion(), 
     network: routes[0].sender.getNetwork(),
-    topology: k6Configuration.topology,
-    workload: k6Configuration.workload,
-    hops: k6Configuration.hops.toString(),
+    topology: configuration.topology,
+    workload: configuration.workload,
+    hops: configuration.hops.toString(),
     routes: routes.length.toString(),
-    vu: k6Configuration.vuPerRoute.toString(), 
-    rps: (1000/k6Configuration.messageDelay).toFixed(2).toString(),
+    vu: configuration.vuPerRoute.toString(), 
+    rps: (1000/configuration.messageDelay).toFixed(2).toString(),
   };
   executionInfoMetric.add(Date.now(), executionInfoMetricLabels);
   return routes;
@@ -67,9 +67,9 @@ export function sendMessages(routes: [{ sender: HoprdNode, relayer: HoprdNode, r
 
   let url = sender.url.replace("http", "ws") + '/session/websocket?';
   url += 'capabilities=Segmentation&capabilities=Retransmission&';
-  url += `target=${k6Configuration.targetDestination}&`;
-  url += `hops=${k6Configuration.hops}&`;
-  url += `path=${relayer.peerId}&`;
+  url += `target=${configuration.targetDestination}&`;
+  url += `hops=${configuration.hops}&`;
+  url += `IntermediatePath=${relayer.peerId}&`;
   url += `destination=${receiver.peerId}&`;
   url += 'protocol=tcp'; 
 
@@ -83,7 +83,7 @@ export function sendMessages(routes: [{ sender: HoprdNode, relayer: HoprdNode, r
   const websocketResponse = ws.connect(url,sender.httpParams,function (socket) {
       socket.on("open", () => {
         websocketOpened=true;
-        //console.log(`[Sender][VU ${vu + 1}] Connected via websocket, sender=${sender.name}, relayer=${relayer.name}, receiver=${receiver.name}`);
+        console.log(`[Sender][VU ${vu + 1}] Connected via websocket, sender=${sender.name}, relayer=${relayer.name}, receiver=${receiver.name}`);
         let counter = 0;
         socket.setInterval(function timeout() {
           if (__ENV.K6_WEBSOCKET_DISCONNECTED === "true") {
@@ -92,7 +92,7 @@ export function sendMessages(routes: [{ sender: HoprdNode, relayer: HoprdNode, r
             return;
           }
           try {
-            const messagePayload: ArrayBuffer = buildHTTPMessagePayload(k6Configuration.targetDestination, counter++);
+            const messagePayload: ArrayBuffer = buildHTTPMessagePayload(configuration.targetDestination, counter++);
             //console.log(`[Sender][VU:${vu + 1}] Sending ${k6Configuration.hops} hops message from [${sender.name}] through [${relayer.name}] to [${receiver.name}]`);
             socket.sendBinary(messagePayload);
             dataSent.add(messagePayload.byteLength, { sender: sender.name, receiver: receiver.name, relayer: relayer.name });
@@ -102,7 +102,7 @@ export function sendMessages(routes: [{ sender: HoprdNode, relayer: HoprdNode, r
             console.error(`[Sender][VU:${vu + 1}] Failed to send message:`, error);
             messageRequestsFailed.add(1, { sender: sender.name, receiver: receiver.name, relayer: relayer.name});
           }
-        }, k6Configuration.messageDelay);
+        }, configuration.messageDelay);
       });
       socket.on('binaryMessage', (data: ArrayBuffer) => {
         const receivedData = arrayBufferToString(new Uint8Array(data)).trim();
@@ -114,7 +114,7 @@ export function sendMessages(routes: [{ sender: HoprdNode, relayer: HoprdNode, r
           bufferPartialMessage = receivedData;
         }
         try {
-          const {startTimes, partialMessage } = unpackMessagePayload(bufferPartialMessage, k6Configuration.targetDestination);
+          const {startTimes, partialMessage } = unpackMessagePayload(bufferPartialMessage, configuration.targetDestination);
           startTimes.forEach((startTime) => {
             let duration = new Date().getTime() - parseInt(startTime);
             messageLatency.add(duration, { sender: sender.name, receiver: receiver.name, relayer: relayer.name});

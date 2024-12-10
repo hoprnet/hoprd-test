@@ -32,7 +32,7 @@
   "scripts": {
     "build": "tsc --build tsconfig.json",
     "webpack": "webpack",
-    "install:xk6:linux": "docker run --rm -it -e GOOS=linux -u \"$(id -u):$(id -g)\" -v \"${PWD}:/xk6\" grafana/xk6 build v0.55.0 --with github.com/grafana/xk6-output-prometheus-remote",
+    "install:xk6:linux": "docker run --rm -it -e GOOS=linux -u \"$(id -u):$(id -g)\" -v \"${PWD}:/xk6\" grafana/xk6 build v0.55.0 --with github.com/grafana/xk6-output-prometheus-remote --with github.com/NAlexandrov/xk6-tcp --with github.com/pedrosaraiva/xk6-udp",
     "install:xk6:mac": "docker run --rm -it -e GOOS=darwin -u \"$(id -u):$(id -g)\" -v \"${PWD}:/xk6\" grafana/xk6 build v0.55.0 --with github.com/grafana/xk6-output-prometheus-remote --with github.com/NAlexandrov/xk6-tcp --with github.com/pedrosaraiva/xk6-udp",
     "cluster:start": "cd ../../hoprnet && ./scripts/setup-local-cluster.sh -i topologies/full_interconnected_cluster.sh --listen-host 0.0.0.0",
     "cluster:stop": "pkill -f ./scripts/setup-local-cluster.sh",
