@@ -5,7 +5,7 @@ const port = 8888;
 const wss = new WebSocketServer({ port });
 
 wss.on('connection', (ws: WebSocket) => {
-  console.log('Client connected');
+  console.log('[WebSocket] Client connected');
 
   ws.on('message', (message: Buffer, isBinary: boolean) => {
     // Log the received binary message
@@ -13,23 +13,23 @@ wss.on('connection', (ws: WebSocket) => {
       const messageString = arrayBufferToString(message);
       const fields = messageString.substring(messageString.indexOf('?'), messageString.lastIndexOf(' HTTP') + 1);
       const [sender, receiver, startTime] = fields.split('&').map((field) => field.split('=')[1]);
-      console.log('Received binary data:', arrayBufferToString(message))
+      console.log('[WebSocket] Received binary data:', arrayBufferToString(message))
       const replyMessage = `HTTP/1.1 200 OKDate: Thu, 07 Nov 2024 07:53:37 GMTContent-Type: application/json; charset=utf-8Content-Length: 89Connection: keep-aliveX-Powered-By: ExpressETag: W/"59-O9qhlozVfW4uteOBAOQnVURtayI"{"message":{"sender":"${sender}","receiver":"${receiver}","startTime":"${startTime}"}}`;
 
       // Echo the binary data back to the client
       ws.send(stringToArrayBuffer(replyMessage), { binary: true });
     } else {
-      console.log('Received non-binary message:', message.toString());
+      console.log('[WebSocket] Received non-binary message:', message.toString());
       ws.send('This server only supports binary data.');
     }
   });
 
   ws.on('close', () => {
-    console.log('Client disconnected');
+    console.log('[WebSocket] Client disconnected');
   });
 });
 
-console.log(`WebSocket echo server listening on port ${port}`);
+console.log(`[WebSocket] Server listening on port ${port}`);
 
 function stringToArrayBuffer(str: string): ArrayBuffer {
     const buffer = new ArrayBuffer(str.length);

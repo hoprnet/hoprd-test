@@ -1,0 +1,34 @@
+{
+  "nodes": [
+    {
+      "name": "node-1",
+      "instance": "core-node-1",
+      "url": "https://core-node-1.core-team.staging.hoprnet.link",
+      "p2p": "core-node-1-p2p.core-team.staging.hoprnet.link"
+    },
+    {
+      "name": "node-2",
+      "instance": "core-node-2",
+      "url": "https://core-node-2.core-team.staging.hoprnet.link",
+      "p2p": "core-node-2-p2p.core-team.staging.hoprnet.link"
+    },
+    {
+      "name": "node-3",
+      "instance": "core-node-3",
+      "url": "https://core-node-3.core-team.staging.hoprnet.link",
+      "p2p": "core-node-3-p2p.core-team.staging.hoprnet.link"
+    },
+    {
+      "name": "node-4",
+      "instance": "core-node-4",
+      "url": "https://core-node-4.core-team.staging.hoprnet.link",
+      "p2p": "core-node-4-p2p.core-team.staging.hoprnet.link"
+    },
+    {
+      "name": "node-5",
+      "instance": "core-node-5",
+      "url": "https://core-node-5.core-team.staging.hoprnet.link",
+      "p2p": "core-node-5-p2p.core-team.staging.hoprnet.link"
+    }
+  ]
+}

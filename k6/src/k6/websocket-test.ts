@@ -49,6 +49,7 @@ export function setup() {
     routes: routes.length.toString(),
     vu: configuration.vuPerRoute.toString(), 
     rps: (1000/configuration.messageDelay).toFixed(2).toString(),
+    protocol: 'websocket'
   };
   executionInfoMetric.add(Date.now(), executionInfoMetricLabels);
   return routes;

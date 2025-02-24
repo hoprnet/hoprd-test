@@ -1,13 +1,12 @@
 import http, { RefinedParams, RefinedResponse, ResponseType } from "k6/http";
 import { fail } from "k6";
 
-const KUBERNETES_LOAD_BALANCER_IP="34.141.24.46"
-
 // This class cannot implement async methods as it is used in the k6 script
 export class HoprdNode {
   public name: string;
   public nodeName: string;
   public url: string;
+  public p2p: string;
   public enabled: boolean;
   public isSender: boolean;
   public isRelayer: boolean;
@@ -33,6 +32,7 @@ export class HoprdNode {
       (this.isSender = data.isSender),
       (this.isRelayer = data.isRelayer),
       (this.nodeName = data.instance),
+      (this.p2p = data.p2p),
       (this.isReceiver = data.isReceiver);
     this.getAddress(data.apiToken);
   }
@@ -86,29 +86,33 @@ export class HoprdNode {
   }
 
 
-  public openSession(relayer: string, receiver: string, protocol: string, target: string): string {
-    const url = `${this.url}/session/${protocol}`;
-    let listenHost = this.getSessionRequest(url, protocol, target);
-    if (listenHost == '') {
-      listenHost = this.openSessionRequest(url, relayer, receiver, target);
+  public openSession(relayer: HoprdNode, receiver: HoprdNode, protocol: string, target: string): string {
+    if (__ENV.K6_SKIP_HOPRD_SESSIONS === 'true') {
+      return target;
+    } else {
+      const url = `${this.url}/session/${protocol}`;
+      let listenHost = this.getSessionRequest(url, protocol, target);
+      if (listenHost == '') {
+        listenHost = this.openSessionRequest(url, relayer, receiver, target);
+      }
+      return listenHost;
     }
-    return listenHost;
   }
 
   private getSessionRequest(url: string, protocol: string, target: string): string {
     const getResponse: RefinedResponse<"text"> = http.get(url, this.httpParams);
     if (getResponse.status === 200) {
       const sessions: {target: string, protocol: string, ip: string, port: number}[] = JSON.parse(getResponse.body);
-      console.log(`[Setup] Sessions: ${JSON.stringify(sessions)}`);
       const openedSession = sessions.filter((session) => session.target == target && session.protocol == protocol)
+      //console.log(`[Setup] Opened sessions: ${JSON.stringify(openedSession)}`);
       if (openedSession.length == 1) {
         let listenHost;
         if (openedSession[0].ip === '0.0.0.0') {
-          listenHost=`${KUBERNETES_LOAD_BALANCER_IP}:${openedSession[0].port}`;
+          listenHost=`${this.p2p}:${openedSession[0].port}`;
         } else {
           listenHost = `${openedSession[0].ip}:${openedSession[0].port}`;
         }
-        console.log(`[Setup] Session already openened at: ${listenHost}`)
+        console.log(`[Setup] Session already openened at: ${listenHost} to target ${target}`);
         return listenHost;
       } else {
         return '';
@@ -120,24 +124,24 @@ export class HoprdNode {
     }
   }
 
-  private openSessionRequest(url: string, relayer: string, receiver: string, target: string): string {
+  private openSessionRequest(url: string, relayer: HoprdNode, receiver: HoprdNode, target: string): string {
         const payload = JSON.stringify({
-            destination: receiver,
+            destination: receiver.peerId,
             target: { Plain: `${target}` },
             capabilities: ["Segmentation", "Retransmission"],
-            path: { IntermediatePath: [relayer]}
+            path: { IntermediatePath: [relayer.peerId]}
           });
-        console.log(`[Setup] Opening new session: ${payload}`);
+        //console.log(`[Setup] Opening new session: ${payload}`);
         const postResponse: RefinedResponse<"text"> = http.post(url, payload, this.httpParams);
         if (postResponse.status === 200) {
           const session = JSON.parse(postResponse.body);
           let listenHost;
           if (session.ip === '0.0.0.0') {
-            listenHost=`${KUBERNETES_LOAD_BALANCER_IP}:${session.port}`;
+            listenHost=`${this.p2p}:${session.port}`;
           } else {
             listenHost = `${session.ip}:${session.port}`;
           }
-          console.log(`[Setup] New session opened: ${listenHost}`);
+          console.log(`[Setup] New session opened ${this.name} => ${relayer.name} => ${receiver.name} listening at ${listenHost} to target ${target}`);
           return listenHost;
         } else {
           console.error(`Response: ${postResponse.body}`);

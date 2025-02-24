@@ -1,4 +1,4 @@
-declare module 'k6/x/tcp' {
+declare module 'k6/x/udp' {
 
     export interface Connection { }
 

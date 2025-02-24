@@ -16,13 +16,11 @@ export class K6Configuration {
     public workloadOptions: any;
     public duration: number = 1;
     public hops: number = 1;
-    public targetDestination: string = "echo-http.k6-operator-system.staging.hoprnet.link:80";
     public vuPerRoute: number = 1;
 
     public constructor() {
         this.loadK6EnvironmentVariables();
         this.loadJSONFiles();
-        this.buildWorkloadOptions();
         if (__VU === 1) { // Only print once to avoid spamming the console
             //dataPool.forEach((route: any) => console.log(`[Setup] DataPool sender ${route.sender.name} -> ${route.relayer.name} -> ${route.receiver.name}`));
             console.log(`[Setup] Cluster nodes: ${this.clusterNodes}`);
@@ -38,14 +36,13 @@ export class K6Configuration {
             console.log(`[Setup] Receivers: ${uniqueReceivers.length}`);
             console.log(`[Setup] Routes: ${this.dataPool.length}`);
             console.log(`[Setup] VU per route: ${__ENV.K6_VU_PER_ROUTE || 1}`);
-            console.log(`[Setup] Target destination: ${this.targetDestination}`);
             // console.log("Test execution options: ");
             // console.log(JSON.stringify(workloadOptions))
         }
     }
 
     private loadK6EnvironmentVariables(): void {
-        this.clusterNodes = __ENV.K6_CLUSTER_NODES || "core";
+        this.clusterNodes = __ENV.K6_CLUSTER_NODES || "core-rotsee";
         this.topology = __ENV.K6_TOPOLOGY_NAME || "many2many";
         this.workload = __ENV.K6_WORKLOAD_NAME || "sanity-check";
         __ENV.K6_WEBSOCKET_DISCONNECTED = "false";
@@ -77,9 +74,6 @@ export class K6Configuration {
             } else {
                 fail('[ERROR] Invalid HOPS, using default hops.');
             }
-        }
-        if (__ENV.K6_TARGET_DESTINATION) {
-            this.targetDestination = __ENV.K6_TARGET_DESTINATION
         }
     }
 
@@ -116,23 +110,7 @@ export class K6Configuration {
             );
     }
 
-    private buildWorkloadOptions(): void {
-        this.workloadOptions = JSON.parse(open(`./workload-${this.workload}.json`));
-        Object.keys(this.workloadOptions.scenarios).forEach((scenario) => {
-            if (this.workloadOptions.scenarios[scenario].executor === "per-vu-iterations") {
-                this.workloadOptions.scenarios[scenario].vus = this.dataPool.length * this.vuPerRoute;
-                this.workloadOptions.scenarios[scenario].maxDuration = `${this.duration}m`;
-            }
-            if (this.workloadOptions.scenarios[scenario].executor === "ramping-vus") {
-                this.workloadOptions.scenarios[scenario].stages[0].target = this.dataPool.length * this.vuPerRoute;
-                if (scenario === "hysteresis") {
-                    const hysteresisDuration = this.duration / 2;
-                    this.workloadOptions.scenarios[scenario].stages[1].duration = `${hysteresisDuration}m`;
-                }
-                this.workloadOptions.scenarios[scenario].stages[0].duration = `${this.duration}m`;
-            }
-        });
-    }
+
 
 }
 

@@ -1,10 +1,10 @@
 import net from 'net';
 
-const uploadPort = 3001; // Port for upload test
+const bindingPort = 3001;
 
 // **Upload Test**
-const uploadServer = net.createServer((socket) => {
-    console.log("Client connected for upload test");
+const socketServer = net.createServer((socket) => {
+    console.log(`[TCP][Upload] Client connected from ${socket.remoteAddress}:${socket.remotePort}`);
 
     let totalBytes = 0;
     const startTime = Date.now();
@@ -18,14 +18,14 @@ const uploadServer = net.createServer((socket) => {
         const endTime = Date.now();
         const duration = (endTime - startTime) / 1000; // In seconds
         const speed = (totalBytes / duration) / (1024 * 1024); // MB/s
-        console.log(`Upload finished: ${totalBytes} bytes received in ${duration.toFixed(2)} seconds (${speed.toFixed(2)} MB/s)`);
+        console.log(`[TCP][Upload] Upload finished: ${totalBytes} bytes received in ${duration.toFixed(2)} seconds (${speed.toFixed(2)} MB/s)`);
     });
 
     socket.on('error', (err) => {
-        console.error("Upload server error:", err);
+        console.error("[TCP][Upload] Server error:", err);
     });
 });
 
-uploadServer.listen(uploadPort, () => {
-    console.log(`Upload server listening on port ${uploadPort}`);
+socketServer.listen(bindingPort, () => {
+    console.log(`[TCP][Upload] Server listening on 0.0.0.0:${bindingPort}`);
 });

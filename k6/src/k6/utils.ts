@@ -11,6 +11,17 @@ export function stringToArrayBuffer(str: string): ArrayBuffer {
     return buffer;
 }
 
+export function stringToUint8Array(str: string): Uint8Array {
+    const arr = new Uint8Array(str.length);
+    for (let i = 0; i < str.length; i++) {
+        arr[i] = str.charCodeAt(i);
+    }
+    return arr;
+}
+
+
+
+
 export function arrayBufferToString(buffer: ArrayBuffer): string {
     const bufferView = new Uint8Array(buffer);
     let str = '';
@@ -38,7 +49,7 @@ export function buildHTTPMessagePayload(targetDestination: string, counter: numb
 export function unpackMessagePayload(messages: string, hostDestination: string): {startTimes: string[], partialMessage: string} {
     //console.log("Message received payload:" + JSON.stringify(httpResponse));
     switch (hostDestination) {
-        case "k6-echo.k6-operator-system.staging.hoprnet.link": {
+        case "echo-service-http.staging.hoprnet.link": {
             const messageParts = messages.split("HTTP/1.1 200")
                 .filter((message: string) => message.length > 0)
                 .map((message: string) => {
@@ -83,6 +94,7 @@ export function mergeNodesJsonFiles(clusterNodesData: any, topologyNodesData: an
             let node = getClusterNodeByName(topologyNode.name);
             topologyNode.url = node.url;
             topologyNode.instance = node.instance;
+            topologyNode.p2p = node.p2p;
             return topologyNode;
         });
 }

@@ -10,5 +10,9 @@ node /app/dist/websocket.js &
 node /app/dist/tcp-download.js &
 node /app/dist/tcp-upload.js &
 
+# Start the UDP server
+node /app/dist/udp-download.js &
+node /app/dist/udp-upload.js &
+
 # Wait for any background jobs to finish (keeps the container running)
 wait

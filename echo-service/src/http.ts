@@ -11,7 +11,7 @@ app.get('*', (req: Request, res: Response) => {
 });
 
 const server = app.listen(port, () => {
-  console.log(`Echo service listening on port ${port}`);
+  console.log(`[HTTP] Server listening on port ${port}`);
 }).on('error', (err) => {
   console.error('Failed to start server:', err);
   process.exit(1);
@@ -21,7 +21,7 @@ const server = app.listen(port, () => {
 process.on('SIGTERM', () => {
   console.log('SIGTERM signal received: closing HTTP server');
   server.close(() => {
-    console.log('HTTP server closed');
+    console.log('[HTTP] Server closed');
     process.exit(0);
   });
 });

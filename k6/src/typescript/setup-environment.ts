@@ -19,7 +19,7 @@ const setupEnvironment = async (nodes: HoprdNode[]) => {
 }
 
 // Main
-const clusterNodes = process.env.K6_CLUSTER_NODES || "core";
+const clusterNodes = process.env.K6_CLUSTER_NODES || "core-rotsee";
 const topologyName = process.env.K6_TOPOLOGY_NAME || 'many2many';
 const workloadName = process.env.K6_WORKLOAD_NAME || 'sanity-check';
 const testid = process.env.TESTID || 'kubernetes';

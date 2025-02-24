@@ -19,7 +19,7 @@ COPY --from=node /app/k6/dist /app/hoprnet
 
 WORKDIR /app/hoprnet
 
-ENV K6_CLUSTER_NODES=core
+ENV K6_CLUSTER_NODES=core-rotsee
 ENV K6_TOPOLOGY_NAME=many2many
 ENV K6_WORKLOAD_NAME=simple
 

@@ -38,7 +38,8 @@ The duration of the test is by default `1` (in minutes) unless modified by the e
 
 The cluster of nodes, specified through the environment variable named `K6_CLUSTER_NODES`,  determines which cluster of nodes will be used. By default will be used `core` nodes:
 - `local`: Uses the nodes of the local-cluster 
-- `core`: Uses the set of nodes from core-team
+- `core-rotsee`: Uses the set of nodes from core-team at rotsee
+- `core-dufour`: Uses the set of nodes from core-team at dufour
 - `uhttp`: Uses the active nodes of uhttp
 - `team`: Users the nodes that belong to the development team
 
@@ -78,7 +79,7 @@ The default throughtput is to send 1 message per second per route(web-socket con
 
 ## Running tests
 
-- Set the environment variable `K6_CLUSTER_NODES` with any of the available clusters if you need other than `core` nodes.
+- Set the environment variable `K6_CLUSTER_NODES` with any of the available clusters if you need other than `core-rotsee` nodes.
 - Set the environment variable `HOPRD_API_TOKEN` with the token setup on the target nodes before execute thes commands.
 - Set the test duration with environment variable `K6_TEST_DURATION` if you need other than 1m duration
 - Set the workload with environment variable: `K6_WORKLOAD_NAME`, if you need other than `constant`
