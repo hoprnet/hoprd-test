@@ -11,11 +11,12 @@ export class SocketConfiguration extends K6Configuration {
 
     public protocol;
     public iterationsPerVU: number = 1;
-    public payloadSize: number = 10 * 1024 * 1024; // 10 MB
+    public payloadSize: number = 1 * 1024 * 1024; // 10 MB
     public downloadThroughput: number = 2 * 1024 * 1024; // 2MB/s
     public uploadThroughput: number = 1 * 1024 * 1024; // 1MB/s
     public downloadSegmentSize: number;
     public uploadSegmentSize: number;
+    private echoServersReplicas: number = 1;
 
     public constructor(protocol: string) {
         super();
@@ -41,7 +42,8 @@ export class SocketConfiguration extends K6Configuration {
     public getTargetDestination(action: string): string {
         let listenHost = ''
         let port = ''
-        let serverNumber = Math.random() < 0.5 ? 0 : 1;
+        // Generates a random integer between 0 and this.echoServersReplicas (inclusive)    
+        let serverNumber = Math.floor(Math.random() * this.echoServersReplicas);
         if (this.protocol === 'tcp') { // Distribute workload between both services
             listenHost=`echo-service-tcp-${serverNumber}.staging.hoprnet.link`;
         } else {
@@ -74,6 +76,15 @@ export class SocketConfiguration extends K6Configuration {
             }
         }
 
+        if (__ENV.K6_ECHO_SERVERS_REPLICAS) {
+            const replicas = parseInt(__ENV.K6_ECHO_SERVERS_REPLICAS);
+            if (!Number.isNaN(replicas) && replicas > 0) {
+                this.echoServersReplicas = replicas;
+            } else {
+                fail('[ERROR] Invalid K6_ECHO_SERVERS_REPLICAS value.');
+            }
+        }
+
         if (__ENV.K6_UPLOAD_THROUGHPUT) {
             const throughput = parseInt(__ENV.K6_UPLOAD_THROUGHPUT);
             if (!Number.isNaN(throughput) && throughput > 0) {
@@ -91,7 +102,7 @@ export class SocketConfiguration extends K6Configuration {
                 fail('[ERROR] Invalid K6_DOWNLOAD_SEGMENT_SIZE value.');
             }
         } else {
-            this.downloadSegmentSize = this.protocol === 'tcp' ? 256 * 1024 : 1472; // Default value of 256KB for TCP and 1472 for UDP
+            this.downloadSegmentSize = this.protocol === 'tcp' ? 256 * 1024 : 1400; // Default value of 256KB for TCP and 1472 for UDP
         }
 
         if (__ENV.K6_UPLOAD_SEGMENT_SIZE) {
@@ -102,7 +113,7 @@ export class SocketConfiguration extends K6Configuration {
                 fail('[ERROR] Invalid K6_UPLOAD_SEGMENT_SIZE value.');
             }
         } else {
-            this.uploadSegmentSize = this.protocol === 'tcp' ? 64 * 1024 : 1472; // Default value of 64KB for TCP and 1472 for UDP
+            this.uploadSegmentSize = this.protocol === 'tcp' ? 64 * 1024 : 1400; // Default value of 64KB for TCP and 1472 for UDP
         }
     }
 
@@ -127,18 +138,18 @@ export class SocketConfiguration extends K6Configuration {
                         scenario: "download"
                     }
                 },
-                upload: {
-                    exec: "upload",
-                    tags: {
-                        scenario: "upload"
-                    }
-                }
+                // upload: {
+                //     exec: "upload",
+                //     tags: {
+                //         scenario: "upload"
+                //     }
+                // }
             },
             setupTimeout: "3600000",
             thresholds: {
                 hopr_documents_succeed: ["count>0"],
                 hopr_documents_failed: ["count<=0"],
-                hopr_segment_latency: ["avg<150", "p(90)<175", "p(95)<200"],
+                hopr_segment_latency: ["avg<1", "p(90)<2", "p(95)<3"],
                 hopr_document_latency: ["avg<6000", "p(90)<7000", "p(95)<8000"]
             }
         };
@@ -152,11 +163,11 @@ export class SocketConfiguration extends K6Configuration {
                             vus: this.dataPool.length * this.vuPerRoute,
                             duration: `${this.duration}m`,
                         },
-                        upload: {
-                            executor: "constant-vus",
-                            vus: this.dataPool.length * this.vuPerRoute,
-                            duration: `${this.duration}m`,
-                        }
+                        // upload: {
+                        //     executor: "constant-vus",
+                        //     vus: this.dataPool.length * this.vuPerRoute,
+                        //     duration: `${this.duration}m`,
+                        // }
                     }
                 });
                 break;

@@ -6,6 +6,7 @@ import { HoprdNode } from "./hoprd-node";
 import { stringToArrayBuffer, stringToUint8Array } from './utils'
 import { SocketConfiguration } from "./socket-configuration";
 import { crypto } from 'k6/experimental/webcrypto';
+import exec from 'k6/execution';
 
 
 // Read nodes
@@ -78,13 +79,14 @@ export function download(routes: [{ sender: HoprdNode, relayer: HoprdNode, recei
     payloadSize: configuration.payloadSize,
     segmentSize: configuration.downloadSegmentSize,
     throughput: configuration.downloadThroughput,
-    sessionPath: sender.name + ' => ' + relayer.name + ' => ' + receiver.name
+    sessionPath: sender.name + ' => ' + relayer.name + ' => ' + receiver.name,
+    iteration: exec.scenario.iterationInTest
   }
 
  
   //console.log(`[Download][VU ${vu +1}] Opening download udp connection to ${listenHost}`)
   let connection = udp.connect(listenHost);
-  //console.log(`[Download][VU ${__VU}] Opened a downloading UDP Connection to ${listenHost}`)
+  console.log(`[Download][VU ${__VU}][ITER ${exec.scenario.iterationInTest}] Opened a downloading UDP Connection to ${listenHost}`)
   udp.writeLn(connection, stringToArrayBuffer(JSON.stringify(downloadSettings)));
 
   //console.log(`[Download][VU ${vu +1}] Start downloading data`)
@@ -94,11 +96,17 @@ export function download(routes: [{ sender: HoprdNode, relayer: HoprdNode, recei
   try {
       while (downloadedDataSize < configuration.payloadSize) {
         const readStartTime = Date.now();
+        //console.log(`[Download][VU ${__VU}][ITER ${exec.scenario.iterationInTest}] Downloading ${configuration.downloadSegmentSize} bytes from ${listenHost}`);
         const chunk = udp.read(connection, configuration.downloadSegmentSize);
+        if (!chunk) {
+          console.warn(`[Download][VU ${__VU}] Warning: No data received.`);
+          //configuration.downloadSegmentSize = Math.max(configuration.downloadSegmentSize / 2, 512);
+          continue;
+        }
+        //console.log(`[Download][VU ${__VU}][ITER ${exec.scenario.iterationInTest}] Downloaded ${configuration.downloadSegmentSize} bytes from ${listenHost}`);
         const uint8Array = new Uint8Array(chunk);
         downloadedDataSize += uint8Array.length;
         downloadedSegmentCount++;
-        //console.log(`[Download][VU ${__VU}] Downloaded ${downloadedSegmentCount} segments with total data length ${downloadedDataSize / 1024} KB`)
         let readDuration = (new Date().getTime() - readStartTime);
         metricSegmentLatency.add(readDuration, { sender: sender.name, receiver: receiver.name, relayer: relayer.name, action: 'download' });
         metricDataReceived.add(uint8Array.length, {sender: sender.name, receiver: receiver.name, relayer: relayer.name});
@@ -106,7 +114,7 @@ export function download(routes: [{ sender: HoprdNode, relayer: HoprdNode, recei
 
       let downloadDurationMiliseconds = (new Date().getTime() - initialStartTime);
       let downloadDurationSeconds = downloadDurationMiliseconds / 1000;
-      console.log(`[Download][VU ${__VU}] ${sender.name} downloaded ${(downloadSettings.payloadSize/(1024*1024))} MB in ${downloadDurationSeconds.toFixed(2)} seconds (${(downloadSettings.payloadSize / (downloadDurationSeconds * 1024 * 1024)).toFixed(2)} MB/s) from ${listenHost} through ${relayer.name} to ${receiver.name}`);
+      console.log(`[Download][VU ${__VU}] Downloaded ${(downloadSettings.payloadSize/(1024*1024))} MB in ${downloadDurationSeconds.toFixed(2)} seconds (${(downloadSettings.payloadSize / (downloadDurationSeconds * 1024 * 1024)).toFixed(2)} MB/s) using path ${sender.name} => ${relayer.name} => ${receiver.name} from ${listenHost}`);
       metricDocumentsSucceed.add(1, {job: sender.nodeName, sender: sender.name, receiver: receiver.name, relayer: relayer.name, action: 'download'});
       metricDocumentLatency.add(downloadDurationMiliseconds, {job: sender.nodeName, sender: sender.name, receiver: receiver.name, relayer: relayer.name, action: 'download'});
     } catch (err) {

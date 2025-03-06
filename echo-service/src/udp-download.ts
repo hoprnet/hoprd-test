@@ -28,7 +28,7 @@ socketServer.on('message', (message, remoteInfo) => {
             const payloadSizeMB = (payloadSize / (1024 * 1024 )).toFixed(2); // MB
             const throughputMB = (throughput / (1024 * 1024)).toFixed(2); // MB/s
             let segmentsSent = 0;
-            console.log(`[UDP][Download] Downloading ${payloadSizeMB} MB at ${throughputMB} MB/s ( ${segmentsPerSecond.toFixed(0)} segments/s) over UDP using session ${downloadSettings.sessionPath}`);
+            console.log(`[UDP][Download] Downloading ${payloadSizeMB} MB at ${throughputMB} MB/s ( ${segmentsPerSecond.toFixed(0)} segments/s) over UDP using session path ${downloadSettings.sessionPath}`);
             const interval = setInterval(() => {
                     const dataChunk = randomBytes(segmentSize);
                     if (dataSent < payloadSize) {
@@ -47,7 +47,7 @@ socketServer.on('message', (message, remoteInfo) => {
                         const endTime = Date.now();
                         const duration = (endTime - startTime) / 1000; // In seconds
                         const speed = ((payloadSize) / duration) / (1024 * 1024); // MB/s
-                        console.log(`[UDP][Download] Download finished: ${payloadSizeMB} MB sent in ${duration.toFixed(2)} seconds (${speed.toFixed(2)} MB/s)`);
+                        console.log(`[UDP][Download] Download finished: ${payloadSizeMB} MB sent in ${duration.toFixed(2)} seconds (${speed.toFixed(2)} MB/s) using session path ${downloadSettings.sessionPath}`);
                     }
             }, 1000 / segmentsPerSecond );
         } catch (err) {
