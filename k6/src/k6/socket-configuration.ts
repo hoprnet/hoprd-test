@@ -51,11 +51,10 @@ export class SocketConfiguration extends K6Configuration {
             listenHost=`echo-service-udp-${serverNumber}.staging.hoprnet.link`;
         }
         if (action == "download") {
-            port='3012';
+            port='3002';
         } else {
-            port='3011';
+            port='3001';
         }
-        listenHost = "217.76.48.164"
         return `${listenHost}:${port}`;
     }
 
