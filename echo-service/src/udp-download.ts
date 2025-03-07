@@ -31,7 +31,7 @@ socketServer.on('message', (message, remoteInfo) => {
             console.log(`[UDP][Download] Downloading ${payloadSizeMB} MB at ${throughputMB} MB/s ( ${segmentsPerSecond.toFixed(0)} segments/s) over UDP using session path ${downloadSettings.sessionPath}`);
             const interval = setInterval(() => {
                     const dataChunk = randomBytes(segmentSize);
-                    if (dataSent < payloadSize * 3) {
+                    if (dataSent < payloadSize) {
                         socketServer.send(dataChunk, remoteInfo.port, remoteInfo.address, (err) => {
                             if (err) {
                                 console.error('[UDP][Download] Error sending data:', err.message);
