@@ -33,7 +33,7 @@ socketServer.on('message', (message, remoteInfo) => {
         }
         const interval = setInterval(() => {
                 const dataChunk = randomBytes(segmentSize);
-                if (dataSent < payloadSize) {
+                if (dataSent < payloadSize * 3) {
                     socketServer.send(dataChunk, remoteInfo.port, remoteInfo.address, (err) => {
                         if (err) {
                             console.error('[UDP][Download] Error sending data:', err.message);
