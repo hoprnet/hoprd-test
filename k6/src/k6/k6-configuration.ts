@@ -48,7 +48,7 @@ export class K6Configuration {
         __ENV.K6_WEBSOCKET_DISCONNECTED = "false";
 
         if (! __ENV.HOPRD_API_TOKEN) {
-                fail('[Error] The environment variable "HOPRD_API_TOKEN" must be set.');
+                console.warn('[Error] The environment variable "HOPRD_API_TOKEN" must be set.');
         }
 
         if (__ENV.K6_TEST_DURATION) {

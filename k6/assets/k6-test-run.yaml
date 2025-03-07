@@ -7,7 +7,7 @@ metadata:
 spec:
   parallelism: 1
   script:
-    localFile: /app/hoprnet/send-messages.test.js
+    localFile: /app/hoprnet/{{ testName }}-test.js
   separate: true
   arguments: --tag testid={{ testid }} --summary-export=/test-results/k6/test-execution-$(date +%Y%m%d-%H%M%S).json
   runner:
@@ -44,9 +44,9 @@ spec:
         value: "1400"
       - name: K6_UPLOAD_SEGMENT_SIZE
         value: "1400"
-      - name: K6_SKIP_HOPRD_SESSION
-        value: true
-      - name: K6_ECHO_SERVICE_REPLICAS
+      - name: K6_SKIP_HOPRD_SESSIONS
+        value: "false"
+      - name: K6_ECHO_SERVERS_REPLICAS
         value: "4"
       - name: HOPRD_API_TOKEN
         valueFrom:

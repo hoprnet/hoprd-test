@@ -31,6 +31,7 @@ export class SocketConfiguration extends K6Configuration {
             const fiendlyUploadStreamSize = (this.uploadSegmentSize / 1024).toFixed(2);
             const friendlyDownloadSegmentsPerSecond = (this.downloadThroughput / this.downloadSegmentSize).toFixed(0);
             const friendlyUploadSegmentsPerSecond = (this.uploadThroughput / this.uploadSegmentSize).toFixed(0);
+            console.log(`[Setup] Echo service replicas: ${this.echoServersReplicas}`);
             console.log(`[Setup] Document payload size: ${friendlyPayloadSize} MB`);
             console.log(`[Setup] ${protocol.toUpperCase()} server download throughput ${fiendlyDownloadThroughput} MB/s`);
             console.log(`[Setup] ${protocol.toUpperCase()} server upload throughput ${fiendlyUploadThroughput} MB/s`);
@@ -58,6 +59,15 @@ export class SocketConfiguration extends K6Configuration {
     }
 
     private loadSocketEnvironmentVariables(): void {
+        if (__ENV.K6_ECHO_SERVERS_REPLICAS) {
+            const replicas = parseInt(__ENV.K6_ECHO_SERVERS_REPLICAS);
+            if (!Number.isNaN(replicas) && replicas > 0) {
+                this.echoServersReplicas = replicas;
+            } else {
+                fail('[ERROR] Invalid K6_ECHO_SERVERS_REPLICAS value.');
+            }
+        }
+
         if (__ENV.K6_PAYLOAD_SIZE) {
             const payloadSize = parseInt(__ENV.K6_PAYLOAD_SIZE);
             if (!Number.isNaN(payloadSize) && payloadSize > 0) {
@@ -73,15 +83,6 @@ export class SocketConfiguration extends K6Configuration {
                 this.downloadThroughput = throughput;
             } else {
                 fail('[ERROR] Invalid K6_DOWNLOAD_THROUGHPUT value.');
-            }
-        }
-
-        if (__ENV.K6_ECHO_SERVERS_REPLICAS) {
-            const replicas = parseInt(__ENV.K6_ECHO_SERVERS_REPLICAS);
-            if (!Number.isNaN(replicas) && replicas > 0) {
-                this.echoServersReplicas = replicas;
-            } else {
-                fail('[ERROR] Invalid K6_ECHO_SERVERS_REPLICAS value.');
             }
         }
 

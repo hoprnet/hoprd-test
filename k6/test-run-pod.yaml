@@ -1,0 +1,63 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: k6-hoprd-core-rotsee-sanity-check-initializer2
+  namespace: k6-operator-system
+spec:
+  automountServiceAccountToken: true
+  containers:
+  - command:
+    - sh
+    - -c
+    - sleep infinity
+    env:
+    - name: K6_CLUSTER_NODES
+      value: core-rotsee
+    - name: K6_TOPOLOGY_NAME
+      value: receiver
+    - name: K6_WORKLOAD_NAME
+      value: sanity-check
+    - name: K6_REQUESTS_PER_SECOND_PER_VU
+      value: "1"
+    - name: K6_TEST_DURATION
+      value: "30"
+    - name: K6_VU_PER_ROUTE
+      value: "1"
+    - name: K6_PAYLOAD_SIZE
+      value: "1048576"
+    - name: K6_DOWNLOAD_THROUGHPUT
+      value: "524288"
+    - name: K6_UPLOAD_THROUGHPUT
+      value: "1048576"
+    - name: K6_DOWNLOAD_SEGMENT_SIZE
+      value: "1400"
+    - name: K6_UPLOAD_SEGMENT_SIZE
+      value: "1400"
+    - name: K6_SKIP_HOPRD_SESSIONS
+      value: "true"
+    - name: K6_ECHO_SERVERS_REPLICAS
+      value: "4"
+    - name: HOPRD_API_TOKEN
+      valueFrom:
+        secretKeyRef:
+          key: core-rotsee
+          name: hoprd-api-tokens
+    - name: K6_PROMETHEUS_RW_SERVER_URL
+      value: http://kube-prometheus-stack-prometheus.monitoring.svc:9090/api/v1/write
+    - name: K6_PROMETHEUS_RW_TREND_AS_NATIVE_HISTOGRAM
+      value: "true"
+    - name: K6_OUT
+      value: xk6-prometheus-rw
+    image: europe-west3-docker.pkg.dev/hoprassociation/docker-images/hoprd-k6:latest
+    imagePullPolicy: Always
+    name: k6
+    ports:
+    - containerPort: 6565
+      protocol: TCP
+    resources:
+      limits:
+        cpu: "3"
+        memory: 3Gi
+      requests:
+        cpu: "3"
+        memory: 3Gi
