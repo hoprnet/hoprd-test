@@ -65,6 +65,15 @@ The topology, specified through the environment variable named `K6_TOPOLOGY_NAME
 - `relayer`: This topology sepecifies a single relayer node, and multiple senders and receivers. The relayer does not act as a sender or receiver. The goal of this topology is to test the internal mix nodes
 - `receiver`: This topology sepecifies a single receiver node, and multiple senders and relayers. The receiver does not act as a sender or relayer . The goal of this topology is to test the exit nodes
 
+### Echo service
+
+Configure the echo service accordingly to the requirements of your test. You might need to scale up the echo service to be able to accept more requests.
+Edit the [helmfile](https://github.com/hoprnet/gitops/blob/master/argocd/apps/k6-operator/helmfile.yaml#L33) and change the number of replicas
+
+Then export the `K6_ECHO_SERVERS_REPLICAS=1` with the same amount of replicas
+
+If you want to execute the load test and avoid using the HOPRD nodes mixnets and opening sessions, you can set `K6_SKIP_HOPRD_SESSIONS=true`. This is only useful when debugging the own echo service or load test without the overload of hoprd network.
+
 ### VU per route
 
 The type of topology chosen will determine the amount of routes available for the test execution. A Route is an available communication path between sender, relayer and receiver. 
@@ -82,7 +91,7 @@ The default throughtput is to send 1 message per second per route(web-socket con
 Setup workspace
 ```
 export HOPRD_API_TOKEN=?????
-export K6_CLUSTER_NODES=core-rotsee
+export K6_CLUSTER_NODES=local
 export K6_TOPOLOGY_NAME=receiver
 export K6_WORKLOAD_NAME=sanity-check
 export K6_SKIP_HOPRD_SESSIONS=false
@@ -96,8 +105,6 @@ Run tests:
 npm run test:udp
 npm run test:tcp
 ```
-
-
 
 ## Running remotely
 
