@@ -97,6 +97,9 @@ export K6_WORKLOAD_NAME=sanity-check
 export K6_SKIP_HOPRD_SESSIONS=false
 export K6_ECHO_SERVERS_REPLICAS=4
 export K6_TEST_DURATION=1
+export K6_PAYLOAD_SIZE=$((10 * 1024 * 1024))
+export K6_DOWNLOAD_THROUGHPUT=$((1 * 1024 * 1024))
+export K6_UPLOAD_THROUGHPUT=$((512 * 1024))
 npm run setup
 ```
 
