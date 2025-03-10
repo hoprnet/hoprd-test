@@ -33,6 +33,7 @@ export class SocketConfiguration extends K6Configuration {
             const friendlyDownloadSegmentsPerSecond = (this.downloadThroughput / this.downloadSegmentSize).toFixed(0);
             const friendlyUploadSegmentsPerSecond = (this.uploadThroughput / this.uploadSegmentSize).toFixed(0);
             console.log(`[Setup] Echo service replicas: ${this.echoServersReplicas}`);
+            console.log(`[Setup] Iteration timeout: ${this.iterationTimeout} seconds`);
             console.log(`[Setup] Document payload size: ${friendlyPayloadSize} MB`);
             console.log(`[Setup] ${protocol.toUpperCase()} server download throughput ${fiendlyDownloadThroughput} MB/s`);
             console.log(`[Setup] ${protocol.toUpperCase()} server upload throughput ${fiendlyUploadThroughput} MB/s`);

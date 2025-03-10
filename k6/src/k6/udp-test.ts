@@ -92,13 +92,15 @@ export function download(routes: [{ sender: HoprdNode, relayer: HoprdNode, recei
   let downloadedDataSize = 0;
   let downloadedSegmentCount = 0;
   const initialStartTime = Date.now();
-  let timeout = setTimeout(() => {
-      console.warn(`[Download][VU ${__VU}] Timeout reached, stopping download with ${configuration.payloadSize - downloadedDataSize} bytes remaining, sent ${downloadedSegmentCount} of ${configuration.downloadSegmentSize} segments`);
-      metricDocumentsFailed.add(1, {sender: sender.name, receiver: receiver.name, relayer: relayer.name, action: 'download'});
-  }, configuration.iterationTimeout * 1000);
+  let timeout = false;
   try {
       while (downloadedDataSize < configuration.payloadSize) {
         const readStartTime = Date.now();
+        if (readStartTime - initialStartTime > configuration.iterationTimeout * 1000) {
+          console.warn(`[Download][VU ${__VU}] Timeout reached, stopping download with ${configuration.payloadSize - downloadedDataSize} bytes remaining, sent ${downloadedSegmentCount} of ${configuration.downloadSegmentSize} segments`);
+          timeout = true;
+          break;
+        }
         //console.log(`[Download][VU ${__VU}][ITER ${exec.scenario.iterationInTest}] Downloading ${configuration.downloadSegmentSize} bytes from ${listenHost}`);
         const chunk = udp.read(connection, configuration.downloadSegmentSize);
         if (!chunk) {
@@ -114,19 +116,22 @@ export function download(routes: [{ sender: HoprdNode, relayer: HoprdNode, recei
         metricSegmentLatency.add(readDuration, { sender: sender.name, receiver: receiver.name, relayer: relayer.name, action: 'download' });
         metricDataReceived.add(uint8Array.length, {sender: sender.name, receiver: receiver.name, relayer: relayer.name});
       }
-      clearTimeout(timeout);
       const endSignal = {
         action: 'end',
         startTimestamp: initialStartTime,
         sessionPath: sender.name + ' => ' + relayer.name + ' => ' + receiver.name,
       }
       udp.writeLn(connection, stringToArrayBuffer(JSON.stringify(endSignal)));
-
-      let downloadDurationMiliseconds = (new Date().getTime() - initialStartTime);
-      let downloadDurationSeconds = downloadDurationMiliseconds / 1000;
-      console.log(`[Download][VU ${__VU}] Downloaded ${(downloadSettings.payloadSize/(1024*1024))} MB in ${downloadDurationSeconds.toFixed(2)} seconds (${(downloadSettings.payloadSize / (downloadDurationSeconds * 1024 * 1024)).toFixed(2)} MB/s) using path ${sender.name} => ${relayer.name} => ${receiver.name} from ${listenHost}`);
-      metricDocumentsSucceed.add(1, {job: sender.nodeName, sender: sender.name, receiver: receiver.name, relayer: relayer.name, action: 'download'});
-      metricDocumentLatency.add(downloadDurationMiliseconds, {job: sender.nodeName, sender: sender.name, receiver: receiver.name, relayer: relayer.name, action: 'download'});
+      if (timeout) {
+        metricDocumentsFailed.add(1, {sender: sender.name, receiver: receiver.name, relayer: relayer.name, action: 'download'});
+        return;
+      } else {
+        let downloadDurationMiliseconds = (new Date().getTime() - initialStartTime);
+        let downloadDurationSeconds = downloadDurationMiliseconds / 1000;
+        console.log(`[Download][VU ${__VU}] Downloaded ${(downloadSettings.payloadSize/(1024*1024))} MB in ${downloadDurationSeconds.toFixed(2)} seconds (${(downloadSettings.payloadSize / (downloadDurationSeconds * 1024 * 1024)).toFixed(2)} MB/s) using path ${sender.name} => ${relayer.name} => ${receiver.name} from ${listenHost}`);
+        metricDocumentsSucceed.add(1, {job: sender.nodeName, sender: sender.name, receiver: receiver.name, relayer: relayer.name, action: 'download'});
+        metricDocumentLatency.add(downloadDurationMiliseconds, {job: sender.nodeName, sender: sender.name, receiver: receiver.name, relayer: relayer.name, action: 'download'});
+      }
     } catch (err) {
       console.error(`[Download][VU ${vu + 1}] Failed to download file via [${sender.name}] => [${relayer.name}] => [${receiver.name}]`);
       console.error(`[Download][VU:${vu + 1}] Error message:`, err);
