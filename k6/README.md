@@ -38,7 +38,8 @@ The duration of the test is by default `1` (in minutes) unless modified by the e
 
 The cluster of nodes, specified through the environment variable named `K6_CLUSTER_NODES`,  determines which cluster of nodes will be used. By default will be used `core` nodes:
 - `local`: Uses the nodes of the local-cluster 
-- `core`: Uses the set of nodes from core-team
+- `core-rotsee`: Uses the set of nodes from core-team at rotsee
+- `core-dufour`: Uses the set of nodes from core-team at dufour
 - `uhttp`: Uses the active nodes of uhttp
 - `team`: Users the nodes that belong to the development team
 
@@ -64,6 +65,15 @@ The topology, specified through the environment variable named `K6_TOPOLOGY_NAME
 - `relayer`: This topology sepecifies a single relayer node, and multiple senders and receivers. The relayer does not act as a sender or receiver. The goal of this topology is to test the internal mix nodes
 - `receiver`: This topology sepecifies a single receiver node, and multiple senders and relayers. The receiver does not act as a sender or relayer . The goal of this topology is to test the exit nodes
 
+### Echo service
+
+Configure the echo service accordingly to the requirements of your test. You might need to scale up the echo service to be able to accept more requests.
+Edit the [helmfile](https://github.com/hoprnet/gitops/blob/master/argocd/apps/k6-operator/helmfile.yaml#L33) and change the number of replicas
+
+Then export the `K6_ECHO_SERVERS_REPLICAS=1` with the same amount of replicas
+
+If you want to execute the load test and avoid using the HOPRD nodes mixnets and opening sessions, you can set `K6_SKIP_HOPRD_SESSIONS=true`. This is only useful when debugging the own echo service or load test without the overload of hoprd network.
+
 ### VU per route
 
 The type of topology chosen will determine the amount of routes available for the test execution. A Route is an available communication path between sender, relayer and receiver. 
@@ -76,17 +86,29 @@ Setting this parameter `K6_VU_PER_ROUTE=2` would open a total of 120 web-socket 
 
 The default throughtput is to send 1 message per second per route(web-socket connections). But the websocket can be stressed also by adding more messages/s by setting the environment variable named `K6_REQUESTS_PER_SECOND_PER_VU` with a higher number
 
-## Running tests
+## Running locally
 
-- Set the environment variable `K6_CLUSTER_NODES` with any of the available clusters if you need other than `core` nodes.
-- Set the environment variable `HOPRD_API_TOKEN` with the token setup on the target nodes before execute thes commands.
-- Set the test duration with environment variable `K6_TEST_DURATION` if you need other than 1m duration
-- Set the workload with environment variable: `K6_WORKLOAD_NAME`, if you need other than `constant`
-- Set the topology with environment variable: `K6_TOPOLOGY_NAME`, if you need other than `many2many`
-- Set the vu per route with environment variable: `K6_VU_PER_ROUTE`, if you need other than `1`
-- Set the requests per VU per route with environment variable: `K6_REQUESTS_PER_SECOND_PER_VU`, if you need other than `1`
-- `npm run test:websocket`: Execute the uhttp websocket scenario.
-- `npm run setup:websocket`: Setup the nodes for the websocket scenario
+Setup workspace
+```
+export HOPRD_API_TOKEN=?????
+export K6_CLUSTER_NODES=local
+export K6_TOPOLOGY_NAME=receiver
+export K6_WORKLOAD_NAME=sanity-check
+export K6_SKIP_HOPRD_SESSIONS=false
+export K6_ECHO_SERVERS_REPLICAS=4
+export K6_TEST_DURATION=1
+export K6_ITERATION_TIMEOUT=15
+export K6_PAYLOAD_SIZE=$((10 * 1024 * 1024))
+export K6_DOWNLOAD_THROUGHPUT=$((1 * 1024 * 1024))
+export K6_UPLOAD_THROUGHPUT=$((512 * 1024))
+npm run setup
+```
+
+Run tests:
+```
+npm run test:udp
+npm run test:tcp
+```
 
 ## Running remotely
 

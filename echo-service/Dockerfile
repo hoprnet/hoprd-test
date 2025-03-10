@@ -43,5 +43,17 @@ EXPOSE 8080
 # Expose the websocket port
 EXPOSE 8888
 
+# Expose tcp port
+# Upload
+EXPOSE 3001
+# Download
+EXPOSE 3002
+
+# Expose udp port
+# Upload
+EXPOSE 3011
+# Download
+EXPOSE 3012
+
 # Run the application
 CMD ["/app/start.sh"]

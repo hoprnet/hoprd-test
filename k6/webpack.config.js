@@ -13,6 +13,9 @@ module.exports = {
   },
   resolve: {
     extensions: ['.ts', '.js'],
+    alias: {
+      "k6/x/tcp": path.resolve(__dirname, "types/xk6-tcp.d.ts")
+    }
   },
   module: {
     rules: [

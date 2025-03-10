@@ -32,19 +32,20 @@
   "scripts": {
     "build": "tsc --build tsconfig.json",
     "webpack": "webpack",
-    "install:xk6:linux": "docker run --rm -it -e GOOS=linux -u \"$(id -u):$(id -g)\" -v \"${PWD}:/xk6\" grafana/xk6 build v0.55.0 --with github.com/grafana/xk6-output-prometheus-remote",
-    "install:xk6:mac": "docker run --rm -it -e GOOS=darwin -u \"$(id -u):$(id -g)\" -v \"${PWD}:/xk6\" grafana/xk6 build v0.55.0 --with github.com/grafana/xk6-output-prometheus-remote --with github.com/NAlexandrov/xk6-tcp --with github.com/pedrosaraiva/xk6-udp",
+    "install:xk6:linux": "docker run --rm -it -e GOOS=linux -u \"$(id -u):$(id -g)\" -v \"${PWD}:/xk6\" grafana/xk6 build v0.55.0 --with github.com/grafana/xk6-output-prometheus-remote --with github.com/NAlexandrov/xk6-tcp --with github.com/pedrosaraiva/xk6-udp",
+    "install:xk6:mac": "docker run --rm -it -e GOOS=darwin -u \"$(id -u):$(id -g)\" -v \"${PWD}:/xk6\" grafana/xk6 build v0.55.0 --with github.com/grafana/xk6-output-prometheus-remote --with github.com/NAlexandrov/xk6-tcp --with github.com/amitmankikar/xk6-udp",
     "cluster:start": "cd ../../hoprnet && ./scripts/setup-local-cluster.sh -i topologies/full_interconnected_cluster.sh --listen-host 0.0.0.0",
     "cluster:stop": "pkill -f ./scripts/setup-local-cluster.sh",
     "docker:build": "docker build --platform linux/amd64 --tag europe-west3-docker.pkg.dev/hoprassociation/docker-images/hoprd-k6:latest .",
     "docker:push": "docker push europe-west3-docker.pkg.dev/hoprassociation/docker-images/hoprd-k6:latest",
     "test:websocket": "npm run webpack && K6_PROMETHEUS_RW_TREND_AS_NATIVE_HISTOGRAM=true K6_OUT=xk6-prometheus-rw K6_PROMETHEUS_RW_SERVER_URL=https://prometheus.staging.hoprnet.link/api/v1/write ./k6 run ./dist/websocket-test.js",
     "test:tcp": "npm run webpack && K6_PROMETHEUS_RW_TREND_AS_NATIVE_HISTOGRAM=true K6_OUT=xk6-prometheus-rw K6_PROMETHEUS_RW_SERVER_URL=https://prometheus.staging.hoprnet.link/api/v1/write ./k6 run ./dist/tcp-test.js",
+    "test:udp": "npm run webpack && K6_PROMETHEUS_RW_TREND_AS_NATIVE_HISTOGRAM=true K6_OUT=xk6-prometheus-rw K6_PROMETHEUS_RW_SERVER_URL=https://prometheus.staging.hoprnet.link/api/v1/write ./k6 run ./dist/udp-test.js",
     "setup:websocket": "npm run build && node ./dist/setup-environment.js",
     "parse:results": "node parse-results.js test-execution-20240522-113543.json many2many sanity-check 1 test-2.1.0 30"
   },
   "dependencies": {
-    "@hoprnet/hopr-sdk": "^2.1.9",
+    "@hoprnet/hopr-sdk": "2.2.0-beta.2",
     "fs": "^0.0.1-security",
     "handlebars": "^4.7.8",
     "ws": "^8.18.0"

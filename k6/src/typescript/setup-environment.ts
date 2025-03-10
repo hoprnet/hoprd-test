@@ -19,12 +19,14 @@ const setupEnvironment = async (nodes: HoprdNode[]) => {
 }
 
 // Main
-const clusterNodes = process.env.K6_CLUSTER_NODES || "core";
+const testName = process.env.K6_TEST_NAME || 'udp';
+const clusterNodes = process.env.K6_CLUSTER_NODES || "core-rotsee";
 const topologyName = process.env.K6_TOPOLOGY_NAME || 'many2many';
 const workloadName = process.env.K6_WORKLOAD_NAME || 'sanity-check';
 const testid = process.env.TESTID || 'kubernetes';
 const requestsPerSecondPerVu = parseInt(process.env.K6_REQUESTS_PER_SECOND_PER_VU || '1', 10);
 const duration = parseInt(process.env.K6_TEST_DURATION || '30',10);
+const iterationTimeout = parseInt(process.env.K6_ITERATION_TIMEOUT || '60',10);
 const vuPerRoute = parseInt(process.env.K6_VU_PER_ROUTE || '1', 10);
 let hoprdNodes: HoprdNode[] = [];
 try {
@@ -60,13 +62,13 @@ Promise.all(hoprdNodes).then((hoprdNodes: HoprdNode[]) => {
     // Generate k6 test run file
     const k6TestRunTemplateData = fs.readFileSync(`assets/k6-test-run.yaml`).toString()
     const k6TestRunTemplate = Handlebars.compile(k6TestRunTemplateData);
-    const k6TestRunTemplateParsed = k6TestRunTemplate({ clusterNodes, topologyName, workloadName, requestsPerSecondPerVu, testid, duration, vuPerRoute });
+    const k6TestRunTemplateParsed = k6TestRunTemplate({ testName, clusterNodes, topologyName, workloadName, requestsPerSecondPerVu, testid, duration, iterationTimeout, vuPerRoute });
     fs.writeFileSync(`./k6-test-run.yaml`, k6TestRunTemplateParsed)
 
     // Generate k6 test results file
     const k6TestResultsTemplateData = fs.readFileSync(`assets/k6-test-results.yaml`).toString()
     const k6TestResultsTemplate = Handlebars.compile(k6TestResultsTemplateData);
-    const k6TestResultsTemplateParsed = k6TestResultsTemplate({ clusterNodes, topologyName, workloadName, requestsPerSecondPerVu, testid, duration });
+    const k6TestResultsTemplateParsed = k6TestResultsTemplate({ testName, clusterNodes, topologyName, workloadName, requestsPerSecondPerVu, testid, duration, iterationTimeout });
     fs.writeFileSync(`./k6-test-results.yaml`, k6TestResultsTemplateParsed)
 
   }).catch((error) => {

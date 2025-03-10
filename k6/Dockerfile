@@ -10,7 +10,7 @@ RUN npm install \
 FROM golang:1.20 as xk6
 
 RUN go install go.k6.io/xk6/cmd/xk6@latest
-RUN xk6 build --with github.com/grafana/xk6-output-prometheus-remote@latest --output /k6
+RUN xk6 build --with github.com/grafana/xk6-output-prometheus-remote@latest --with github.com/NAlexandrov/xk6-tcp --with github.com/pedrosaraiva/xk6-udp --output /k6
 
 FROM grafana/k6:latest
 
@@ -19,7 +19,7 @@ COPY --from=node /app/k6/dist /app/hoprnet
 
 WORKDIR /app/hoprnet
 
-ENV K6_CLUSTER_NODES=core
+ENV K6_CLUSTER_NODES=core-rotsee
 ENV K6_TOPOLOGY_NAME=many2many
 ENV K6_WORKLOAD_NAME=simple
 

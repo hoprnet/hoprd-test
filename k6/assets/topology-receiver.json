@@ -4,40 +4,38 @@
       "name": "node-1",
       "enabled": true,
       "isSender": true,
-      "isRelayer": true,
+      "isRelayer": false,
       "isReceiver": false,
       "routes": [
-        { "name": "node-5" }
+        { "name": "node-2" }
       ]
     },
     {
       "name": "node-2",
       "enabled": true,
-      "isSender": true,
+      "isSender": false,
       "isRelayer": true,
       "isReceiver": false,
       "routes": [
-        { "name": "node-5" }
       ]
     },
     {
       "name": "node-3",
       "enabled": true,
       "isSender": true,
-      "isRelayer": true,
+      "isRelayer": false,
       "isReceiver": false,
       "routes": [
-        { "name": "node-5" }
+        { "name": "node-4" }
       ]
     },
     {
       "name": "node-4",
       "enabled": true,
-      "isSender": true,
+      "isSender": false,
       "isRelayer": true,
       "isReceiver": false,
       "routes": [
-        { "name": "node-5" }
       ]
     },
     {
@@ -47,9 +45,7 @@
       "isRelayer": false,
       "isReceiver": true,
       "routes": [
-        { "name": "node-1" },
         { "name": "node-2" },
-        { "name": "node-3" },
         { "name": "node-4" }
       ]
     }

@@ -117,6 +117,7 @@ export class HoprdNode {
   private async getChannelsToOpen(nodes: HoprdNode[], channelsToOpen: Promise<{ channelId: string, targetNode: string, desiredStatus: string }>[]) {
     // Prepare to open channels
     for (let route of this.data.routes) {
+      // console.log(`[INFO] Checking channel from ${this.data.name} to ${route.name}`)
       const routePeerAddress = this.getNativeAddressByNodeName(route.name, nodes)
       if (routePeerAddress == '') {
         console.error(`[ERROR] Unable to find peerAddress for node ${route.name} in routes for node ${this.data.name}`)
@@ -127,6 +128,7 @@ export class HoprdNode {
         console.log(`[INFO] Channel from ${this.data.name} to ${route.name} does not exist. Openning it automatically.`)
         channelsToOpen.push(this.openChannel(routePeerAddress, route.name));
       } else {
+        // console.log(`[INFO] Channel from ${this.data.name} already ${route.name} exists`)
         if (channel.status != 'Open') {
           console.error(`[ERROR] Channel from ${this.data.name} to ${route.name} is in status ${channel.status} and cannot be used. Please close it manually.`)
           process.exit(1);
@@ -186,20 +188,20 @@ export class HoprdNode {
 
   async waitForChannelStatus(channel: { channelId: string, targetNode: string, desiredStatus: string }): Promise<string> {
     let iteration = 0;
-    const maxIterations = 10;
+    const maxIterations = 15;
     const waitingChannel: Promise<string> = new Promise<string>((resolve, reject) => {
       var interval = setInterval(async () => {
         iteration++
         const currentChannels: GetChannelsResponseType = await this.sdk.api.channels.getChannels(this.basePayload)
         const channelStatus = currentChannels.outgoing.find(outgoingChannel => outgoingChannel.id == channel.channelId)
-        if (channelStatus?.status == channel.desiredStatus) {
+        if (channelStatus?.status == undefined || channelStatus?.status == channel.desiredStatus) {
           clearInterval(interval);
           resolve(channel.channelId);
         } else if (iteration >= maxIterations) {
           clearInterval(interval);
           reject(new Error(`Channel ${channel} did not reach status ${channel.desiredStatus} after ${iteration} iterations.`));
         } else {
-          console.log(`[INFO] [Iteration ${iteration}] Node ${this.data.name} has '${channelStatus?.status}' channel : ${channel}`);
+          console.log(`[INFO] [Iteration ${iteration}] Node ${this.data.name} has '${channelStatus?.status}' channel : ${channel.channelId}`);
         }
       }, 60 * 1000)
     })
@@ -209,14 +211,14 @@ export class HoprdNode {
   public async sendMessage(relayer: HoprdNode, receiver: HoprdNode): Promise<boolean> {
     let url = this.basePayload.apiEndpoint.replace("http", "ws") + '/api/v3/session/websocket?';
     url += 'capabilities=Segmentation&capabilities=Retransmission&';
-    url += `target=k6-echo.k6-operator-system.staging.hoprnet.link%3A80&`;
+    url += `target=echo-service-http.staging.hoprnet.link:80&`;
     url += `hops=1&`;
-    url += `path=${relayer.peerId}&`;
+    url += `IntermediatePath=${relayer.peerId}&`;
     url += `destination=${receiver.peerId}&`;
     url += 'protocol=tcp';
     url += '&apiToken=' + this.basePayload.apiToken;
     const ws = new WebSocket(url);
-    let messagePayload = this.stringToArrayBuffer(`GET /?startTime=${Date.now()} HTTP/1.1\r\nHost: k6-echo.k6-operator-system.staging.hoprnet.link\r\n\r\n`);
+    let messagePayload = this.stringToArrayBuffer(`GET /?startTime=${Date.now()} HTTP/1.1\r\nHost: echo-service-http.staging.hoprnet.link\r\n\r\n`);
     let sender = this.data.name;
     let sent = false;
 

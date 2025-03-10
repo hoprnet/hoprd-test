@@ -1,15 +1,16 @@
 import { Options } from "k6/options";
 import { Counter, Trend, Gauge } from "k6/metrics";
-import { fail } from "k6";
-import tcp from 'k6/x/tcp';
+import { fail, sleep } from "k6";
+import udp from 'k6/x/udp';
 import { HoprdNode } from "./hoprd-node";
-import { stringToArrayBuffer } from './utils'
+import { stringToArrayBuffer, stringToUint8Array } from './utils'
 import { SocketConfiguration } from "./socket-configuration";
 import { crypto } from 'k6/experimental/webcrypto';
+import exec from 'k6/execution';
 
 
 // Read nodes
-const configuration = new SocketConfiguration('tcp');
+const configuration = new SocketConfiguration('udp');
 
 // Test Options https://docs.k6.io/docs/options
 export const options: Partial<Options> = configuration.workloadOptions;
@@ -49,7 +50,7 @@ export function setup() {
     hops: configuration.hops.toString(),
     routes: routes.length.toString(),
     vu: configuration.vuPerRoute.toString(), 
-    protocol: 'tcp'
+    protocol: 'udp'
   };
   metricExecutionInfoMetric.add(Date.now(), executionInfoMetricLabels);
   
@@ -58,8 +59,8 @@ export function setup() {
     sender: route.sender,
     relayer: route.relayer,
     receiver: route.receiver,
-    downloadSession: route.sender.openSession(route.relayer, route.receiver, "tcp", configuration.getTargetDestination('download')),
-    uploadSession: route.sender.openSession(route.relayer, route.receiver, "tcp", configuration.getTargetDestination('upload'))
+    downloadSession: route.sender.openSession(route.relayer, route.receiver, "udp", configuration.getTargetDestination('download')),
+    uploadSession: route.sender.openSession(route.relayer, route.receiver, "udp", configuration.getTargetDestination('upload'))
     }
   });
 }
@@ -72,49 +73,71 @@ export function download(routes: [{ sender: HoprdNode, relayer: HoprdNode, recei
   const relayer = routes[vu].relayer;
   const receiver = routes[vu].receiver;
   const listenHost = routes[vu].downloadSession;
-  //console.log(`[Sender][VU ${vu + 1}] Connecting via tcp session, sender=${sender.name}, relayer=${relayer.name}, receiver=${receiver.name}`);
+  //console.log(`[Sender][VU ${vu + 1}] Connecting via udp session, sender=${sender.name}, relayer=${relayer.name}, receiver=${receiver.name}`);
 
   const downloadSettings = {
+    action: 'start',
     payloadSize: configuration.payloadSize,
     segmentSize: configuration.downloadSegmentSize,
     throughput: configuration.downloadThroughput,
-    sessionPath: sender.name + ' => ' + relayer.name + ' => ' + receiver.name
+    sessionPath: sender.name + ' => ' + relayer.name + ' => ' + receiver.name,
+    iteration: exec.scenario.iterationInTest,
+    iterationTimeout: configuration.iterationTimeout * 1000
   }
-
- 
-  //console.log(`[Download][VU ${vu +1}] Opening download tcp connection to ${listenHost}`)
-  let connection = tcp.connect(listenHost);
-  //console.log(`[Download][VU ${__VU}] Opened a downloading TCP Connection to ${listenHost}`)
-  tcp.writeLn(connection, stringToArrayBuffer(JSON.stringify(downloadSettings)));
-
+  //console.log(`[Download][VU ${vu +1}] Opening download udp connection to ${listenHost}`)
+  let connection = udp.connect(listenHost);
+  //console.log(`[Download][VU ${__VU}][ITER ${exec.scenario.iterationInTest}] Opened a downloading UDP Connection to ${listenHost}`)
+  udp.writeLn(connection, stringToArrayBuffer(JSON.stringify(downloadSettings)));
   //console.log(`[Download][VU ${vu +1}] Start downloading data`)
   let downloadedDataSize = 0;
   let downloadedSegmentCount = 0;
   const initialStartTime = Date.now();
+  let timeout = false;
   try {
       while (downloadedDataSize < configuration.payloadSize) {
         const readStartTime = Date.now();
-        const chunk = tcp.read(connection, configuration.downloadSegmentSize);
+        if (readStartTime - initialStartTime > configuration.iterationTimeout * 1000) {
+          console.warn(`[Download][VU ${__VU}] Timeout reached, stopping download with ${configuration.payloadSize - downloadedDataSize} bytes remaining, sent ${downloadedSegmentCount} of ${configuration.downloadSegmentSize} segments`);
+          timeout = true;
+          break;
+        }
+        //console.log(`[Download][VU ${__VU}][ITER ${exec.scenario.iterationInTest}] Downloading ${configuration.downloadSegmentSize} bytes from ${listenHost}`);
+        const chunk = udp.read(connection, configuration.downloadSegmentSize);
+        if (!chunk) {
+          console.warn(`[Download][VU ${__VU}] Warning: No data received.`);
+          //configuration.downloadSegmentSize = Math.max(configuration.downloadSegmentSize / 2, 512);
+          continue;
+        }
+        //console.log(`[Download][VU ${__VU}][ITER ${exec.scenario.iterationInTest}] Downloaded ${downloadedDataSize} bytes from ${listenHost}`);
         const uint8Array = new Uint8Array(chunk);
         downloadedDataSize += uint8Array.length;
         downloadedSegmentCount++;
-        //console.log(`[Download][VU ${__VU}] Downloaded ${downloadedSegmentCount} segments with total data length ${downloadedDataSize / 1024} KB`)
         let readDuration = (new Date().getTime() - readStartTime);
         metricSegmentLatency.add(readDuration, { sender: sender.name, receiver: receiver.name, relayer: relayer.name, action: 'download' });
         metricDataReceived.add(uint8Array.length, {sender: sender.name, receiver: receiver.name, relayer: relayer.name});
       }
-
-      let downloadDurationMiliseconds = (new Date().getTime() - initialStartTime);
-      let downloadDurationSeconds = downloadDurationMiliseconds / 1000;
-      console.log(`[Download][VU ${__VU}] ${sender.name} downloaded ${(downloadSettings.payloadSize/(1024*1024))} MB in ${downloadDurationSeconds.toFixed(2)} seconds (${(downloadSettings.payloadSize / (downloadDurationSeconds * 1024 * 1024)).toFixed(2)} MB/s) from ${listenHost} through ${relayer.name} to ${receiver.name}`);
-      metricDocumentsSucceed.add(1, {job: sender.nodeName, sender: sender.name, receiver: receiver.name, relayer: relayer.name, action: 'download'});
-      metricDocumentLatency.add(downloadDurationMiliseconds, {job: sender.nodeName, sender: sender.name, receiver: receiver.name, relayer: relayer.name, action: 'download'});
+      const endSignal = {
+        action: 'end',
+        startTimestamp: initialStartTime,
+        sessionPath: sender.name + ' => ' + relayer.name + ' => ' + receiver.name,
+      }
+      udp.writeLn(connection, stringToArrayBuffer(JSON.stringify(endSignal)));
+      if (timeout) {
+        metricDocumentsFailed.add(1, {sender: sender.name, receiver: receiver.name, relayer: relayer.name, action: 'download'});
+        return;
+      } else {
+        let downloadDurationMiliseconds = (new Date().getTime() - initialStartTime);
+        let downloadDurationSeconds = downloadDurationMiliseconds / 1000;
+        console.log(`[Download][VU ${__VU}] Downloaded ${(downloadSettings.payloadSize/(1024*1024))} MB in ${downloadDurationSeconds.toFixed(2)} seconds (${(downloadSettings.payloadSize / (downloadDurationSeconds * 1024 * 1024)).toFixed(2)} MB/s) using path ${sender.name} => ${relayer.name} => ${receiver.name} from ${listenHost}`);
+        metricDocumentsSucceed.add(1, {job: sender.nodeName, sender: sender.name, receiver: receiver.name, relayer: relayer.name, action: 'download'});
+        metricDocumentLatency.add(downloadDurationMiliseconds, {job: sender.nodeName, sender: sender.name, receiver: receiver.name, relayer: relayer.name, action: 'download'});
+      }
     } catch (err) {
       console.error(`[Download][VU ${vu + 1}] Failed to download file via [${sender.name}] => [${relayer.name}] => [${receiver.name}]`);
       console.error(`[Download][VU:${vu + 1}] Error message:`, err);
       metricDocumentsFailed.add(1, {sender: sender.name, receiver: receiver.name, relayer: relayer.name, action: 'download'});
     } finally {
-      tcp.close(connection);
+      udp.close(connection);
     }
 }
 
@@ -126,7 +149,7 @@ export function upload(routes: [{ sender: HoprdNode, relayer: HoprdNode, receive
   const relayer = routes[vu].relayer;
   const receiver = routes[vu].receiver;
   const listenHost = routes[vu].uploadSession;
-  //console.log(`[Sender][VU ${vu + 1}] Connecting via tcp session, sender=${sender.name}, relayer=${relayer.name}, receiver=${receiver.name}`);
+  //console.log(`[Sender][VU ${vu + 1}] Connecting via udp session, sender=${sender.name}, relayer=${relayer.name}, receiver=${receiver.name}`);
 
   const uploadSettings = {
     payloadSize: configuration.payloadSize,
@@ -135,13 +158,10 @@ export function upload(routes: [{ sender: HoprdNode, relayer: HoprdNode, receive
     sessionPath: sender.name + ' => ' + relayer.name + ' => ' + receiver.name
   }
 
- 
-  //console.log(`[Upload][VU ${vu +1}] Opening upload tcp connection to ${listenHost}`)
-  let connection = tcp.connect(listenHost);
-  //console.log(`[Upload][VU ${__VU}] Opened an upload TCP Connection to ${listenHost}`)
-  tcp.writeLn(connection, stringToArrayBuffer(JSON.stringify(uploadSettings)));
+  //console.log(`[Upload][VU ${vu +1}] Opening upload UDP connection to ${listenHost}`)
+  let connection = udp.connect(listenHost);
+  //console.log(`[Upload][VU ${__VU}] Opened an upload UDP Connection to ${listenHost}`)
 
-  //console.log(`[Upload][VU ${vu +1}] Start uploading data`)
   let uploadedDataSize = 0;
   let uploadedSegmentCount = 0;
   const initialStartTime = Date.now();
@@ -149,30 +169,31 @@ export function upload(routes: [{ sender: HoprdNode, relayer: HoprdNode, receive
       while (uploadedDataSize < configuration.payloadSize) {
         const writeStartTime = Date.now();
         const dataSegment = new Uint8Array(configuration.uploadSegmentSize);
-        tcp.write(connection, crypto.getRandomValues(dataSegment).buffer);
-        //console.log(`Upload data with length ${configuration.uploadSegmentSize}`)
+        udp.write(connection, crypto.getRandomValues(dataSegment).buffer);
         uploadedDataSize += dataSegment.length;
         uploadedSegmentCount++;
         //console.log(`[Upload][VU ${__VU}] Uploaded ${uploadedSegmentCount} segments with total data length ${uploadedDataSize / 1024} KB`)
         let writeDuration = (new Date().getTime() - writeStartTime);
         metricSegmentLatency.add(writeDuration, { sender: sender.name, receiver: receiver.name, relayer: relayer.name, action: 'upload' });
         metricDataSent.add(dataSegment.length, {sender: sender.name, receiver: receiver.name, relayer: relayer.name});
-        if (uploadedDataSize >= configuration.payloadSize) { // Finished uploading data
+        sleep(1 / (configuration.uploadThroughput / configuration.uploadSegmentSize));
+      }
+      if (uploadedDataSize >= configuration.payloadSize) {
+          const endSignal = stringToUint8Array(`END`);
+          udp.writeLn(connection, endSignal.buffer);
           let uploadDurationMiliseconds = (new Date().getTime() - initialStartTime);
           let uploadDurationSeconds = uploadDurationMiliseconds / 1000;
           console.log(`[Upload][VU ${__VU}] ${sender.name} uploaded ${(uploadSettings.payloadSize/(1024*1024))} MB in ${uploadDurationSeconds.toFixed(2)} seconds (${(uploadSettings.payloadSize / (uploadDurationSeconds * 1024 * 1024)).toFixed(2)} MB/s) to ${listenHost} through ${relayer.name} => ${receiver.name}`);
           metricDocumentsSucceed.add(1, {job: sender.nodeName, sender: sender.name, receiver: receiver.name, relayer: relayer.name, action: 'upload'});
           metricDocumentLatency.add(uploadDurationMiliseconds, {job: sender.nodeName, sender: sender.name, receiver: receiver.name, relayer: relayer.name, action: 'upload'});
-          break;
-        }
       }
-    } catch (err) {
+  } catch (err) {
       console.error(`[Upload][VU ${vu + 1}] Failed to upload file via [${sender.name}] => [${relayer.name}] => [${receiver.name}]`);
       console.error(`[Upload][VU:${vu + 1}] Error message:`, err);
       metricDocumentsFailed.add(1, {sender: sender.name, receiver: receiver.name, relayer: relayer.name, action: 'upload'});
-    } finally {
-      tcp.close(connection);
-    }
+  } finally {
+      udp.close(connection);
+  }
 }
 
 // The Teardown Function is run once after the Load Test https://docs.k6.io/docs/test-life-cycle
