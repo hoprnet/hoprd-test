@@ -76,23 +76,26 @@ export function download(routes: [{ sender: HoprdNode, relayer: HoprdNode, recei
   //console.log(`[Sender][VU ${vu + 1}] Connecting via udp session, sender=${sender.name}, relayer=${relayer.name}, receiver=${receiver.name}`);
 
   const downloadSettings = {
+    action: 'start',
     payloadSize: configuration.payloadSize,
     segmentSize: configuration.downloadSegmentSize,
     throughput: configuration.downloadThroughput,
     sessionPath: sender.name + ' => ' + relayer.name + ' => ' + receiver.name,
-    iteration: exec.scenario.iterationInTest
+    iteration: exec.scenario.iterationInTest,
+    iterationTimeout: configuration.iterationTimeout * 1000
   }
-
- 
   //console.log(`[Download][VU ${vu +1}] Opening download udp connection to ${listenHost}`)
   let connection = udp.connect(listenHost);
-  console.log(`[Download][VU ${__VU}][ITER ${exec.scenario.iterationInTest}] Opened a downloading UDP Connection to ${listenHost}`)
+  //console.log(`[Download][VU ${__VU}][ITER ${exec.scenario.iterationInTest}] Opened a downloading UDP Connection to ${listenHost}`)
   udp.writeLn(connection, stringToArrayBuffer(JSON.stringify(downloadSettings)));
-
   //console.log(`[Download][VU ${vu +1}] Start downloading data`)
   let downloadedDataSize = 0;
   let downloadedSegmentCount = 0;
   const initialStartTime = Date.now();
+  let timeout = setTimeout(() => {
+      console.warn(`[Download][VU ${__VU}] Timeout reached, stopping download with ${configuration.payloadSize - downloadedDataSize} bytes remaining, sent ${downloadedSegmentCount} of ${configuration.downloadSegmentSize} segments`);
+      metricDocumentsFailed.add(1, {sender: sender.name, receiver: receiver.name, relayer: relayer.name, action: 'download'});
+  }, configuration.iterationTimeout * 1000);
   try {
       while (downloadedDataSize < configuration.payloadSize) {
         const readStartTime = Date.now();
@@ -103,7 +106,7 @@ export function download(routes: [{ sender: HoprdNode, relayer: HoprdNode, recei
           //configuration.downloadSegmentSize = Math.max(configuration.downloadSegmentSize / 2, 512);
           continue;
         }
-        //console.log(`[Download][VU ${__VU}][ITER ${exec.scenario.iterationInTest}] Downloaded ${configuration.downloadSegmentSize} bytes from ${listenHost}`);
+        //console.log(`[Download][VU ${__VU}][ITER ${exec.scenario.iterationInTest}] Downloaded ${downloadedDataSize} bytes from ${listenHost}`);
         const uint8Array = new Uint8Array(chunk);
         downloadedDataSize += uint8Array.length;
         downloadedSegmentCount++;
@@ -111,6 +114,13 @@ export function download(routes: [{ sender: HoprdNode, relayer: HoprdNode, recei
         metricSegmentLatency.add(readDuration, { sender: sender.name, receiver: receiver.name, relayer: relayer.name, action: 'download' });
         metricDataReceived.add(uint8Array.length, {sender: sender.name, receiver: receiver.name, relayer: relayer.name});
       }
+      clearTimeout(timeout);
+      const endSignal = {
+        action: 'end',
+        startTimestamp: initialStartTime,
+        sessionPath: sender.name + ' => ' + relayer.name + ' => ' + receiver.name,
+      }
+      udp.writeLn(connection, stringToArrayBuffer(JSON.stringify(endSignal)));
 
       let downloadDurationMiliseconds = (new Date().getTime() - initialStartTime);
       let downloadDurationSeconds = downloadDurationMiliseconds / 1000;

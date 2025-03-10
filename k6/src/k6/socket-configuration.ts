@@ -11,8 +11,9 @@ export class SocketConfiguration extends K6Configuration {
 
     public protocol;
     public iterationsPerVU: number = 1;
-    public payloadSize: number = 1 * 1024 * 1024; // 10 MB
-    public downloadThroughput: number = 2 * 1024 * 1024; // 2MB/s
+    public payloadSize: number = 1 * 1024 * 1024; // 1 MB
+    public iterationTimeout: number = 60; // 60 seconds
+    public downloadThroughput: number = 1 * 1024 * 1024; // 1MB/s
     public uploadThroughput: number = 1 * 1024 * 1024; // 1MB/s
     public downloadSegmentSize: number;
     public uploadSegmentSize: number;
@@ -74,6 +75,15 @@ export class SocketConfiguration extends K6Configuration {
                 this.payloadSize = payloadSize;
             } else {
                 fail('[ERROR] Invalid K6_PAYLOAD_SIZE value.');
+            }
+        }
+
+        if (__ENV.K6_ITERATION_TIMEOUT) {
+            const iterationTimeout = parseInt(__ENV.K6_ITERATION_TIMEOUT);
+            if (!Number.isNaN(iterationTimeout) && iterationTimeout > 0) {
+                this.iterationTimeout = iterationTimeout;
+            } else {
+                fail('[ERROR] Invalid K6_ITERATION_TIMEOUT value.');
             }
         }
 
@@ -139,12 +149,12 @@ export class SocketConfiguration extends K6Configuration {
                         scenario: "download"
                     }
                 },
-                // upload: {
-                //     exec: "upload",
-                //     tags: {
-                //         scenario: "upload"
-                //     }
-                // }
+                upload: {
+                    exec: "upload",
+                    tags: {
+                        scenario: "upload"
+                    }
+                }
             },
             setupTimeout: "3600000",
             thresholds: {
@@ -164,11 +174,11 @@ export class SocketConfiguration extends K6Configuration {
                             vus: this.dataPool.length * this.vuPerRoute,
                             duration: `${this.duration}m`,
                         },
-                        // upload: {
-                        //     executor: "constant-vus",
-                        //     vus: this.dataPool.length * this.vuPerRoute,
-                        //     duration: `${this.duration}m`,
-                        // }
+                        upload: {
+                            executor: "constant-vus",
+                            vus: this.dataPool.length * this.vuPerRoute,
+                            duration: `${this.duration}m`,
+                        }
                     }
                 });
                 break;

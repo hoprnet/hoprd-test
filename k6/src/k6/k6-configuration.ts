@@ -103,7 +103,13 @@ export class K6Configuration {
                     return relayersData.map(relayer => { return { sender, relayer, receiver }; });
                 })
             })
-            .filter((route) =>
+            // Only include those routes where the sender, relayer and receiver have an open channel
+            .filter((route) => 
+                route.sender.routes.map(entryRoute => entryRoute.name).includes(route.relayer.name) && 
+                route.receiver.routes.map(exitRoute => exitRoute.name).includes(route.relayer.name)
+            )
+            // Only include those routes where the sender, relayer and receiver are not the same
+            .filter((route) => 
                 route.sender.name !== route.receiver.name &&
                 route.sender.name !== route.relayer.name &&
                 route.relayer.name !== route.receiver.name

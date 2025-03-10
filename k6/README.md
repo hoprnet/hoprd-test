@@ -77,17 +77,27 @@ Setting this parameter `K6_VU_PER_ROUTE=2` would open a total of 120 web-socket 
 
 The default throughtput is to send 1 message per second per route(web-socket connections). But the websocket can be stressed also by adding more messages/s by setting the environment variable named `K6_REQUESTS_PER_SECOND_PER_VU` with a higher number
 
-## Running tests
+## Running locally
 
-- Set the environment variable `K6_CLUSTER_NODES` with any of the available clusters if you need other than `core-rotsee` nodes.
-- Set the environment variable `HOPRD_API_TOKEN` with the token setup on the target nodes before execute thes commands.
-- Set the test duration with environment variable `K6_TEST_DURATION` if you need other than 1m duration
-- Set the workload with environment variable: `K6_WORKLOAD_NAME`, if you need other than `constant`
-- Set the topology with environment variable: `K6_TOPOLOGY_NAME`, if you need other than `many2many`
-- Set the vu per route with environment variable: `K6_VU_PER_ROUTE`, if you need other than `1`
-- Set the requests per VU per route with environment variable: `K6_REQUESTS_PER_SECOND_PER_VU`, if you need other than `1`
-- `npm run test:websocket`: Execute the uhttp websocket scenario.
-- `npm run setup:websocket`: Setup the nodes for the websocket scenario
+Setup workspace
+```
+export HOPRD_API_TOKEN=?????
+export K6_CLUSTER_NODES=core-rotsee
+export K6_TOPOLOGY_NAME=receiver
+export K6_WORKLOAD_NAME=sanity-check
+export K6_SKIP_HOPRD_SESSIONS=false
+export K6_ECHO_SERVERS_REPLICAS=4
+export K6_TEST_DURATION=1
+npm run setup
+```
+
+Run tests:
+```
+npm run test:udp
+npm run test:tcp
+```
+
+
 
 ## Running remotely
 

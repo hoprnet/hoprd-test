@@ -32,6 +32,8 @@ spec:
         value: "{{ requestsPerSecondPerVu }}"
       - name: K6_TEST_DURATION
         value: "{{ duration }}"
+      - name: K6_ITERATION_TIMEOUT
+        value: "{{ iterationTimeout }}"
       - name: K6_VU_PER_ROUTE
         value: "{{ vuPerRoute }}"
       - name: K6_PAYLOAD_SIZE
