@@ -8,7 +8,7 @@ declare module 'k6/x/udp' {
 
     export function write(conn: Connection, data: ArrayBuffer): void;
 
-    export function read(conn: Connection, size: number): ArrayBuffer;
+    export function read(conn: Connection, size: number, duration: number): ArrayBuffer;
 
     export function close(conn: Connection): void;
 

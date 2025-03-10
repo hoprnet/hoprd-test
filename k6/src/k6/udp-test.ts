@@ -96,13 +96,13 @@ export function download(routes: [{ sender: HoprdNode, relayer: HoprdNode, recei
   try {
       while (downloadedDataSize < configuration.payloadSize) {
         const readStartTime = Date.now();
-        if (readStartTime - initialStartTime > configuration.iterationTimeout * 1000) {
+        if ((readStartTime - initialStartTime) > configuration.iterationTimeout * 1000) {
           console.warn(`[Download][VU ${__VU}] Timeout reached, stopping download with ${configuration.payloadSize - downloadedDataSize} bytes remaining, sent ${downloadedSegmentCount} of ${configuration.downloadSegmentSize} segments`);
           timeout = true;
           break;
         }
         //console.log(`[Download][VU ${__VU}][ITER ${exec.scenario.iterationInTest}] Downloading ${configuration.downloadSegmentSize} bytes from ${listenHost}`);
-        const chunk = udp.read(connection, configuration.downloadSegmentSize);
+        const chunk = udp.read(connection, configuration.downloadSegmentSize, 1);
         if (!chunk) {
           console.warn(`[Download][VU ${__VU}] Warning: No data received.`);
           //configuration.downloadSegmentSize = Math.max(configuration.downloadSegmentSize / 2, 512);

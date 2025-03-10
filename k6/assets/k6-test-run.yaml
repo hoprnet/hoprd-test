@@ -28,6 +28,8 @@ spec:
         value: {{ topologyName }}
       - name: K6_WORKLOAD_NAME
         value: {{ workloadName }}
+      - name: K6_HOPS
+        value: "{{ hops }}"
       - name: K6_REQUESTS_PER_SECOND_PER_VU
         value: "{{ requestsPerSecondPerVu }}"
       - name: K6_TEST_DURATION
