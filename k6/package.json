@@ -41,7 +41,7 @@
     "test:websocket": "npm run webpack && K6_PROMETHEUS_RW_TREND_AS_NATIVE_HISTOGRAM=true K6_OUT=xk6-prometheus-rw K6_PROMETHEUS_RW_SERVER_URL=https://prometheus.staging.hoprnet.link/api/v1/write ./k6 run ./dist/websocket-test.js",
     "test:tcp": "npm run webpack && K6_PROMETHEUS_RW_TREND_AS_NATIVE_HISTOGRAM=true K6_OUT=xk6-prometheus-rw K6_PROMETHEUS_RW_SERVER_URL=https://prometheus.staging.hoprnet.link/api/v1/write ./k6 run ./dist/tcp-test.js",
     "test:udp": "npm run webpack && K6_PROMETHEUS_RW_TREND_AS_NATIVE_HISTOGRAM=true K6_OUT=xk6-prometheus-rw K6_PROMETHEUS_RW_SERVER_URL=https://prometheus.staging.hoprnet.link/api/v1/write ./k6 run ./dist/udp-test.js",
-    "setup:websocket": "npm run build && node ./dist/setup-environment.js",
+    "setup": "npm run build && node ./dist/setup-environment.js",
     "parse:results": "node parse-results.js test-execution-20240522-113543.json many2many sanity-check 1 test-2.1.0 30"
   },
   "dependencies": {
