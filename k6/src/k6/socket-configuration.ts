@@ -48,14 +48,14 @@ export class SocketConfiguration extends K6Configuration {
         // Generates a random integer between 0 and this.echoServersReplicas (inclusive)    
         let serverNumber = Math.floor(Math.random() * this.echoServersReplicas);
         if (this.protocol === 'tcp') { // Distribute workload between both services
-            listenHost=`echo-service-tcp-${serverNumber}.staging.hoprnet.link`;
+            listenHost = `echo-service-tcp-${serverNumber}.staging.hoprnet.link`;
         } else {
-            listenHost=`echo-service-udp-${serverNumber}.staging.hoprnet.link`;
+            listenHost = `echo-service-udp-${serverNumber}.staging.hoprnet.link`;
         }
         if (action == "download") {
-            port='3002';
+            port = '3002';
         } else {
-            port='3001';
+            port = '3001';
         }
         return `${listenHost}:${port}`;
     }
@@ -130,14 +130,14 @@ export class SocketConfiguration extends K6Configuration {
     }
 
     private deepMerge(target: any, source: any) {
-    for (const key of Object.keys(source)) {
-        if (source[key] instanceof Object && key in target) {
-        Object.assign(source[key], this.deepMerge(target[key], source[key]));
+        for (const key of Object.keys(source)) {
+            if (source[key] instanceof Object && key in target) {
+                Object.assign(source[key], this.deepMerge(target[key], source[key]));
+            }
         }
-    }
 
-    Object.assign(target || {}, source);
-    return target;
+        Object.assign(target || {}, source);
+        return target;
     }
 
     private buildWorkloadOptions(): void {
@@ -166,27 +166,27 @@ export class SocketConfiguration extends K6Configuration {
             }
         };
         switch (this.workload) {
-            case "constant": 
+            case "constant":
             case "sanity-check": {
-                this.workloadOptions  = this.deepMerge(baseWorkload, {
+                this.workloadOptions = this.deepMerge(baseWorkload, {
                     scenarios: {
                         download: {
                             executor: "constant-vus",
                             vus: this.dataPool.length * this.vuPerRoute,
                             duration: `${this.duration}m`,
                         },
-                        upload: {
-                            executor: "constant-vus",
-                            vus: this.dataPool.length * this.vuPerRoute,
-                            duration: `${this.duration}m`,
-                        }
+                        //upload: {
+                        //    executor: "constant-vus",
+                        //    vus: this.dataPool.length * this.vuPerRoute,
+                        //    duration: `${this.duration}m`,
+                        //}
                     }
                 });
                 break;
             }
             case "hysteresis": {
                 const hysteresisDuration = Math.trunc(this.duration / 2);
-                this.workloadOptions  = this.deepMerge(baseWorkload, {
+                this.workloadOptions = this.deepMerge(baseWorkload, {
                     scenarios: {
                         download: {
                             executor: "ramping-vus",
@@ -207,7 +207,7 @@ export class SocketConfiguration extends K6Configuration {
                 break;
             }
             case "incrememental": {
-                this.workloadOptions  = this.deepMerge(baseWorkload, {
+                this.workloadOptions = this.deepMerge(baseWorkload, {
                     scenarios: {
                         download: {
                             executor: "ramping-vus",
