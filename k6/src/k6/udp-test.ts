@@ -84,11 +84,11 @@ export function download(routes: [{ sender: HoprdNode, relayer: HoprdNode, recei
     iteration: exec.scenario.iterationInTest,
     iterationTimeout: configuration.iterationTimeout * 1000
   }
-  //console.log(`[Download][VU ${vu +1}] Opening download udp connection to ${listenHost}`)
-  let connection = udp.connect(listenHost);
-  //console.log(`[Download][VU ${__VU}][ITER ${exec.scenario.iterationInTest}] Opened a downloading UDP Connection to ${listenHost}`)
+  //console.log(`[Download][VU ${__VU}] Opening download udp connection to ${listenHost}`)
+  let connection = udp.connectLocalAddress(listenHost, `0.0.0.0:${10000 + __VU}`, configuration.iterationTimeout);
+  //console.log(`[Download][VU ${__VU}][ITER ${exec.scenario.iterationInTest}] Opened a downloading UDP Connection from ${connection.localAddr()} to ${listenHost}`)
   udp.writeLn(connection, stringToArrayBuffer(JSON.stringify(downloadSettings)));
-  //console.log(`[Download][VU ${vu +1}] Start downloading data`)
+  //console.log(`[Download][VU ${__VU}][ITER ${exec.scenario.iterationInTest}] Start downloading data`)
   let downloadedDataSize = 0;
   let downloadedSegmentCount = 0;
   const initialStartTime = Date.now();
@@ -102,7 +102,7 @@ export function download(routes: [{ sender: HoprdNode, relayer: HoprdNode, recei
           break;
         }
         //console.log(`[Download][VU ${__VU}][ITER ${exec.scenario.iterationInTest}] Downloading ${configuration.downloadSegmentSize} bytes from ${listenHost}`);
-        const chunk = udp.read(connection, configuration.downloadSegmentSize, 1);
+        const chunk = udp.read(connection, configuration.downloadSegmentSize);
         if (!chunk) {
           console.warn(`[Download][VU ${__VU}] Warning: No data received.`);
           //configuration.downloadSegmentSize = Math.max(configuration.downloadSegmentSize / 2, 512);
@@ -133,8 +133,8 @@ export function download(routes: [{ sender: HoprdNode, relayer: HoprdNode, recei
         metricDocumentLatency.add(downloadDurationMiliseconds, {job: sender.nodeName, sender: sender.name, receiver: receiver.name, relayer: relayer.name, action: 'download'});
       }
     } catch (err) {
-      console.error(`[Download][VU ${vu + 1}] Failed to download file via [${sender.name}] => [${relayer.name}] => [${receiver.name}]`);
-      console.error(`[Download][VU:${vu + 1}] Error message:`, err);
+      let downloadDurationSeconds = (new Date().getTime() - initialStartTime) / 1000;
+      console.error(`[Download][VU ${vu + 1}] Failed to  download file after ${downloadDurationSeconds} seconds using path ${sender.name} => ${relayer.name} => ${receiver.name} from ${listenHost}: ${err}`);
       metricDocumentsFailed.add(1, {sender: sender.name, receiver: receiver.name, relayer: relayer.name, action: 'download'});
     } finally {
       udp.close(connection);
