@@ -10,7 +10,7 @@ RUN npm install \
 FROM golang:1.20 as xk6
 
 RUN go install go.k6.io/xk6/cmd/xk6@latest
-RUN xk6 build --with github.com/grafana/xk6-output-prometheus-remote@latest --with github.com/NAlexandrov/xk6-tcp --with github.com/pedrosaraiva/xk6-udp --output /k6
+RUN xk6 build v0.55.0 --with github.com/grafana/xk6-output-prometheus-remote@latest --with github.com/NAlexandrov/xk6-tcp --with github.com/hoprnet/xk6-udp --output /k6
 
 FROM grafana/k6:latest
 
