@@ -9,6 +9,7 @@ export class Route {
 
 export class K6Configuration {
 
+    public executionName: string;
     public clusterNodes: string;
     public topology: string;
     public workload: string;
@@ -23,6 +24,7 @@ export class K6Configuration {
         this.loadJSONFiles();
         if (__VU === 1) { // Only print once to avoid spamming the console
             //dataPool.forEach((route: any) => console.log(`[Setup] DataPool sender ${route.sender.name} -> ${route.relayer.name} -> ${route.receiver.name}`));
+            console.log(`[Setup] Execution name(K6_EXECUTION_NAME): ${this.executionName}`);
             console.log(`[Setup] Cluster nodes(K6_CLUSTER_NODES): ${this.clusterNodes}`);
             console.log(`[Setup] Workload(K6_WORKLOAD_NAME): ${this.workload}`);
             console.log(`[Setup] Topology(K6_TOPOLOGY_NAME): ${this.topology}`);
@@ -42,6 +44,7 @@ export class K6Configuration {
     }
 
     private loadK6EnvironmentVariables(): void {
+        this.executionName = __ENV.K6_EXECUTION_NAME || "local";
         this.clusterNodes = __ENV.K6_CLUSTER_NODES || "core-rotsee";
         this.topology = __ENV.K6_TOPOLOGY_NAME || "many2many";
         this.workload = __ENV.K6_WORKLOAD_NAME || "sanity-check";

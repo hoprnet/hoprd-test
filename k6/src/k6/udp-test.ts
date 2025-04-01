@@ -42,15 +42,20 @@ export function setup() {
   }
 
   const executionInfoMetricLabels = { 
+    executionName: configuration.executionName,
     duration: configuration.duration.toString(),
     version: routes[0].sender.getVersion(), 
     network: routes[0].sender.getNetwork(),
+    cluster: configuration.clusterNodes,
     topology: configuration.topology,
     workload: configuration.workload,
     hops: configuration.hops.toString(),
     routes: routes.length.toString(),
     vu: configuration.vuPerRoute.toString(), 
-    protocol: 'udp'
+    protocol: 'udp',
+    payloadSize: (configuration.payloadSize / (1024 * 1024)).toString(),
+    downloadThroughput: (configuration.downloadThroughput / (1024 * 1024)).toFixed(1),
+    uploadThroughput: (configuration.uploadThroughput / (1024 * 1024)).toFixed(1),
   };
   metricExecutionInfoMetric.add(Date.now(), executionInfoMetricLabels);
   
@@ -85,8 +90,8 @@ export function download(routes: [{ sender: HoprdNode, relayer: HoprdNode, recei
     iterationTimeout: configuration.iterationTimeout * 1000
   }
   //console.log(`[Download][VU ${__VU}] Opening download udp connection to ${listenHost}`)
-  let connection = udp.connectLocalAddress(listenHost, `0.0.0.0:${10000 + __VU}`, configuration.iterationTimeout);
-  //console.log(`[Download][VU ${__VU}][ITER ${exec.scenario.iterationInTest}] Opened a downloading UDP Connection from ${connection.localAddr()} to ${listenHost}`)
+  let connection = udp.connectLocalAddress(listenHost, `${configuration.runnerIP}:${10000 + __VU}`, configuration.iterationTimeout);
+  console.log(`[Download][VU ${__VU}][ITER ${exec.scenario.iterationInTest}] Opened a downloading UDP Connection from ${connection.localAddr()} to ${listenHost}`)
   udp.writeLn(connection, stringToArrayBuffer(JSON.stringify(downloadSettings)));
   //console.log(`[Download][VU ${__VU}][ITER ${exec.scenario.iterationInTest}] Start downloading data`)
   let downloadedDataSize = 0;

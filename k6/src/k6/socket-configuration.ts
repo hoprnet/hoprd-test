@@ -18,6 +18,7 @@ export class SocketConfiguration extends K6Configuration {
     public downloadSegmentSize: number;
     public uploadSegmentSize: number;
     private echoServersReplicas: number = 1;
+    public runnerIP: string;
 
     public constructor(protocol: string) {
         super();
@@ -127,6 +128,12 @@ export class SocketConfiguration extends K6Configuration {
         } else {
             this.uploadSegmentSize = this.protocol === 'tcp' ? 64 * 1024 : 1400; // Default value of 64KB for TCP and 1472 for UDP
         }
+
+        if (__ENV.K6_RUNNER_IP) {
+            this.runnerIP = __ENV.K6_RUNNER_IP;
+        } else {
+            this.runnerIP = '0.0.0.0';
+        }
     }
 
     private deepMerge(target: any, source: any) {
@@ -163,7 +170,8 @@ export class SocketConfiguration extends K6Configuration {
                 hopr_documents_failed: ["count<=0"],
                 hopr_segment_latency: ["avg<1", "p(90)<2", "p(95)<3"],
                 hopr_document_latency: ["avg<6000", "p(90)<7000", "p(95)<8000"]
-            }
+            },
+            summaryTrendStats: ['avg', 'min', 'max', 'p(90)', 'p(95)']
         };
         switch (this.workload) {
             case "constant": 

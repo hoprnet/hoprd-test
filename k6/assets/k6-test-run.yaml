@@ -7,9 +7,10 @@ metadata:
 spec:
   parallelism: 1
   script:
-    localFile: /app/hoprnet/{{ testName }}-test.js
+    localFile: /app/hoprnet/{{ testScript }}-test.js
   separate: true
-  arguments: --tag testid={{ testid }} --summary-export=/test-results/k6/test-execution-$(date +%Y%m%d-%H%M%S).json
+  arguments: --tag testid={{ executionName }}
+  # --summary-export=/test-results/k6/test-execution-$(date +%Y%m%d-%H%M%S).json
   runner:
     image: europe-west3-docker.pkg.dev/hoprassociation/docker-images/hoprd-k6:latest
     securityContext:
@@ -52,6 +53,10 @@ spec:
         value: "false"
       - name: K6_ECHO_SERVERS_REPLICAS
         value: "4"
+      - name: K6_RUNNER_IP
+        valueFrom:
+          fieldRef:
+            fieldPath: status.podIP
       - name: HOPRD_API_TOKEN
         valueFrom:
           secretKeyRef:
@@ -63,10 +68,3 @@ spec:
         value: 'true'
       - name: K6_OUT
         value: xk6-prometheus-rw
-    volumes:
-      - name: test-results
-        persistentVolumeClaim:
-          claimName: test-results
-    volumeMounts:
-      - name: test-results
-        mountPath: /test-results/k6
