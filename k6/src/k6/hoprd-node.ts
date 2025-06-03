@@ -13,7 +13,6 @@ export class HoprdNode {
   public isReceiver: boolean;
   public peerAddress: string;
   public httpParams: RefinedParams<ResponseType>;
-  public peerId: string;
 
   constructor(data) {
     this.name = data.name;
@@ -51,7 +50,6 @@ export class HoprdNode {
     if (response.status === 200) {
       const addresses = JSON.parse(response.body);
       this.peerAddress = addresses.native;
-      this.peerId = addresses.hopr;
     } else {
       console.error(`Response: ${response.body}`);
       console.error(`Response status: ${response.status}`);
@@ -86,14 +84,14 @@ export class HoprdNode {
   }
 
 
-  public openSession(relayer: HoprdNode, receiver: HoprdNode, protocol: string, target: string): string {
+  public openSession(receiver: HoprdNode, protocol: string, target: string): string {
     if (__ENV.K6_SKIP_HOPRD_SESSIONS === 'true') {
       return target;
     } else {
       const url = `${this.url}/session/${protocol}`;
       let listenHost = this.getSessionRequest(url, protocol, target);
       if (listenHost == '') {
-        listenHost = this.openSessionRequest(url, relayer, receiver, target);
+        listenHost = this.openSessionRequest(url, receiver, target);
       }
       return listenHost;
     }
@@ -124,12 +122,17 @@ export class HoprdNode {
     }
   }
 
-  private openSessionRequest(url: string, relayer: HoprdNode, receiver: HoprdNode, target: string): string {
+  private openSessionRequest(url: string, receiver: HoprdNode, target: string): string {
         const payload = JSON.stringify({
-            destination: receiver.peerId,
+            destination: receiver.peerAddress,
             target: { Plain: `${target}` },
             capabilities: ["Segmentation", "Retransmission"],
-            path: { IntermediatePath: [relayer.peerId]}
+            forwardPath: {
+              Hops: 1
+            },
+            returnPath: {
+              Hops: 1
+            }
           });
         //console.log(`[Setup] Opening new session: ${payload}`);
         const postResponse: RefinedResponse<"text"> = http.post(url, payload, this.httpParams);
@@ -141,7 +144,7 @@ export class HoprdNode {
           } else {
             listenHost = `${session.ip}:${session.port}`;
           }
-          console.log(`[Setup] New session opened ${this.name} => ${relayer.name} => ${receiver.name} listening at ${listenHost} to target ${target}`);
+          console.log(`[Setup] New session opened ${this.name} => ${receiver.name} listening at ${listenHost} to target ${target}`);
           return listenHost;
         } else {
           console.error(`Response: ${postResponse.body}`);

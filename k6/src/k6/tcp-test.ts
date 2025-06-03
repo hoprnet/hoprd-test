@@ -54,13 +54,13 @@ export function setup() {
   metricExecutionInfoMetric.add(Date.now(), executionInfoMetricLabels);
   
   return routes.map((route) => {
-  return {
-    sender: route.sender,
-    relayer: route.relayer,
-    receiver: route.receiver,
-    downloadSession: route.sender.openSession(route.relayer, route.receiver, "tcp", configuration.getTargetDestination('download')),
-    uploadSession: route.sender.openSession(route.relayer, route.receiver, "tcp", configuration.getTargetDestination('upload'))
-    }
+    return {
+      sender: route.sender,
+      relayer: route.relayer,
+      receiver: route.receiver,
+      downloadSession: route.sender.openSession(route.receiver, "tcp", configuration.getTargetDestination('download')),
+      uploadSession: route.sender.openSession(route.receiver, "tcp", configuration.getTargetDestination('upload'))
+      }
   });
 }
 

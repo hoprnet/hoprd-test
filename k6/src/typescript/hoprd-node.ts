@@ -1,5 +1,5 @@
 import { GetChannelsResponseType, GetInfoResponseType, HoprSDK } from "@hoprnet/hopr-sdk";
-import { ConnectivityStatus, TOKEN_DECIMALS, TOKEN_NATIVE_MIN } from "./hoprd.types";
+import { ConnectivityStatus, TOKEN_NATIVE_MIN } from "./hoprd.types";
 import WebSocket from "ws";
 
 export class HoprdNode {
@@ -11,7 +11,6 @@ export class HoprdNode {
   };
   private sdk: HoprSDK;
   public nativeAddress?: string;
-  public peerId?: string;
   public channels?: GetChannelsResponseType
 
 
@@ -31,7 +30,6 @@ export class HoprdNode {
   public async init() {
     await this.sdk.api.account.getAddresses(this.basePayload).then((addresses) => {
       this.nativeAddress = addresses.native;
-      this.peerId = addresses.hopr
     }).catch((error: any) => {
       console.error(`[ERROR] Unable to get node peerAddress for '${this.data.name}'`)
       console.error("[ERROR]", error)
@@ -53,8 +51,8 @@ export class HoprdNode {
   // Check balance
   private async checkBalance(): Promise<boolean> {
     return this.sdk.api.account.getBalances(this.basePayload).then((balance) => {
-      if ((Number(balance.native) / Math.pow(10, TOKEN_DECIMALS)) < TOKEN_NATIVE_MIN) {
-        console.error(`Node '${this.data.name} does not have enough native tokens (current balance is ${balance.native})`)
+      if (Number(balance.native)  < TOKEN_NATIVE_MIN) {
+        console.error(`Node '${this.data.name} does not have enough native tokens (current balance is ${Number(balance.native)})`)
         return false
       }
       return true
@@ -83,12 +81,12 @@ export class HoprdNode {
       })
   }
 
-  public async openChannel(peerAddress: string, nodeName: string): Promise<{ channelId: string, targetNode: string, desiredStatus: string }> {
-    if (peerAddress == '') {
+  public async openChannel(destination: string, nodeName: string): Promise<{ channelId: string, targetNode: string, desiredStatus: string }> {
+    if (destination == '') {
       console.error(`[ERROR] Unable to find peer address for node '${nodeName}' in routes for node ${this.data.name}`)
       throw new Error(`Peer address not found for node '${nodeName}'`);
     }
-    const openChannelPayload = Object.assign(this.basePayload, { peerAddress, amount: "100000000000000000", timeout: 1000 * 60 * 3 });
+    const openChannelPayload = Object.assign(this.basePayload, { destination, amount: "100000000000000000", timeout: 1000 * 60 * 3 });
     console.log(`[INFO] Openning outgoing channel from ${this.data.name} to ${nodeName} with payload ${JSON.stringify(openChannelPayload)}`)
     return this.sdk.api.channels.openChannel(openChannelPayload).then(
       (newChannel: any) => {
@@ -208,13 +206,12 @@ export class HoprdNode {
     return (await waitingChannel)
   }
 
-  public async sendMessage(relayer: HoprdNode, receiver: HoprdNode): Promise<boolean> {
+  public async sendMessage(receiver: HoprdNode): Promise<boolean> {
     let url = this.basePayload.apiEndpoint.replace("http", "ws") + '/api/v3/session/websocket?';
     url += 'capabilities=Segmentation&capabilities=Retransmission&';
     url += `target=echo-service-http.staging.hoprnet.link:80&`;
     url += `hops=1&`;
-    url += `IntermediatePath=${relayer.peerId}&`;
-    url += `destination=${receiver.peerId}&`;
+    url += `destination=${receiver.nativeAddress}&`;
     url += 'protocol=tcp';
     url += '&apiToken=' + this.basePayload.apiToken;
     const ws = new WebSocket(url);
@@ -225,7 +222,7 @@ export class HoprdNode {
     return new Promise((resolve, reject) => {
       // Event: Connection open
       ws.onopen = function open() {
-        //console.log(`Open websocket connection, sender=${sender}, relayer=${relayer.data.name}, receiver=${receiver.data.name}`);
+        //console.log(`Open websocket connection, sender=${sender}, receiver=${receiver.data.name}`);
         ws.send(messagePayload);
       };
 
@@ -233,10 +230,10 @@ export class HoprdNode {
       ws.onmessage = function incoming(event: any) {
         if (event.data instanceof Buffer) {
           sent = true;
-          console.log(`[INFO] Route sender=${sender}, relayer=${relayer.data.name}, receiver=${receiver.data.name} works`);
+          console.log(`[INFO] Route sender=${sender}, receiver=${receiver.data.name} works`);
           resolve(true);
         } else {
-          console.error(`Message failed, sender=${sender}, relayer=${relayer.data.name}, receiver=${receiver.data.name}`);
+          console.error(`Message failed, sender=${sender}, receiver=${receiver.data.name}`);
           resolve(false);
         }
         ws.close(); // Close connection after receiving the response
@@ -244,7 +241,7 @@ export class HoprdNode {
 
       // Event: Error
       ws.onerror = function error(error: any) {
-        console.error(`Message failed, sender=${sender}, relayer=${relayer.data.name}, receiver=${receiver.data.name}`);
+        console.error(`Message failed, sender=${sender}, receiver=${receiver.data.name}`);
         console.error("WebSocket error:", error);
         resolve(false);
       };
@@ -256,7 +253,7 @@ export class HoprdNode {
 
       setTimeout(() => {
         if (!sent) {
-          console.error(`Could not send message, sender=${sender}, relayer=${relayer.data.name}, receiver=${receiver.data.name}`);
+          console.error(`Could not send message, sender=${sender}, receiver=${receiver.data.name}`);
           reject(false);
           ws.close();
         }

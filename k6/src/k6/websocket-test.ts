@@ -70,8 +70,7 @@ export function sendMessages(routes: [{ sender: HoprdNode, relayer: HoprdNode, r
   url += 'capabilities=Segmentation&capabilities=Retransmission&';
   url += `target=${configuration.targetDestination}&`;
   url += `hops=${configuration.hops}&`;
-  url += `IntermediatePath=${relayer.peerId}&`;
-  url += `destination=${receiver.peerId}&`;
+  url += `destination=${receiver.peerAddress}&`;
   url += 'protocol=tcp'; 
 
   //url = 'ws://localhost:8888';

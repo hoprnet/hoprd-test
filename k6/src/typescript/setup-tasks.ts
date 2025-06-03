@@ -62,12 +62,12 @@ export async function sendTestMessages(nodes: HoprdNode[]) {
     })
   })
   .filter((route) =>
-    route.sender.peerId !== route.receiver.peerId &&
-    route.sender.peerId !== route.relayer.peerId &&
-    route.relayer.peerId !== route.receiver.peerId
+    route.sender.nativeAddress !== route.receiver.nativeAddress &&
+    route.sender.nativeAddress !== route.relayer.nativeAddress &&
+    route.relayer.nativeAddress !== route.receiver.nativeAddress
   )
   .forEach( (route) => {
-    messagesRequests.push(route.sender.sendMessage(route.relayer, route.receiver));
+    messagesRequests.push(route.sender.sendMessage(route.receiver));
   });
 
   const messagesSent: boolean[] = await Promise.all(messagesRequests);
