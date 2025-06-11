@@ -107,7 +107,7 @@ export class HoprdNode {
       //console.log(`[Setup] Opened sessions: ${JSON.stringify(openedSession)}`);
       if (openedSession.length == 1) {
         let listenHost;
-        if (openedSession[0].ip === '0.0.0.0') {
+        if (openedSession[0].ip === '0.0.0.0') { // In Kubernetes
           listenHost=`${this.p2p}:${openedSession[0].port}`;
         } else {
           listenHost = `${openedSession[0].ip}:${openedSession[0].port}`;
@@ -136,7 +136,7 @@ export class HoprdNode {
         if (postResponse.status === 200) {
           const session = JSON.parse(postResponse.body);
           let listenHost;
-          if (session.ip === '0.0.0.0') {
+          if (session.ip === '0.0.0.0') { // In Kubernetes
             listenHost=`${this.p2p}:${session.port}`;
           } else {
             listenHost = `${session.ip}:${session.port}`;
@@ -144,8 +144,8 @@ export class HoprdNode {
           console.log(`[Setup] New session opened ${this.name} => ${relayer.name} => ${receiver.name} listening at ${listenHost} to target ${target}`);
           return listenHost;
         } else {
-          console.error(`Response: ${postResponse.body}`);
-          console.error(`Response status: ${postResponse.status}`);
+          console.error(`Open session response: ${postResponse.body}`);
+          console.error(`Open session response status: ${postResponse.status}`);
           fail(`Unable to open session for '${this.name}'`);
         }
   }
