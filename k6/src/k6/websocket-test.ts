@@ -24,13 +24,13 @@ const executionInfoMetric = new Gauge("hopr_execution_info");
 
 // The Setup Function is run once before the Load Test https://docs.k6.io/docs/test-life-cycle
 export function setup() {
-  let routes: { sender: HoprdNode, relayer: HoprdNode, receiver: HoprdNode }[] = [];
+  let routes: { entryNode: HoprdNode, relayerNode: HoprdNode, exitNode: HoprdNode }[] = [];
   try {
     routes = configuration.dataPool.map((route) => {
       return { 
-        sender: new HoprdNode(route.sender),
-        relayer: new HoprdNode(route.relayer),
-        receiver: new HoprdNode(route.receiver) 
+        entryNode: new HoprdNode(route.entryNode),
+        relayerNode: new HoprdNode(route.relayerNode),
+        exitNode: new HoprdNode(route.exitNode) 
         };
     });
   } catch (error) {
@@ -41,8 +41,8 @@ export function setup() {
 
   const executionInfoMetricLabels = { 
     duration: configuration.duration.toString(),
-    version: routes[0].sender.getVersion(), 
-    network: routes[0].sender.getNetwork(),
+    version: routes[0].entryNode.getVersion(), 
+    network: routes[0].entryNode.getNetwork(),
     topology: configuration.topology,
     workload: configuration.workload,
     hops: configuration.hops.toString(),
@@ -56,60 +56,60 @@ export function setup() {
 }
 
 // Scenario to send messages
-export function sendMessages(routes: [{ sender: HoprdNode, relayer: HoprdNode, receiver: HoprdNode }]) {
+export function sendMessages(routes: [{ entryNode: HoprdNode, relayerNode: HoprdNode, exitNode: HoprdNode }]) {
 
   const vu = Math.ceil((__VU - 1) % routes.length);
-  const sender = routes[vu].sender;
-  const relayer = routes[vu].relayer;
-  const receiver = routes[vu].receiver;
+  const entryNode = routes[vu].entryNode;
+  const relayerNode = routes[vu].relayerNode;
+  const exitNode = routes[vu].exitNode;
   let websocketOpened = false;
-  //console.log(`VU[${senderNodeIndex}] on scenario[${execution.scenario.name}]`)
+  //console.log(`VU[${vu + 1}] on scenario[${execution.scenario.name}]`)
 
 
-  let url = sender.url.replace("http", "ws") + '/session/websocket?';
+  let url = entryNode.url.replace("http", "ws") + '/session/websocket?';
   url += 'capabilities=Segmentation&capabilities=Retransmission&';
   url += `target=${configuration.targetDestination}&`;
   url += `hops=${configuration.hops}&`;
-  url += `destination=${receiver.peerAddress}&`;
+  url += `destination=${exitNode.peerAddress}&`;
   url += 'protocol=tcp'; 
 
   //url = 'ws://localhost:8888';
   //url = 'ws://k6-echo.k6-operator-system.svc:8888';
   //console.log(`Url: ${url}`);
 
-  //Open websocket connection to receiver node
-  //console.log(`[Sender][VU ${vu + 1}] Connecting via websocket, sender=${sender.name}, relayer=${relayer.name}, receiver=${receiver.name}`);
+  //Open websocket connection to exit node
+  //console.log(`[EntryNode][VU ${vu + 1}] Connecting via websocket, entryNode=${entryNode.name}, relayerNode=${relayerNode.name}, exitNode=${exitNode.name}`);
   let bufferPartialMessage = ""; // Accumulates partial messages
-  const websocketResponse = ws.connect(url,sender.httpParams,function (socket) {
+  const websocketResponse = ws.connect(url,entryNode.httpParams,function (socket) {
       socket.on("open", () => {
         websocketOpened=true;
-        console.log(`[Sender][VU ${vu + 1}] Connected via websocket, sender=${sender.name}, relayer=${relayer.name}, receiver=${receiver.name}`);
+        console.log(`[EntryNode][VU ${vu + 1}] Connected via websocket, entryNode=${entryNode.name}, relayerNode=${relayerNode.name}, exitNode=${exitNode.name}`);
         let counter = 0;
         socket.setInterval(function timeout() {
           if (__ENV.K6_WEBSOCKET_DISCONNECTED === "true") {
-            console.log(`[Sender][VU:${vu + 1}] Websocket disconnected. Stopping the interval`);
+            console.log(`[EntryNode][VU:${vu + 1}] Websocket disconnected. Stopping the interval`);
             socket.close();
             return;
           }
           try {
             const messagePayload: ArrayBuffer = buildHTTPMessagePayload(configuration.targetDestination, counter++);
-            //console.log(`[Sender][VU:${vu + 1}] Sending ${k6Configuration.hops} hops message from [${sender.name}] through [${relayer.name}] to [${receiver.name}]`);
+            //console.log(`[EntryNode][VU:${vu + 1}] Sending ${k6Configuration.hops} hops message from [${entryNode.name}] through [${relayerNode.name}] to [${exitNode.name}]`);
             socket.sendBinary(messagePayload);
-            dataSent.add(messagePayload.byteLength, { sender: sender.name, receiver: receiver.name, relayer: relayer.name });
-            messageRequestsSucceed.add(1, { sender: sender.name, receiver: receiver.name, relayer: relayer.name });
-          } catch (error) {       
-            console.error(`[Sender][VU ${vu + 1}] Failed to send message from [${sender.name}] through [${relayer.name}] to [${receiver.name}]`);
-            console.error(`[Sender][VU:${vu + 1}] Failed to send message:`, error);
-            messageRequestsFailed.add(1, { sender: sender.name, receiver: receiver.name, relayer: relayer.name});
+            dataSent.add(messagePayload.byteLength, { entryNode: entryNode.name, exitNode: exitNode.name, relayerNode: relayerNode.name });
+            messageRequestsSucceed.add(1, { entryNode: entryNode.name, exitNode: exitNode.name, relayerNode: relayerNode.name });
+          } catch (error) {
+            console.error(`[EntryNode][VU ${vu + 1}] Failed to send message from [${entryNode.name}] through [${relayerNode.name}] to [${exitNode.name}]`);
+            console.error(`[EntryNode][VU:${vu + 1}] Failed to send message:`, error);
+            messageRequestsFailed.add(1, { entryNode: entryNode.name, exitNode: exitNode.name, relayerNode: relayerNode.name });
           }
         }, configuration.messageDelay);
       });
       socket.on('binaryMessage', (data: ArrayBuffer) => {
         const receivedData = arrayBufferToString(new Uint8Array(data)).trim();
         if (bufferPartialMessage.length > 0) {
-          //console.debug(`[Sender][VU ${vu + 1}][Begin] Partial message received on ${sender.name} with data: ${bufferPartialMessage}`);
+          //console.debug(`[EntryNode][VU ${vu + 1}][Begin] Partial message received on ${entryNode.name} with data: ${bufferPartialMessage}`);
           bufferPartialMessage += receivedData;
-          //console.debug(`[Sender][VU ${vu + 1}][Parsed] Partial message received on ${sender.name} with data: ${bufferPartialMessage}`);
+          //console.debug(`[EntryNode][VU ${vu + 1}][Parsed] Partial message received on ${entryNode.name} with data: ${bufferPartialMessage}`);
         } else {
           bufferPartialMessage = receivedData;
         }
@@ -117,42 +117,42 @@ export function sendMessages(routes: [{ sender: HoprdNode, relayer: HoprdNode, r
           const {startTimes, partialMessage } = unpackMessagePayload(bufferPartialMessage, configuration.targetDestination);
           startTimes.forEach((startTime) => {
             let duration = new Date().getTime() - parseInt(startTime);
-            messageLatency.add(duration, { sender: sender.name, receiver: receiver.name, relayer: relayer.name});
-            //console.log(`[Sender] Message received on entry node ${sender.name} relayed from ${relayer.name} using exit node ${receiver.name} with latency ${duration} ms`);
-            sentMessagesSucceed.add(1, {job: sender.nodeName, sender: sender.name, receiver: receiver.name, relayer: relayer.name});
-            dataReceived.add(data.byteLength, {sender: sender.name, receiver: receiver.name, relayer: relayer.name});
+            messageLatency.add(duration, { entryNode: entryNode.name, exitNode: exitNode.name, relayerNode: relayerNode.name });
+            //console.log(`[EntryNode][VU ${vu + 1}] Message received on entry node ${entryNode.name} relayed from ${relayerNode.name} using exit node ${exitNode.name} with latency ${duration} ms`);
+            sentMessagesSucceed.add(1, { job: entryNode.nodeName, entryNode: entryNode.name, exitNode: exitNode.name, relayerNode: relayerNode.name });
+            dataReceived.add(data.byteLength, { entryNode: entryNode.name, exitNode: exitNode.name, relayerNode: relayerNode.name });
           });
           bufferPartialMessage = partialMessage; // Update the buffer with the partial message
           if (partialMessage.length > 0) {
-            //console.debug(`[Sender][VU ${vu + 1}][End] Partial message received on ${sender.name} with data: ${partialMessage}`);
+            //console.debug(`[EntryNode][VU ${vu + 1}][End] Partial message received on ${entryNode.name} with data: ${partialMessage}`);
           }
         } catch (error) {
-          console.error(`[Sender][VU ${vu + 1}] Message received on ${sender.name} with incomplete data bufferPartialMessage=${bufferPartialMessage}`);
-          console.error(`[Sender][VU ${vu + 1}] Message received on ${sender.name} with incomplete data data=${receivedData}`);
-          sentMessagesFailed.add(1, {sender: sender.name, receiver: receiver.name, relayer: relayer.name});
-          fail(`[Sender] Message received on ${sender.name} with incomplete data`);
+          console.error(`[EntryNode][VU ${vu + 1}] Message received on ${entryNode.name} with incomplete data bufferPartialMessage=${bufferPartialMessage}`);
+          console.error(`[EntryNode][VU ${vu + 1}] Message received on ${entryNode.name} with incomplete data data=${receivedData}`);
+          sentMessagesFailed.add(1, { entryNode: entryNode.name, exitNode: exitNode.name, relayerNode: relayerNode.name });
+          fail(`[EntryNode] Message received on ${entryNode.name} with incomplete data`);
         }
       });
 
       socket.on("error", (error) => {
         __ENV.K6_WEBSOCKET_DISCONNECTED = "true";
-        console.error(`[Sender] Node ${sender.name} replied with a websocket error:`, error);
-        fail(`[Sender] Node ${sender.name} replied with a websocket error: ${error}`);
+        console.error(`[EntryNode] Node ${entryNode.name} replied with a websocket error:`, error);
+        fail(`[EntryNode] Node ${entryNode.name} replied with a websocket error: ${error}`);
       });
       socket.on("close", (errorCode: any) => {
         __ENV.K6_WEBSOCKET_DISCONNECTED = "true";
-        console.log(`[Sender] Disconnected via websocket from node ${sender.name} due to error code ${errorCode} at ${new Date().toISOString()}`,
+        console.log(`[EntryNode] Disconnected via websocket from node ${entryNode.name} due to error code ${errorCode} at ${new Date().toISOString()}`,
         );
       });
     },
   );
   check(websocketResponse, { "status is 101": (r) => r && r.status === 101 });
   if (!websocketOpened) {
-    fail(`Failed to open a websocket on ${sender.name} to ${receiver.name} trying again`);
+    fail(`Failed to open a websocket on ${entryNode.name} to ${exitNode.name} trying again`);
   }
 }
 
 // The Teardown Function is run once after the Load Test https://docs.k6.io/docs/test-life-cycle
-export function teardown(routes: [{ sender: HoprdNode, relayer: HoprdNode, receiver: HoprdNode }]) {
-  console.log("[Teardown] Load test finished",);
+export function teardown(routes: [{ entryNode: HoprdNode, relayerNode: HoprdNode, exitNode: HoprdNode }]) {
+  console.log("[Teardown] Load test finished");
 }

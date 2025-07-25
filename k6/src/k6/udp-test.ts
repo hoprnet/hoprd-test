@@ -27,13 +27,13 @@ const metricDocumentLatency = new Trend("hopr_document_latency"); // Latency dis
 
 // The Setup Function is run once before the Load Test https://docs.k6.io/docs/test-life-cycle
 export function setup() {
-  let routes: { sender: HoprdNode, relayer: HoprdNode, receiver: HoprdNode }[] = [];
+  let routes: { entryNode: HoprdNode, relayerNode: HoprdNode, exitNode: HoprdNode }[] = [];
   try {
     routes = configuration.dataPool.map((route) => {
       return { 
-        sender: new HoprdNode(route.sender),
-        relayer: new HoprdNode(route.relayer),
-        receiver: new HoprdNode(route.receiver)
+        entryNode: new HoprdNode(route.entryNode),
+        relayerNode: new HoprdNode(route.relayerNode),
+        exitNode: new HoprdNode(route.exitNode)
         };
     });
   } catch (error) {
@@ -44,8 +44,8 @@ export function setup() {
   const executionInfoMetricLabels = { 
     executionName: configuration.executionName,
     duration: configuration.duration.toString(),
-    version: routes[0].sender.getVersion(), 
-    network: routes[0].sender.getNetwork(),
+    version: routes[0].entryNode.getVersion(), 
+    network: routes[0].entryNode.getNetwork(),
     cluster: configuration.clusterNodes,
     topology: configuration.topology,
     workload: configuration.workload,
@@ -61,31 +61,31 @@ export function setup() {
   
   return routes.map((route) => {
     return {
-      sender: route.sender,
-      relayer: route.relayer,
-      receiver: route.receiver,
-      downloadSession: route.sender.openSession(route.receiver, "udp", configuration.getTargetDestination('download')),
-      uploadSession: route.sender.openSession(route.receiver, "udp", configuration.getTargetDestination('upload'))
+      entryNode: route.entryNode,
+      relayerNode: route.relayerNode,
+      exitNode: route.exitNode,
+      downloadSession: route.entryNode.openSession(route.exitNode, "udp", configuration.getTargetDestination('download')),
+      uploadSession: route.entryNode.openSession(route.exitNode, "udp", configuration.getTargetDestination('upload'))
       }
   });
 }
 
 // Scenario to download data
-export function download(routes: [{ sender: HoprdNode, relayer: HoprdNode, receiver: HoprdNode, downloadSession: string }]) {
+export function download(routes: [{ entryNode: HoprdNode, relayerNode: HoprdNode, exitNode: HoprdNode, downloadSession: string }]) {
 
   const vu = Math.ceil((__VU - 1) % routes.length);
-  const sender = routes[vu].sender;
-  const relayer = routes[vu].relayer;
-  const receiver = routes[vu].receiver;
+  const entryNode = routes[vu].entryNode;
+  const relayerNode = routes[vu].relayerNode;
+  const exitNode = routes[vu].exitNode;
   const listenHost = routes[vu].downloadSession;
-  //console.log(`[Sender][VU ${vu + 1}] Connecting via udp session, sender=${sender.name}, relayer=${relayer.name}, receiver=${receiver.name}`);
+  //console.log(`[EntryNode][VU ${vu + 1}] Connecting via udp session, entryNode=${entryNode.name}, relayerNode=${relayerNode.name}, exitNode=${exitNode.name}`);
 
   const downloadSettings = {
     action: 'start',
     payloadSize: configuration.payloadSize,
     segmentSize: configuration.downloadSegmentSize,
     throughput: configuration.downloadThroughput,
-    sessionPath: sender.name + ' => ' + relayer.name + ' => ' + receiver.name,
+    sessionPath: entryNode.name + ' => ' + relayerNode.name + ' => ' + exitNode.name,
     iteration: exec.scenario.iterationInTest,
     iterationTimeout: configuration.iterationTimeout * 1000
   }
@@ -118,49 +118,49 @@ export function download(routes: [{ sender: HoprdNode, relayer: HoprdNode, recei
         downloadedDataSize += uint8Array.length;
         downloadedSegmentCount++;
         let readDuration = (new Date().getTime() - readStartTime);
-        metricSegmentLatency.add(readDuration, { sender: sender.name, receiver: receiver.name, relayer: relayer.name, action: 'download' });
-        metricDataReceived.add(uint8Array.length, {sender: sender.name, receiver: receiver.name, relayer: relayer.name});
+        metricSegmentLatency.add(readDuration, { entryNode: entryNode.name, exitNode: exitNode.name, relayerNode: relayerNode.name, action: 'download' });
+        metricDataReceived.add(uint8Array.length, {entryNode: entryNode.name, exitNode: exitNode.name, relayerNode: relayerNode.name});
       }
       const endSignal = {
         action: 'end',
         startTimestamp: initialStartTime,
-        sessionPath: sender.name + ' => ' + relayer.name + ' => ' + receiver.name,
+        sessionPath: entryNode.name + ' => ' + relayerNode.name + ' => ' + exitNode.name,
       }
       udp.writeLn(connection, stringToArrayBuffer(JSON.stringify(endSignal)));
       if (timeout) {
-        metricDocumentsFailed.add(1, {sender: sender.name, receiver: receiver.name, relayer: relayer.name, action: 'download'});
+        metricDocumentsFailed.add(1, {entryNode: entryNode.name, exitNode: exitNode.name, relayerNode: relayerNode.name, action: 'download'});
         return;
       } else {
         let downloadDurationMiliseconds = (new Date().getTime() - initialStartTime);
         let downloadDurationSeconds = downloadDurationMiliseconds / 1000;
-        console.log(`[Download][VU ${__VU}] Downloaded ${(downloadSettings.payloadSize/(1024*1024))} MB in ${downloadDurationSeconds.toFixed(2)} seconds (${(downloadSettings.payloadSize / (downloadDurationSeconds * 1024 * 1024)).toFixed(2)} MB/s) using path ${sender.name} => ${relayer.name} => ${receiver.name} from ${listenHost}`);
-        metricDocumentsSucceed.add(1, {job: sender.nodeName, sender: sender.name, receiver: receiver.name, relayer: relayer.name, action: 'download'});
-        metricDocumentLatency.add(downloadDurationMiliseconds, {job: sender.nodeName, sender: sender.name, receiver: receiver.name, relayer: relayer.name, action: 'download'});
+        console.log(`[Download][VU ${__VU}] Downloaded ${(downloadSettings.payloadSize/(1024*1024))} MB in ${downloadDurationSeconds.toFixed(2)} seconds (${(downloadSettings.payloadSize / (downloadDurationSeconds * 1024 * 1024)).toFixed(2)} MB/s) using path ${entryNode.name} => ${relayerNode.name} => ${exitNode.name} from ${listenHost}`);
+        metricDocumentsSucceed.add(1, {job: entryNode.nodeName, entryNode: entryNode.name, exitNode: exitNode.name, relayerNode: relayerNode.name, action: 'download'});
+        metricDocumentLatency.add(downloadDurationMiliseconds, {job: entryNode.nodeName, entryNode: entryNode.name, exitNode: exitNode.name, relayerNode: relayerNode.name, action: 'download'});
       }
     } catch (err) {
       let downloadDurationSeconds = (new Date().getTime() - initialStartTime) / 1000;
-      console.error(`[Download][VU ${vu + 1}] Failed to  download file after ${downloadDurationSeconds} seconds using path ${sender.name} => ${relayer.name} => ${receiver.name} from ${listenHost}: ${err}`);
-      metricDocumentsFailed.add(1, {sender: sender.name, receiver: receiver.name, relayer: relayer.name, action: 'download'});
+      console.error(`[Download][VU ${vu + 1}] Failed to  download file after ${downloadDurationSeconds} seconds using path ${entryNode.name} => ${relayerNode.name} => ${exitNode.name} from ${listenHost}: ${err}`);
+      metricDocumentsFailed.add(1, {entryNode: entryNode.name, exitNode: exitNode.name, relayerNode: relayerNode.name, action: 'download'});
     } finally {
       udp.close(connection);
     }
 }
 
 // Scenario to upload data
-export function upload(routes: [{ sender: HoprdNode, relayer: HoprdNode, receiver: HoprdNode, uploadSession: string }]) {
+export function upload(routes: [{ entryNode: HoprdNode, relayerNode: HoprdNode, exitNode: HoprdNode, uploadSession: string }]) {
 
   const vu = Math.ceil((__VU - 1) % routes.length);
-  const sender = routes[vu].sender;
-  const relayer = routes[vu].relayer;
-  const receiver = routes[vu].receiver;
+  const entryNode = routes[vu].entryNode;
+  const relayerNode = routes[vu].relayerNode;
+  const exitNode = routes[vu].exitNode;
   const listenHost = routes[vu].uploadSession;
-  //console.log(`[Sender][VU ${vu + 1}] Connecting via udp session, sender=${sender.name}, relayer=${relayer.name}, receiver=${receiver.name}`);
+  //console.log(`[EntryNode][VU ${vu + 1}] Connecting via udp session, entryNode=${entryNode.name}, relayerNode=${relayerNode.name}, exitNode=${exitNode.name}`);
 
   const uploadSettings = {
     payloadSize: configuration.payloadSize,
     segmentSize: configuration.uploadSegmentSize,
     throughput: configuration.uploadThroughput,
-    sessionPath: sender.name + ' => ' + relayer.name + ' => ' + receiver.name
+    sessionPath: entryNode.name + ' => ' + relayerNode.name + ' => ' + exitNode.name
   }
 
   //console.log(`[Upload][VU ${vu +1}] Opening upload UDP connection to ${listenHost}`)
@@ -179,8 +179,8 @@ export function upload(routes: [{ sender: HoprdNode, relayer: HoprdNode, receive
         uploadedSegmentCount++;
         //console.log(`[Upload][VU ${__VU}] Uploaded ${uploadedSegmentCount} segments with total data length ${uploadedDataSize / 1024} KB`)
         let writeDuration = (new Date().getTime() - writeStartTime);
-        metricSegmentLatency.add(writeDuration, { sender: sender.name, receiver: receiver.name, relayer: relayer.name, action: 'upload' });
-        metricDataSent.add(dataSegment.length, {sender: sender.name, receiver: receiver.name, relayer: relayer.name});
+        metricSegmentLatency.add(writeDuration, { entryNode: entryNode.name, exitNode: exitNode.name, relayerNode: relayerNode.name, action: 'upload' });
+        metricDataSent.add(dataSegment.length, { entryNode: entryNode.name, exitNode: exitNode.name, relayerNode: relayerNode.name });
         sleep(1 / (configuration.uploadThroughput / configuration.uploadSegmentSize));
       }
       if (uploadedDataSize >= configuration.payloadSize) {
@@ -188,20 +188,20 @@ export function upload(routes: [{ sender: HoprdNode, relayer: HoprdNode, receive
           udp.writeLn(connection, endSignal.buffer);
           let uploadDurationMiliseconds = (new Date().getTime() - initialStartTime);
           let uploadDurationSeconds = uploadDurationMiliseconds / 1000;
-          console.log(`[Upload][VU ${__VU}] ${sender.name} uploaded ${(uploadSettings.payloadSize/(1024*1024))} MB in ${uploadDurationSeconds.toFixed(2)} seconds (${(uploadSettings.payloadSize / (uploadDurationSeconds * 1024 * 1024)).toFixed(2)} MB/s) to ${listenHost} through ${relayer.name} => ${receiver.name}`);
-          metricDocumentsSucceed.add(1, {job: sender.nodeName, sender: sender.name, receiver: receiver.name, relayer: relayer.name, action: 'upload'});
-          metricDocumentLatency.add(uploadDurationMiliseconds, {job: sender.nodeName, sender: sender.name, receiver: receiver.name, relayer: relayer.name, action: 'upload'});
+          console.log(`[Upload][VU ${__VU}] ${entryNode.name} uploaded ${(uploadSettings.payloadSize/(1024*1024))} MB in ${uploadDurationSeconds.toFixed(2)} seconds (${(uploadSettings.payloadSize / (uploadDurationSeconds * 1024 * 1024)).toFixed(2)} MB/s) to ${listenHost} through ${relayerNode.name} => ${exitNode.name}`);
+          metricDocumentsSucceed.add(1, {job: entryNode.nodeName, entryNode: entryNode.name, exitNode: exitNode.name, relayerNode: relayerNode.name, action: 'upload'});
+          metricDocumentLatency.add(uploadDurationMiliseconds, {job: entryNode.nodeName, entryNode: entryNode.name, exitNode: exitNode.name, relayerNode: relayerNode.name, action: 'upload'});
       }
   } catch (err) {
-      console.error(`[Upload][VU ${vu + 1}] Failed to upload file via [${sender.name}] => [${relayer.name}] => [${receiver.name}]`);
+      console.error(`[Upload][VU ${vu + 1}] Failed to upload file via [${entryNode.name}] => [${relayerNode.name}] => [${exitNode.name}]`);
       console.error(`[Upload][VU:${vu + 1}] Error message:`, err);
-      metricDocumentsFailed.add(1, {sender: sender.name, receiver: receiver.name, relayer: relayer.name, action: 'upload'});
+      metricDocumentsFailed.add(1, {entryNode: entryNode.name, exitNode: exitNode.name, relayerNode: relayerNode.name, action: 'upload'});
   } finally {
       udp.close(connection);
   }
 }
 
 // The Teardown Function is run once after the Load Test https://docs.k6.io/docs/test-life-cycle
-export function teardown(routes: [{ sender: HoprdNode, relayer: HoprdNode, receiver: HoprdNode }]) {
-  console.log("[Teardown] Load test finished",);
+export function teardown(_routes: [{ entryNode: HoprdNode, relayerNode: HoprdNode, exitNode: HoprdNode }]) {
+  console.log("[Teardown] Load test finished");
 }

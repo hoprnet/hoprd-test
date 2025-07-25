@@ -41,33 +41,33 @@ export async function setupChannels(nodes: HoprdNode[]) {
 }
 
 export async function sendTestMessages(nodes: HoprdNode[]) {
-  const senders: HoprdNode[] = [];
-  const relayers: HoprdNode[] = [];
-  const receivers: HoprdNode[] = [];
+  const entryNodes: HoprdNode[] = [];
+  const relayerNodes: HoprdNode[] = [];
+  const exitNodes: HoprdNode[] = [];
   nodes.forEach((node: HoprdNode) => {
-      if (node.data.isSender) {
-        senders.push(node);
+      if (node.data.isEntryNode) {
+        entryNodes.push(node);
       }
-      if (node.data.isRelayer) {
-        relayers.push(node);
+      if (node.data.isRelayerNode) {
+        relayerNodes.push(node);
       }
-      if (node.data.isReceiver) {
-        receivers.push(node);
+      if (node.data.isExitNode) {
+        exitNodes.push(node);
       }
     });
   let messagesRequests: Promise<boolean>[] = [];
-  senders.flatMap(sender => {
-      return receivers.flatMap(receiver => {
-        return relayers.map(relayer => { return { sender, relayer, receiver }; });
+  entryNodes.flatMap(entryNode => {
+      return exitNodes.flatMap(exitNode => {
+        return relayerNodes.map(relayerNode => { return { entryNode, relayerNode, exitNode }; });
     })
   })
   .filter((route) =>
-    route.sender.nativeAddress !== route.receiver.nativeAddress &&
-    route.sender.nativeAddress !== route.relayer.nativeAddress &&
-    route.relayer.nativeAddress !== route.receiver.nativeAddress
+    route.entryNode.nativeAddress !== route.exitNode.nativeAddress &&
+    route.entryNode.nativeAddress !== route.relayerNode.nativeAddress &&
+    route.relayerNode.nativeAddress !== route.exitNode.nativeAddress
   )
   .forEach( (route) => {
-    messagesRequests.push(route.sender.sendMessage(route.receiver));
+    messagesRequests.push(route.entryNode.sendMessage(route.exitNode));
   });
 
   const messagesSent: boolean[] = await Promise.all(messagesRequests);

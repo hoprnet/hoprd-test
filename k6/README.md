@@ -60,10 +60,10 @@ The workload environment variable `K6_WORKLOAD_NAME` specifies the kind of workl
 
 The topology, specified through the environment variable named `K6_TOPOLOGY_NAME`,  determines how the nodes will interact between each other, and so determines the available paths/routes on them as well. By selecting one topology or other, the nodes are opening and closing channels between them to adapt to the desired topology. The execution is performed with the Autopromiscuous mode disabled, and only participate the nodes involved in the execution (that means that all outgoing channels opened with external nodes are closed before execution). Default value is `many2many`.
 
-- `many2many`: This is a full topology between all the nodes involved in the execution. This means that all nodes are acting as senders, relayers, and receivers. All posible channels between the nodes are opened
-- `sender`: This topology sepecifies a single sender node, and multiple relayers and receivers. The sender does not act as a relayer or receiver. The goal of this topology is to test the entry nodes
-- `relayer`: This topology sepecifies a single relayer node, and multiple senders and receivers. The relayer does not act as a sender or receiver. The goal of this topology is to test the internal mix nodes
-- `receiver`: This topology sepecifies a single receiver node, and multiple senders and relayers. The receiver does not act as a sender or relayer . The goal of this topology is to test the exit nodes
+- `many2many`: This is a full topology between all the nodes involved in the execution. This means that all nodes are acting as entry nodes, relayer nodes, and exit nodes. All posible channels between the nodes are opened
+- `sender`: This topology sepecifies a single entry node, and multiple relayers and exit nodes. The entry node does not act as a relayer or exit node. The goal of this topology is to test the entry nodes
+- `relayer`: This topology sepecifies a single relayer node, and multiple entry nodes and exit nodes. The relayer does not act as a entry node or exit node. The goal of this topology is to test the internal mix nodes
+- `receiver`: This topology sepecifies a single exit node, and multiple entry nodes and relayer nodes. The exit node does not act as a entry node or relayer node. The goal of this topology is to test the exit nodes
 
 ### Echo service
 
@@ -76,10 +76,10 @@ If you want to execute the load test and avoid using the HOPRD nodes mixnets and
 
 ### VU per route
 
-The type of topology chosen will determine the amount of routes available for the test execution. A Route is an available communication path between sender, relayer and receiver. 
-By setting the virtual users per route through the environment variable named `K6_VU_PER_ROUTE`, the load test will open as many web-socket connections as VU with those route(sender-relayer-receiver) parameters. Default value `K6_VU_PER_ROUTE=1`.
+The type of topology chosen will determine the amount of routes available for the test execution. A Route is an available communication path between entry, relayer and exit nodes. 
+By setting the virtual users per route through the environment variable named `K6_VU_PER_ROUTE`, the load test will open as many web-socket connections as VU with those route(entryNode-relayerNode-exitNode) parameters. Default value `K6_VU_PER_ROUTE=1`.
 
-For instnace, the topology `many2many` in the cluster of nodes `local` where there are 5 nodes, would have a total of 60 routes = 5 senders * 4 relayers * 3 receivers.
+For instnace, the topology `many2many` in the cluster of nodes `local` where there are 5 nodes, would have a total of 60 routes = 5 entry nodes * 4 relayers nodes * 3 exit nodes.
 Setting this parameter `K6_VU_PER_ROUTE=2` would open a total of 120 web-socket connections, 24 web-socket connections per node.
 
 ### Requests per VU per route
@@ -88,9 +88,9 @@ The default throughtput is to send 1 message per second per route(web-socket con
 
 ## Running locally
 
-Setup workspace
-```
-export HOPRD_API_TOKEN=?????
+Set environment variables
+```bash
+export HOPRD_API_TOKEN=e2e-API-token^^
 export K6_CLUSTER_NODES=local
 export K6_TOPOLOGY_NAME=receiver
 export K6_WORKLOAD_NAME=sanity-check
@@ -100,11 +100,15 @@ export K6_TEST_DURATION=1
 export K6_PAYLOAD_SIZE=$((10 * 1024 * 1024))
 export K6_DOWNLOAD_THROUGHPUT=$((1 * 1024 * 1024))
 export K6_UPLOAD_THROUGHPUT=$((512 * 1024))
+```
+
+Check environment:
+```bash
 npm run setup
 ```
 
 Run tests:
-```
+```bash
 npm run test:udp
 npm run test:tcp
 ```

@@ -206,23 +206,23 @@ export class HoprdNode {
     return (await waitingChannel)
   }
 
-  public async sendMessage(receiver: HoprdNode): Promise<boolean> {
+  public async sendMessage(exitNode: HoprdNode): Promise<boolean> {
     let url = this.basePayload.apiEndpoint.replace("http", "ws") + '/api/v3/session/websocket?';
     url += 'capabilities=Segmentation&capabilities=Retransmission&';
     url += `target=echo-service-http.staging.hoprnet.link:80&`;
     url += `hops=1&`;
-    url += `destination=${receiver.nativeAddress}&`;
+    url += `destination=${exitNode.nativeAddress}&`;
     url += 'protocol=tcp';
     url += '&apiToken=' + this.basePayload.apiToken;
     const ws = new WebSocket(url);
     let messagePayload = this.stringToArrayBuffer(`GET /?startTime=${Date.now()} HTTP/1.1\r\nHost: echo-service-http.staging.hoprnet.link\r\n\r\n`);
-    let sender = this.data.name;
+    let entryNodeName = this.data.name;
     let sent = false;
 
     return new Promise((resolve, reject) => {
       // Event: Connection open
       ws.onopen = function open() {
-        //console.log(`Open websocket connection, sender=${sender}, receiver=${receiver.data.name}`);
+        //console.log(`Open websocket connection, entryNode=${entryNodeName}, exitNode=${exitNode.data.name}`);
         ws.send(messagePayload);
       };
 
@@ -230,10 +230,10 @@ export class HoprdNode {
       ws.onmessage = function incoming(event: any) {
         if (event.data instanceof Buffer) {
           sent = true;
-          console.log(`[INFO] Route sender=${sender}, receiver=${receiver.data.name} works`);
+          console.log(`[INFO] Route entryNode=${entryNodeName}, exitNode=${exitNode.data.name} works`);
           resolve(true);
         } else {
-          console.error(`Message failed, sender=${sender}, receiver=${receiver.data.name}`);
+          console.error(`Message failed, entryNode=${entryNodeName}, exitNode=${exitNode.data.name}`);
           resolve(false);
         }
         ws.close(); // Close connection after receiving the response
@@ -241,7 +241,7 @@ export class HoprdNode {
 
       // Event: Error
       ws.onerror = function error(error: any) {
-        console.error(`Message failed, sender=${sender}, receiver=${receiver.data.name}`);
+        console.error(`Message failed, entryNode=${entryNodeName}, exitNode=${exitNode.data.name}`);
         console.error("WebSocket error:", error);
         resolve(false);
       };
@@ -253,7 +253,7 @@ export class HoprdNode {
 
       setTimeout(() => {
         if (!sent) {
-          console.error(`Could not send message, sender=${sender}, receiver=${receiver.data.name}`);
+          console.error(`Could not send message, entryNode=${entryNodeName}, exitNode=${exitNode.data.name}`);
           reject(false);
           ws.close();
         }

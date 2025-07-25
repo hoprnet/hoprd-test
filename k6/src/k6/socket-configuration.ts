@@ -2,9 +2,9 @@ import { fail } from "k6";
 import { K6Configuration } from "./k6-configuration";
 
 export class Route {
-    public sender: any;
-    public relayer: any;
-    public receiver: any;
+    public entryNode: any;
+    public relayerNode: any;
+    public exitNode: any;
 }
 
 export class SocketConfiguration extends K6Configuration {

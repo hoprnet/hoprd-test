@@ -8,15 +8,15 @@ export class HoprdNode {
   public url: string;
   public p2p: string;
   public enabled: boolean;
-  public isSender: boolean;
-  public isRelayer: boolean;
-  public isReceiver: boolean;
+  public isEntryNode: boolean;
+  public isRelayerNode: boolean;
+  public isExitNode: boolean;
   public peerAddress: string;
   public httpParams: RefinedParams<ResponseType>;
 
   constructor(data) {
     this.name = data.name;
-    this.url = data.url + "/api/v3";
+    this.url = data.url + "/api/v4";
     (this.httpParams = {
       headers: {
         "x-auth-token": data.apiToken,
@@ -28,11 +28,11 @@ export class HoprdNode {
       },
     }),
       (this.enabled = data.enabled),
-      (this.isSender = data.isSender),
-      (this.isRelayer = data.isRelayer),
+      (this.isEntryNode = data.isEntryNode),
+      (this.isRelayerNode = data.isRelayerNode),
       (this.nodeName = data.instance),
       (this.p2p = data.p2p),
-      (this.isReceiver = data.isReceiver);
+      (this.isExitNode = data.isExitNode);
     this.getAddress(data.apiToken);
   }
 
@@ -84,14 +84,14 @@ export class HoprdNode {
   }
 
 
-  public openSession(receiver: HoprdNode, protocol: string, target: string): string {
+  public openSession(exitNode: HoprdNode, protocol: string, target: string): string {
     if (__ENV.K6_SKIP_HOPRD_SESSIONS === 'true') {
       return target;
     } else {
       const url = `${this.url}/session/${protocol}`;
       let listenHost = this.getSessionRequest(url, protocol, target);
       if (listenHost == '') {
-        listenHost = this.openSessionRequest(url, receiver, target);
+        listenHost = this.openSessionRequest(url, exitNode, target);
       }
       return listenHost;
     }
@@ -122,9 +122,9 @@ export class HoprdNode {
     }
   }
 
-  private openSessionRequest(url: string, receiver: HoprdNode, target: string): string {
+  private openSessionRequest(url: string, exitNode: HoprdNode, target: string): string {
         const payload = JSON.stringify({
-            destination: receiver.peerAddress,
+            destination: exitNode.peerAddress,
             target: { Plain: `${target}` },
             capabilities: ["Segmentation", "Retransmission"],
             forwardPath: {
@@ -144,7 +144,7 @@ export class HoprdNode {
           } else {
             listenHost = `${session.ip}:${session.port}`;
           }
-          console.log(`[Setup] New session opened ${this.name} => ${receiver.name} listening at ${listenHost} to target ${target}`);
+          console.log(`[Setup] New session opened ${this.name} => ${exitNode.name} listening at ${listenHost} to target ${target}`);
           return listenHost;
         } else {
           console.error(`Response: ${postResponse.body}`);

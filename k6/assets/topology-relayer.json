@@ -3,9 +3,9 @@
     {
       "name": "node-1",
       "enabled": true,
-      "isSender": true,
-      "isRelayer": false,
-      "isReceiver": true,
+      "isEntryNode": true,
+      "isRelayerNode": false,
+      "isExitNode": true,
       "routes": [
         { "name": "node-5" }
       ]
@@ -13,9 +13,9 @@
     {
       "name": "node-2",
       "enabled": true,
-      "isSender": true,
-      "isRelayer": false,
-      "isReceiver": true,
+      "isEntryNode": true,
+      "isRelayerNode": false,
+      "isExitNode": true,
       "routes": [
         { "name": "node-5" }
       ]
@@ -23,9 +23,9 @@
     {
       "name": "node-3",
       "enabled": true,
-      "isSender": true,
-      "isRelayer": false,
-      "isReceiver": true,
+      "isEntryNode": true,
+      "isRelayerNode": false,
+      "isExitNode": true,
       "routes": [
         { "name": "node-5" }
       ]
@@ -33,9 +33,9 @@
     {
       "name": "node-4",
       "enabled": true,
-      "isSender": true,
-      "isRelayer": false,
-      "isReceiver": true,
+      "isEntryNode": true,
+      "isRelayerNode": false,
+      "isExitNode": true,
       "routes": [
         { "name": "node-5" }
 
@@ -44,9 +44,9 @@
     {
       "name": "node-5",
       "enabled": true,
-      "isSender": false,
-      "isRelayer": true,
-      "isReceiver": false,
+      "isEntryNode": false,
+      "isRelayerNode": true,
+      "isExitNode": false,
       "routes": [
         { "name": "node-1" },
         { "name": "node-2" },
