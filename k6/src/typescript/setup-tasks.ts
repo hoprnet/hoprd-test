@@ -55,8 +55,8 @@ export async function sendTestMessages(nodes: HoprdNode[]) {
         exitNodes.push(node);
       }
     });
-  let messagesRequests: Promise<boolean>[] = [];
-  entryNodes.flatMap(entryNode => {
+
+  const routes = entryNodes.flatMap(entryNode => {
       return exitNodes.flatMap(exitNode => {
         return relayerNodes.map(relayerNode => { return { entryNode, relayerNode, exitNode }; });
     })
@@ -65,13 +65,17 @@ export async function sendTestMessages(nodes: HoprdNode[]) {
     route.entryNode.nativeAddress !== route.exitNode.nativeAddress &&
     route.entryNode.nativeAddress !== route.relayerNode.nativeAddress &&
     route.relayerNode.nativeAddress !== route.exitNode.nativeAddress
-  )
-  .forEach( (route) => {
-    messagesRequests.push(route.entryNode.sendMessage(route.exitNode));
-  });
+  );
 
-  const messagesSent: boolean[] = await Promise.all(messagesRequests);
-  const failedMessages = messagesSent.filter((messageSent: boolean) => !messageSent).length;
+  // Sequentially send messages
+  let failedMessages = 0;
+  for (const route of routes) {
+    const messageSent = await route.entryNode.sendMessageOverSession(route.relayerNode, route.exitNode);
+    if (!messageSent) {
+      failedMessages++;
+    }
+  }
+
   if (failedMessages > 0) {
     throw new Error(`Failed to send ${failedMessages} messages`);
   }

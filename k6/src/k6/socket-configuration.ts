@@ -40,6 +40,8 @@ export class SocketConfiguration extends K6Configuration {
             console.log(`[Setup] ${protocol.toUpperCase()} server upload throughput(K6_UPLOAD_THROUGHPUT): ${fiendlyUploadThroughput} MB/s`);
             console.log(`[Setup] ${protocol.toUpperCase()} client download segment size(K6_DOWNLOAD_SEGMENT_SIZE): ${fiendlyDownloadStreamSize} KB (${friendlyDownloadSegmentsPerSecond} segments/s)`);
             console.log(`[Setup] ${protocol.toUpperCase()} client upload segment size(K6_UPLOAD_SEGMENT_SIZE): ${fiendlyUploadStreamSize} KB (${friendlyUploadSegmentsPerSecond} segments/s)`);
+            // console.log("Test execution options: ");
+            // console.log(JSON.stringify(this.workloadOptions))
         }
     }
 
@@ -176,7 +178,7 @@ export class SocketConfiguration extends K6Configuration {
         switch (this.workload) {
             case "constant": 
             case "sanity-check": {
-                this.workloadOptions  = this.deepMerge(baseWorkload, {
+                this.workloadOptions = this.deepMerge(baseWorkload, {
                     scenarios: {
                         download: {
                             executor: "constant-vus",
@@ -194,7 +196,7 @@ export class SocketConfiguration extends K6Configuration {
             }
             case "hysteresis": {
                 const hysteresisDuration = Math.trunc(this.duration / 2);
-                this.workloadOptions  = this.deepMerge(baseWorkload, {
+                this.workloadOptions = this.deepMerge(baseWorkload, {
                     scenarios: {
                         download: {
                             executor: "ramping-vus",
@@ -214,8 +216,8 @@ export class SocketConfiguration extends K6Configuration {
                 });
                 break;
             }
-            case "incrememental": {
-                this.workloadOptions  = this.deepMerge(baseWorkload, {
+            case "incremental": {
+                this.workloadOptions = this.deepMerge(baseWorkload, {
                     scenarios: {
                         download: {
                             executor: "ramping-vus",
@@ -238,6 +240,13 @@ export class SocketConfiguration extends K6Configuration {
             default: {
                 fail(`[Error] Invalid workload type: ${this.workload}`);
             }
+        }
+
+        if (__ENV.K6_SKIP_DOWNLOAD === 'true') {
+            delete this.workloadOptions.scenarios.download;
+        }
+        if (__ENV.K6_SKIP_UPLOAD === 'true') {
+            delete this.workloadOptions.scenarios.upload;
         }
     }
 }

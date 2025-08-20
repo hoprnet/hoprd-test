@@ -1,6 +1,5 @@
 import { GetChannelsResponseType, GetInfoResponseType, HoprSDK } from "@hoprnet/hopr-sdk";
 import { ConnectivityStatus, TOKEN_NATIVE_MIN } from "./hoprd.types";
-import WebSocket from "ws";
 
 export class HoprdNode {
   public data: any;
@@ -131,9 +130,9 @@ export class HoprdNode {
           console.error(`[ERROR] Channel from ${this.data.name} to ${route.name} is in status ${channel.status} and cannot be used. Please close it manually.`)
           process.exit(1);
         }
-        if (BigInt(channel.balance) < BigInt(10000000000000000)) {
+        if (Number(channel.balance) < 0.05) {
           console.warn(`[WARN] Channel (${channel.id}) balance from ${this.data.name} to ${route.name} is insufficient and cannot be used. Funding it automatically.`)
-          await this.sdk.api.channels.fundChannel(Object.assign(this.basePayload, { channelId: channel.id, amount: "10000000000000000", timeout: 1000 * 60 * 3 }))
+          await this.sdk.api.channels.fundChannel(Object.assign(this.basePayload, { channelId: channel.id, amount: "0.1 wxHOPR", timeout: 1000 * 60 * 3 }))
             .catch((error: any) => {
               console.error(`[ERROR] Unable to fund channel ${channel.id} from ${this.data.name}`);
               console.error("[ERROR]", error);
@@ -206,68 +205,100 @@ export class HoprdNode {
     return (await waitingChannel)
   }
 
-  public async sendMessage(exitNode: HoprdNode): Promise<boolean> {
-    let url = this.basePayload.apiEndpoint.replace("http", "ws") + '/api/v3/session/websocket?';
-    url += 'capabilities=Segmentation&capabilities=Retransmission&';
-    url += `target=echo-service-http.staging.hoprnet.link:80&`;
-    url += `hops=1&`;
-    url += `destination=${exitNode.nativeAddress}&`;
-    url += 'protocol=tcp';
-    url += '&apiToken=' + this.basePayload.apiToken;
-    const ws = new WebSocket(url);
-    let messagePayload = this.stringToArrayBuffer(`GET /?startTime=${Date.now()} HTTP/1.1\r\nHost: echo-service-http.staging.hoprnet.link\r\n\r\n`);
-    let entryNodeName = this.data.name;
-    let sent = false;
+  private async openSession(target: string, port: number, relayerAddress: string, exitNodeAddress: string): Promise<void> {
+    const sessionPayload = {
+      listenHost: `0.0.0.0:${port}`,
+      protocol: "tcp" as const,
+      capabilities: [
+        "Retransmission" as const,
+        "Segmentation" as const
+      ],
+      responseBuffer: "2 MB",
+      target: {
+        Plain: `${target}:80` as const,
+      },
+      destination: exitNodeAddress,
+      forwardPath: {
+        // IntermediatePath: [relayerAddress],
+        Hops: 0
+      },
+      returnPath: {
+        // IntermediatePath: [relayerAddress],
+        Hops: 0
+      }
+    }
+    const payload = Object.assign(this.basePayload, sessionPayload);
 
-    return new Promise((resolve, reject) => {
-      // Event: Connection open
-      ws.onopen = function open() {
-        //console.log(`Open websocket connection, entryNode=${entryNodeName}, exitNode=${exitNode.data.name}`);
-        ws.send(messagePayload);
-      };
+    //console.log(`[DEBUG] Opening session: ${JSON.stringify(payload)} for node ${this.data.name} to exitNode ${exitNode.data.name} with relayer ${relayerAddress}`);
+    await this.sdk.api.sessions.OpenSession(payload); // const sessionResponse = 
+    //console.log(`[INFO] Session created ${JSON.stringify(sessionResponse)} for node ${this.data.name} to exitNode ${exitNode.data.name}`);
+    let sessionOpened = false 
+    const maxAttempts = 12; // e.g., try for 1 minute (12 * 5s)
+    let attempts = 0;
 
-      // Event: Message received from the server
-      ws.onmessage = function incoming(event: any) {
-        if (event.data instanceof Buffer) {
-          sent = true;
-          console.log(`[INFO] Route entryNode=${entryNodeName}, exitNode=${exitNode.data.name} works`);
-          resolve(true);
-        } else {
-          console.error(`Message failed, entryNode=${entryNodeName}, exitNode=${exitNode.data.name}`);
-          resolve(false);
-        }
-        ws.close(); // Close connection after receiving the response
-      };
-
-      // Event: Error
-      ws.onerror = function error(error: any) {
-        console.error(`Message failed, entryNode=${entryNodeName}, exitNode=${exitNode.data.name}`);
-        console.error("WebSocket error:", error);
-        resolve(false);
-      };
-
-      // Event: Connection closed
-      ws.onclose = function close() {
-        
-      };
-
-      setTimeout(() => {
-        if (!sent) {
-          console.error(`Could not send message, entryNode=${entryNodeName}, exitNode=${exitNode.data.name}`);
-          reject(false);
-          ws.close();
-        }
-      }, 5000);
+    while (!sessionOpened && attempts < maxAttempts) {
+      const sessions = await this.sdk.api.sessions.getSessions(Object.assign(this.basePayload, { protocol: "tcp" as const }));
+      console.log(`[DEBUG] Sessions for node ${this.data.name}: ${JSON.stringify(sessions)}`);
+      //console.log(`[DEBUG] Looking for session to exitNode ${exitNode.nativeAddress} with relayer ${relayerAddress}`);
+      sessionOpened = sessions.some((session) =>
+        session.destination === exitNodeAddress &&
+        session.forwardPath?.IntermediatePath?.includes(relayerAddress) &&
+        session.target === `${target}:80`
+      );
+      if (!sessionOpened) {
+        await new Promise((resolve) => setTimeout(resolve, 5000));
+        attempts++;
+      } else {
+          const openedSession = sessions.find((session) =>
+          session.destination === exitNodeAddress &&
+          session.forwardPath?.IntermediatePath?.includes(relayerAddress) &&
+          session.target === `${target}:80`
+        );
+        console.log(`[DEBUG] Session opened successfully for node ${this.data.name} to exitNode ${exitNodeAddress} with relayer ${relayerAddress}: ${JSON.stringify(openedSession)}`);
+      }
+    }
+    return new Promise<void>((resolve, reject) => {
+      if (sessionOpened) {
+        resolve();
+      } else {
+        reject(new Error("Session could not be opened in time."));
+      }
     });
   }
 
-  private stringToArrayBuffer(str: string): ArrayBuffer {
-    const buffer = new ArrayBuffer(str.length);
-    const bufferView = new Uint8Array(buffer);
-    for (let i = 0; i < str.length; i++) {
-      bufferView[i] = str.charCodeAt(i);
+  public async sendMessageOverSession(relayerNode: HoprdNode, exitNode: HoprdNode): Promise<boolean> {
+    const target="www.example.com";
+    const port = Math.floor(Math.random() * (9100 - 9092) + 9092); // Random port between 9092 and 9100
+    await this.openSession(target, port, relayerNode.nativeAddress?.toLowerCase() || '', exitNode.nativeAddress?.toLowerCase() || '');
+
+    //console.log(`[DEBUG] Session opened successfully for node ${this.data.name} to exitNode ${exitNode.data.name}`);
+    await new Promise(resolve => setTimeout(resolve, 15000));
+    const responseEcho = await this.fetchData(target, port);
+    // await this.sdk.api.sessions.closeSession(Object.assign(this.basePayload, { protocol: "tcp" as const, listeningIp: "127.0.0.1", port }));
+    if (responseEcho && responseEcho.data) {
+      return true;
+    } else {
+      console.error(`[ERROR] Unable to fetch data from echo service for node ${this.data.name}`);
+      return false;
     }
-    return buffer;
+  }
+
+  private async fetchData(host: string, port:number): Promise<any> {
+    try {
+      console.log(`[DEBUG] Fetching data from echo service at http://${this.data.p2p}:${port}`);
+      const response = await fetch(`http://${this.data.p2p}:${port}/?startTime=${Date.now()}`, {
+        headers: { Host: host }
+      });
+      console.log(`[DEBUG] Fetched data ${JSON.stringify(response)}`);
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+      const data = await response.json();
+      return data;
+    } catch (error) {
+      console.error('Error fetching data:', error);
+      throw error;
+    }
   }
 
 }

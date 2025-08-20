@@ -38,8 +38,6 @@ export class K6Configuration {
             console.log(`[Setup] Exit Nodes: ${uniqueExitNodes.length}`);
             console.log(`[Setup] Routes: ${this.dataPool.length}`);
             console.log(`[Setup] VU per route(K6_VU_PER_ROUTE): ${this.vuPerRoute}`);
-            // console.log("Test execution options: ");
-            // console.log(JSON.stringify(workloadOptions))
         }
     }
 

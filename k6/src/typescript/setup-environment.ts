@@ -46,6 +46,7 @@ try {
             let node = getClusterNodeByName(topologyNode.name);
             topologyNode.url = node.url;
             topologyNode.instance = node.instance;
+            topologyNode.p2p = node.p2p;
             let hoprdNode = new HoprdNode(topologyNode);
             await hoprdNode.init();
             return hoprdNode;

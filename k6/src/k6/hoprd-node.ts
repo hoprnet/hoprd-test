@@ -1,5 +1,5 @@
 import http, { RefinedParams, RefinedResponse, ResponseType } from "k6/http";
-import { fail } from "k6";
+import { fail, sleep } from "k6";
 
 // This class cannot implement async methods as it is used in the k6 script
 export class HoprdNode {
@@ -126,7 +126,8 @@ export class HoprdNode {
         const payload = JSON.stringify({
             destination: exitNode.peerAddress,
             target: { Plain: `${target}` },
-            capabilities: ["Segmentation", "Retransmission"],
+            capabilities: ["NoDelay", "Segmentation"],
+            responseBuffer: "8 MB",
             forwardPath: {
               Hops: 1
             },
@@ -138,8 +139,9 @@ export class HoprdNode {
         const postResponse: RefinedResponse<"text"> = http.post(url, payload, this.httpParams);
         if (postResponse.status === 200) {
           const session = JSON.parse(postResponse.body);
+          sleep(5); // wait for session to be established
           let listenHost;
-          if (session.ip === '0.0.0.0') {
+          if (session.ip === '0.0.0.0') { // Kubernetes uses
             listenHost=`${this.p2p}:${session.port}`;
           } else {
             listenHost = `${session.ip}:${session.port}`;
