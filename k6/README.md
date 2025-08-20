@@ -104,7 +104,7 @@ export K6_DOWNLOAD_THROUGHPUT=$((1 * 1024 * 1024))
 export K6_UPLOAD_THROUGHPUT=$((512 * 1024))
 ```
 
-Check environment:
+If required, check the setup of the environment. Not required in local cluster, as the topology is already defined:
 ```bash
 npm run setup
 ```
