@@ -64,9 +64,9 @@ export function setup() {
       entryNode: route.entryNode,
       relayerNode: route.relayerNode,
       exitNode: route.exitNode,
-      downloadSession: route.entryNode.openSession(route.exitNode, "udp", configuration.getTargetDestination('download')),
-      uploadSession: route.entryNode.openSession(route.exitNode, "udp", configuration.getTargetDestination('upload'))
-      }
+      downloadSession: __ENV.K6_SKIP_SCENARIO_DOWNLOAD !== 'true' ? route.entryNode.openSession(route.relayerNode, route.exitNode, "udp", configuration.getTargetDestination('download'), configuration.sessionCapabilities, configuration.sessionMaxSurbUpstream, configuration.sessionResponseBuffer) : null,
+      uploadSession: __ENV.K6_SKIP_SCENARIO_UPLOAD !== 'true' ? route.entryNode.openSession(route.relayerNode, route.exitNode, "udp", configuration.getTargetDestination('upload'), configuration.sessionCapabilities, configuration.sessionMaxSurbUpstream, configuration.sessionResponseBuffer) : null
+    }
   });
 }
 
@@ -93,7 +93,7 @@ export function download(routes: [{ entryNode: HoprdNode, relayerNode: HoprdNode
   let connection = udp.connectLocalAddress(listenHost, `${configuration.runnerIP}:${10000 + __VU}`, configuration.iterationTimeout);
   console.log(`[Download][VU ${__VU}][ITER ${exec.scenario.iterationInTest}] Opened a downloading UDP Connection from ${connection.localAddr()} to ${listenHost}`)
   udp.writeLn(connection, stringToArrayBuffer(JSON.stringify(downloadSettings)));
-  //console.log(`[Download][VU ${__VU}][ITER ${exec.scenario.iterationInTest}] Start downloading data`)
+  //console.log(`[Download][VU ${__VU}][ITER ${exec.scenario.iterationInTest}] Start downloading data with settings: ${JSON.stringify(downloadSettings)}`);
   let downloadedDataSize = 0;
   let downloadedSegmentCount = 0;
   const initialStartTime = Date.now();

@@ -84,14 +84,14 @@ export class HoprdNode {
   }
 
 
-  public openSession(exitNode: HoprdNode, protocol: string, target: string): string {
+  public openSession(relayerNode: HoprdNode, exitNode: HoprdNode, protocol: string, target: string, capabilities: string[], maxSurbUpstream: number, responseBuffer: number): string {
     if (__ENV.K6_SKIP_HOPRD_SESSIONS === 'true') {
       return target;
     } else {
       const url = `${this.url}/session/${protocol}`;
       let listenHost = this.getSessionRequest(url, protocol, target);
       if (listenHost == '') {
-        listenHost = this.openSessionRequest(url, exitNode, target);
+        listenHost = this.openSessionRequest(url, relayerNode, exitNode, target, capabilities, maxSurbUpstream, responseBuffer);
       }
       return listenHost;
     }
@@ -122,17 +122,18 @@ export class HoprdNode {
     }
   }
 
-  private openSessionRequest(url: string, exitNode: HoprdNode, target: string): string {
+  private openSessionRequest(url: string, relayer: HoprdNode, exitNode: HoprdNode, target: string, capabilities: string[], maxSurbUpstream: number, responseBuffer: number): string {
         const payload = JSON.stringify({
             destination: exitNode.peerAddress,
             target: { Plain: `${target}` },
-            capabilities: ["NoDelay", "Segmentation"],
-            responseBuffer: "8 MB",
+            capabilities: capabilities,
+            maxSurbUpstream: `${maxSurbUpstream} kb/s`,
+            responseBuffer: `${responseBuffer} MB`,
             forwardPath: {
-              Hops: 1
+              IntermediatePath: [relayer.peerAddress]
             },
             returnPath: {
-              Hops: 1
+              IntermediatePath: [relayer.peerAddress]
             }
           });
         //console.log(`[Setup] Opening new session: ${payload}`);
@@ -146,7 +147,7 @@ export class HoprdNode {
           } else {
             listenHost = `${session.ip}:${session.port}`;
           }
-          console.log(`[Setup] New session opened ${this.name} => ${exitNode.name} listening at ${listenHost} to target ${target}`);
+          console.log(`[Setup] New session opened ${this.name} => ${relayer.name} => ${exitNode.name} listening at ${listenHost} to target ${target}`);
           return listenHost;
         } else {
           console.error(`Response: ${postResponse.body}`);

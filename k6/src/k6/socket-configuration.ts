@@ -17,6 +17,9 @@ export class SocketConfiguration extends K6Configuration {
     public uploadThroughput: number = 1 * 1024 * 1024; // 1MB/s
     public downloadSegmentSize: number;
     public uploadSegmentSize: number;
+    public sessionCapabilities: string[] = [];
+    public sessionMaxSurbUpstream: number = 2000; // 2000 kb/s
+    public sessionResponseBuffer: number = 2; // 2 MB
     private echoServersReplicas: number = 1;
     public runnerIP: string;
 
@@ -27,19 +30,33 @@ export class SocketConfiguration extends K6Configuration {
         this.buildWorkloadOptions();
         if (__VU === 1) { // Only print once to avoid spamming the console
             const friendlyPayloadSize = (this.payloadSize / (1024 * 1024)).toFixed(2);
-            const fiendlyDownloadThroughput = (this.downloadThroughput / (1024 * 1024)).toFixed(2);
-            const fiendlyUploadThroughput = (this.uploadThroughput / (1024 * 1024)).toFixed(2);
-            const fiendlyDownloadStreamSize = (this.downloadSegmentSize / 1024).toFixed(2);
-            const fiendlyUploadStreamSize = (this.uploadSegmentSize / 1024).toFixed(2);
-            const friendlyDownloadSegmentsPerSecond = (this.downloadThroughput / this.downloadSegmentSize).toFixed(0);
-            const friendlyUploadSegmentsPerSecond = (this.uploadThroughput / this.uploadSegmentSize).toFixed(0);
             console.log(`[Setup] Echo service replicas(K6_ECHO_SERVERS_REPLICAS): ${this.echoServersReplicas}`);
             console.log(`[Setup] Iteration timeout(K6_ITERATION_TIMEOUT): ${this.iterationTimeout} seconds`);
+            console.log(`[Setup] Protocol: ${this.protocol}`);
+            console.log(`[Setup] Session capabilities(K6_SESSION_CAPABILITIES): ${this.sessionCapabilities.join(', ')}`);
+            console.log(`[Setup] Session max surb upstream(K6_SESSION_MAX_SURB_UPSTREAM): ${this.sessionMaxSurbUpstream} kb/s`);
+            console.log(`[Setup] Session response buffer(K6_SESSION_RESPONSE_BUFFER): ${this.sessionResponseBuffer} MB`);
             console.log(`[Setup] Document payload size(K6_PAYLOAD_SIZE): ${friendlyPayloadSize} MB`);
-            console.log(`[Setup] ${protocol.toUpperCase()} server download throughput(K6_DOWNLOAD_THROUGHPUT): ${fiendlyDownloadThroughput} MB/s`);
-            console.log(`[Setup] ${protocol.toUpperCase()} server upload throughput(K6_UPLOAD_THROUGHPUT): ${fiendlyUploadThroughput} MB/s`);
-            console.log(`[Setup] ${protocol.toUpperCase()} client download segment size(K6_DOWNLOAD_SEGMENT_SIZE): ${fiendlyDownloadStreamSize} KB (${friendlyDownloadSegmentsPerSecond} segments/s)`);
-            console.log(`[Setup] ${protocol.toUpperCase()} client upload segment size(K6_UPLOAD_SEGMENT_SIZE): ${fiendlyUploadStreamSize} KB (${friendlyUploadSegmentsPerSecond} segments/s)`);
+            if (__ENV.K6_SKIP_SCENARIO_DOWNLOAD === 'true') {
+                console.log(`[Setup] Download scenario is skipped (K6_SKIP_SCENARIO_DOWNLOAD: ${__ENV.K6_SKIP_SCENARIO_DOWNLOAD})`);
+            } else {
+                console.log(`[Setup] Download scenario is not skipped (K6_SKIP_SCENARIO_DOWNLOAD: ${__ENV.K6_SKIP_SCENARIO_DOWNLOAD})`);
+                const friendlyDownloadThroughput = (this.downloadThroughput / (1024 * 1024)).toFixed(2);
+                const friendlyDownloadStreamSize = (this.downloadSegmentSize / 1024).toFixed(2);
+                const friendlyDownloadSegmentsPerSecond = (this.downloadThroughput / this.downloadSegmentSize).toFixed(0);
+                console.log(`[Setup] ${protocol.toUpperCase()} server download throughput(K6_DOWNLOAD_THROUGHPUT): ${friendlyDownloadThroughput} MB/s`);
+                console.log(`[Setup] ${protocol.toUpperCase()} client download segment size(K6_DOWNLOAD_SEGMENT_SIZE): ${friendlyDownloadStreamSize} KB (${friendlyDownloadSegmentsPerSecond} segments/s)`);
+            }
+            if (__ENV.K6_SKIP_SCENARIO_UPLOAD === 'true') {
+                console.log(`[Setup] Upload scenario is skipped (K6_SKIP_SCENARIO_UPLOAD: ${__ENV.K6_SKIP_SCENARIO_UPLOAD})`);
+            } else {
+                console.log(`[Setup] Upload scenario is not skipped (K6_SKIP_SCENARIO_UPLOAD: ${__ENV.K6_SKIP_SCENARIO_UPLOAD})`);
+                const friendlyUploadThroughput = (this.uploadThroughput / (1024 * 1024)).toFixed(2);
+                const friendlyUploadStreamSize = (this.uploadSegmentSize / 1024).toFixed(2);
+                const friendlyUploadSegmentsPerSecond = (this.uploadThroughput / this.uploadSegmentSize).toFixed(0);
+                console.log(`[Setup] ${protocol.toUpperCase()} server upload throughput(K6_UPLOAD_THROUGHPUT): ${friendlyUploadThroughput} MB/s`);
+                console.log(`[Setup] ${protocol.toUpperCase()} client upload segment size(K6_UPLOAD_SEGMENT_SIZE): ${friendlyUploadStreamSize} KB (${friendlyUploadSegmentsPerSecond} segments/s)`);
+            }
             // console.log("Test execution options: ");
             // console.log(JSON.stringify(this.workloadOptions))
         }
@@ -129,6 +146,30 @@ export class SocketConfiguration extends K6Configuration {
             }
         } else {
             this.uploadSegmentSize = this.protocol === 'tcp' ? 64 * 1024 : 1400; // Default value of 64KB for TCP and 1472 for UDP
+        }
+
+        if (__ENV.K6_SESSION_CAPABILITIES) {
+            this.sessionCapabilities = __ENV.K6_SESSION_CAPABILITIES.split(',').map(cap => cap.trim());
+        } else {
+            this.sessionCapabilities = [];
+        }
+
+        if (__ENV.K6_SESSION_MAX_SURB_UPSTREAM) {
+            const maxSurbUpstream = parseInt(__ENV.K6_SESSION_MAX_SURB_UPSTREAM);
+            if (!Number.isNaN(maxSurbUpstream) && maxSurbUpstream > 0) {
+                this.sessionMaxSurbUpstream = maxSurbUpstream;
+            } else {
+                fail('[ERROR] Invalid K6_SESSION_MAX_SURB_UPSTREAM value.');
+            }
+        }
+
+        if (__ENV.K6_SESSION_RESPONSE_BUFFER) {
+            const responseBuffer = parseInt(__ENV.K6_SESSION_RESPONSE_BUFFER);
+            if (!Number.isNaN(responseBuffer) && responseBuffer > 0) {
+                this.sessionResponseBuffer = responseBuffer;
+            } else {
+                fail('[ERROR] Invalid K6_SESSION_RESPONSE_BUFFER value.');
+            }
         }
 
         if (__ENV.K6_RUNNER_IP) {
@@ -242,10 +283,10 @@ export class SocketConfiguration extends K6Configuration {
             }
         }
 
-        if (__ENV.K6_SKIP_DOWNLOAD === 'true') {
+        if (__ENV.K6_SKIP_SCENARIO_DOWNLOAD === 'true') {
             delete this.workloadOptions.scenarios.download;
         }
-        if (__ENV.K6_SKIP_UPLOAD === 'true') {
+        if (__ENV.K6_SKIP_SCENARIO_UPLOAD === 'true') {
             delete this.workloadOptions.scenarios.upload;
         }
     }

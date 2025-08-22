@@ -21,7 +21,7 @@
     },
     {
       "name": "node-3",
-      "enabled": true,
+      "enabled": false,
       "isEntryNode": true,
       "isRelayerNode": false,
       "isExitNode": false,
@@ -31,7 +31,7 @@
     },
     {
       "name": "node-4",
-      "enabled": true,
+      "enabled": false,
       "isEntryNode": false,
       "isRelayerNode": true,
       "isExitNode": false,

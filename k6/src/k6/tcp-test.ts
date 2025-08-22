@@ -58,8 +58,8 @@ export function setup() {
       entryNode: route.entryNode,
       relayerNode: route.relayerNode,
       exitNode: route.exitNode,
-      downloadSession: route.entryNode.openSession(route.exitNode, "tcp", configuration.getTargetDestination('download')),
-      uploadSession: route.entryNode.openSession(route.exitNode, "tcp", configuration.getTargetDestination('upload'))
+      downloadSession: __ENV.K6_SKIP_SCENARIO_DOWNLOAD !== 'true' ? route.entryNode.openSession(route.relayerNode, route.exitNode, "tcp", configuration.getTargetDestination('download'), configuration.sessionCapabilities, configuration.sessionMaxSurbUpstream, configuration.sessionResponseBuffer) : null,
+      uploadSession: __ENV.K6_SKIP_SCENARIO_UPLOAD !== 'true' ? route.entryNode.openSession(route.relayerNode, route.exitNode, "tcp", configuration.getTargetDestination('upload'), configuration.sessionCapabilities, configuration.sessionMaxSurbUpstream, configuration.sessionResponseBuffer) : null
       }
   });
 }
