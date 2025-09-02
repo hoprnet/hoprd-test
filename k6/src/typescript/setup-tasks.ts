@@ -41,37 +41,45 @@ export async function setupChannels(nodes: HoprdNode[]) {
 }
 
 export async function sendTestMessages(nodes: HoprdNode[]) {
-  const senders: HoprdNode[] = [];
-  const relayers: HoprdNode[] = [];
-  const receivers: HoprdNode[] = [];
+  const entryNodes: HoprdNode[] = [];
+  const relayerNodes: HoprdNode[] = [];
+  const exitNodes: HoprdNode[] = [];
   nodes.forEach((node: HoprdNode) => {
-      if (node.data.isSender) {
-        senders.push(node);
+      if (node.data.isEntryNode) {
+        entryNodes.push(node);
       }
-      if (node.data.isRelayer) {
-        relayers.push(node);
+      if (node.data.isRelayerNode) {
+        relayerNodes.push(node);
       }
-      if (node.data.isReceiver) {
-        receivers.push(node);
+      if (node.data.isExitNode) {
+        exitNodes.push(node);
       }
     });
-  let messagesRequests: Promise<boolean>[] = [];
-  senders.flatMap(sender => {
-      return receivers.flatMap(receiver => {
-        return relayers.map(relayer => { return { sender, relayer, receiver }; });
+
+  const routes = entryNodes.flatMap(entryNode => {
+      return exitNodes.flatMap(exitNode => {
+        return relayerNodes.map(relayerNode => { return { entryNode, relayerNode, exitNode }; });
     })
   })
   .filter((route) =>
-    route.sender.peerId !== route.receiver.peerId &&
-    route.sender.peerId !== route.relayer.peerId &&
-    route.relayer.peerId !== route.receiver.peerId
-  )
-  .forEach( (route) => {
-    messagesRequests.push(route.sender.sendMessage(route.relayer, route.receiver));
-  });
+    route.entryNode.nativeAddress !== route.exitNode.nativeAddress &&
+    route.entryNode.nativeAddress !== route.relayerNode.nativeAddress &&
+    route.relayerNode.nativeAddress !== route.exitNode.nativeAddress
+  ).filter((route) =>
+    route.entryNode.data.routes.some((relayer:{name: string}) => route.relayerNode.data.name === relayer.name) &&
+    route.exitNode.data.routes.some((relayer:{name: string}) => route.relayerNode.data.name === relayer.name)
+  );
 
-  const messagesSent: boolean[] = await Promise.all(messagesRequests);
-  const failedMessages = messagesSent.filter((messageSent: boolean) => !messageSent).length;
+  // Sequentially send messages
+  let failedMessages = 0;
+  for (const route of routes) {
+    console.log(`[INFO] Sending test message from ${route.entryNode.data.name} to ${route.exitNode.data.name} via ${route.relayerNode.data.name}`);
+    const messageSent = await route.entryNode.sendMessageOverSession(route.relayerNode, route.exitNode);
+    if (!messageSent) {
+      failedMessages++;
+    }
+  }
+
   if (failedMessages > 0) {
     throw new Error(`Failed to send ${failedMessages} messages`);
   }

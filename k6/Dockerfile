@@ -1,4 +1,4 @@
-FROM node:18-slim as node
+FROM node:22-slim as node
 
 WORKDIR /app/k6
 COPY . .
@@ -7,10 +7,10 @@ RUN npm install \
 
 
 # Build the k6 binary with the extension
-FROM golang:1.20 as xk6
+FROM golang:1.24 as xk6
 
 RUN go install go.k6.io/xk6/cmd/xk6@latest
-RUN xk6 build v0.55.0 --with github.com/grafana/xk6-output-prometheus-remote@latest --with github.com/NAlexandrov/xk6-tcp --with github.com/hoprnet/xk6-udp --output /k6
+RUN xk6 build v1.0.0 --with github.com/grafana/xk6-output-prometheus-remote@latest --with github.com/NAlexandrov/xk6-tcp --with github.com/hoprnet/xk6-udp --output /k6
 
 FROM grafana/k6:latest
 

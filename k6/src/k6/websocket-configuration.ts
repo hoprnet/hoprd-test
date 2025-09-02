@@ -1,12 +1,6 @@
 import { fail } from "k6";
 import { K6Configuration } from "./k6-configuration";
 
-export class Route {
-    public sender: any;
-    public relayer: any;
-    public receiver: any;
-}
-
 export class WebSocketConfiguration extends K6Configuration{
 
     public messageDelay: number = 1000;

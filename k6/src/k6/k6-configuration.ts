@@ -2,9 +2,9 @@ import { fail } from "k6";
 import { mergeNodesJsonFiles } from "./utils";
 
 export class Route {
-    public sender: any;
-    public relayer: any;
-    public receiver: any;
+    public entryNode: any;
+    public relayerNode: any;
+    public exitNode: any;
 }
 
 export class K6Configuration {
@@ -16,30 +16,26 @@ export class K6Configuration {
     public dataPool: Route[];
     public workloadOptions: any;
     public duration: number = 1;
-    public hops: number = 1;
     public vuPerRoute: number = 1;
 
     public constructor() {
         this.loadK6EnvironmentVariables();
         this.loadJSONFiles();
         if (__VU === 1) { // Only print once to avoid spamming the console
-            //dataPool.forEach((route: any) => console.log(`[Setup] DataPool sender ${route.sender.name} -> ${route.relayer.name} -> ${route.receiver.name}`));
+            //dataPool.forEach((route: any) => console.log(`[Setup] DataPool entryNode ${route.entryNode.name} -> ${route.relayerNode.name} -> ${route.exitNode.name}`));
             console.log(`[Setup] Execution name(K6_EXECUTION_NAME): ${this.executionName}`);
             console.log(`[Setup] Cluster nodes(K6_CLUSTER_NODES): ${this.clusterNodes}`);
             console.log(`[Setup] Workload(K6_WORKLOAD_NAME): ${this.workload}`);
             console.log(`[Setup] Topology(K6_TOPOLOGY_NAME): ${this.topology}`);
             console.log(`[Setup] Test duration(K6_TEST_DURATION): ${this.duration}m`);
-            console.log(`[Setup] Hops(K6_HOPS): ${this.hops}`);
-            let uniqueSenders = Array.from((new Set(this.dataPool.map((route) => route.sender.name))));
-            let uniqueRelayers = Array.from((new Set(this.dataPool.map((route) => route.relayer.name))));
-            let uniqueReceivers = Array.from((new Set(this.dataPool.map((route) => route.receiver.name))));
-            console.log(`[Setup] Senders: ${uniqueSenders.length}`);
-            console.log(`[Setup] Relayers: ${uniqueRelayers.length}`);
-            console.log(`[Setup] Receivers: ${uniqueReceivers.length}`);
+            let uniqueEntryNodes = Array.from((new Set(this.dataPool.map((route) => route.entryNode.name))));
+            let uniqueRelayerNodes = Array.from((new Set(this.dataPool.map((route) => route.relayerNode.name))));
+            let uniqueExitNodes = Array.from((new Set(this.dataPool.map((route) => route.exitNode.name))));
+            console.log(`[Setup] Entry Nodes: ${uniqueEntryNodes.length}`);
+            console.log(`[Setup] Relayer Nodes: ${uniqueRelayerNodes.length}`);
+            console.log(`[Setup] Exit Nodes: ${uniqueExitNodes.length}`);
             console.log(`[Setup] Routes: ${this.dataPool.length}`);
             console.log(`[Setup] VU per route(K6_VU_PER_ROUTE): ${this.vuPerRoute}`);
-            // console.log("Test execution options: ");
-            // console.log(JSON.stringify(workloadOptions))
         }
     }
 
@@ -63,15 +59,6 @@ export class K6Configuration {
             }
         }
 
-        if (__ENV.K6_HOPS) {
-            const hops = parseInt(__ENV.K6_HOPS);
-            if (!Number.isNaN(hops) && hops > 0) {
-                this.hops = hops;
-            } else {
-                fail('[ERROR] Invalid HOPS, using default hops.');
-            }
-        }
-
         if (__ENV.K6_VU_PER_ROUTE) {
             const vuPerRoute = parseInt(__ENV.K6_VU_PER_ROUTE);
             if (!Number.isNaN(vuPerRoute) && vuPerRoute > 0) {
@@ -87,38 +74,46 @@ export class K6Configuration {
         const topologyNodesData = JSON.parse(open(`./topology-${this.topology}.json`)).nodes;
 
         let mergedNodesData = mergeNodesJsonFiles(clusterNodesData, topologyNodesData);
-        const sendersData: any[] = [];
-        const relayersData: any[] = [];
-        const receiversData: any[] = [];
+        const entryNodesData: any[] = [];
+        const relayerNodesData: any[] = [];
+        const exitNodesData: any[] = [];
         mergedNodesData
             .forEach((node: any) => {
-                if (node.isSender) {
-                    sendersData.push(node);
+                if (node.isEntryNode) {
+                    entryNodesData.push(node);
                 }
-                if (node.isRelayer) {
-                    relayersData.push(node);
+                if (node.isRelayerNode) {
+                    relayerNodesData.push(node);
                 }
-                if (node.isReceiver) {
-                    receiversData.push(node);
+                if (node.isExitNode) {
+                    exitNodesData.push(node);
                 }
             });
-        this.dataPool = sendersData
-            .flatMap(sender => {
-                return receiversData.flatMap(receiver => {
-                    return relayersData.map(relayer => { return { sender, relayer, receiver }; });
+        // if (__VU === 1) { // Only print once to avoid spamming the console
+        //     console.log(`[DEBUG] Entry nodes Data: ${JSON.stringify(entryNodesData)}`);
+        //     console.log(`[DEBUG] Relayer nodes Data: ${JSON.stringify(relayerNodesData)}`);
+        //     console.log(`[DEBUG] Exit nodes Data: ${JSON.stringify(exitNodesData)}`);
+        // }
+        this.dataPool = entryNodesData
+            .flatMap(entryNode => {
+                return exitNodesData.flatMap(exitNode => {
+                    return relayerNodesData.map(relayerNode => { return { entryNode, relayerNode, exitNode }; });
                 })
             })
-            // Only include those routes where the sender, relayer and receiver have an open channel
+            // Only include those routes where the entryNode, relayer and exitNode have an open channel
             .filter((route) => 
-                route.sender.routes.map(entryRoute => entryRoute.name).includes(route.relayer.name) && 
-                route.receiver.routes.map(exitRoute => exitRoute.name).includes(route.relayer.name)
+                route.entryNode.routes.map(entryRoute => entryRoute.name).includes(route.relayerNode.name) && 
+                route.exitNode.routes.map(exitRoute => exitRoute.name).includes(route.relayerNode.name)
             )
-            // Only include those routes where the sender, relayer and receiver are not the same
+            // Only include those routes where the entryNode, relayer and exitNode are not the same
             .filter((route) => 
-                route.sender.name !== route.receiver.name &&
-                route.sender.name !== route.relayer.name &&
-                route.relayer.name !== route.receiver.name
+                route.entryNode.name !== route.exitNode.name &&
+                route.entryNode.name !== route.relayerNode.name &&
+                route.relayerNode.name !== route.exitNode.name
             );
+        // if (__VU === 1) { // Only print once to avoid spamming the console
+        //     console.log(`[DEBUG] Data Pool: ${JSON.stringify(this.dataPool)}`);
+        // }
     }
 
 

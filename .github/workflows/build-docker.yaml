@@ -5,6 +5,12 @@ on:
   push:
     branches:
       - main
+
+  pull_request:
+    types:
+      - opened
+      - synchronize
+      - ready_for_review
 concurrency:
   group: k6
   cancel-in-progress: true
@@ -37,10 +43,19 @@ jobs:
         with:
           driver: kubernetes
 
+      - name: Get docker tag
+        id: vars
+        run: |
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            echo "TAG=pr-${{ github.event.pull_request.number }}" | tee -a $GITHUB_OUTPUT
+          else
+            echo "TAG=latest" | tee -a $GITHUB_OUTPUT
+          fi
+
       - name: Build and push docker image
         uses: docker/build-push-action@v4
         with:
           push: true
           context: k6
-          tags: europe-west3-docker.pkg.dev/${{ secrets.GOOGLE_HOPRASSOCIATION_PROJECT }}/docker-images/hoprd-k6:latest
+          tags: europe-west3-docker.pkg.dev/${{ secrets.GOOGLE_HOPRASSOCIATION_PROJECT }}/docker-images/hoprd-k6:${{ steps.vars.outputs.TAG }}
   

@@ -22,13 +22,44 @@ const setupEnvironment = async (nodes: HoprdNode[]) => {
 const executionName = process.env.K6_EXECUTION_NAME || 'kubernetes';
 const testScript = process.env.K6_TEST_SCRIPT || 'udp';
 const clusterNodes = process.env.K6_CLUSTER_NODES || "core-rotsee";
-const topologyName = process.env.K6_TOPOLOGY_NAME || 'many2many';
+const topologyName = process.env.K6_TOPOLOGY_NAME || 'receiver';
 const workloadName = process.env.K6_WORKLOAD_NAME || 'sanity-check';
-const hops = parseInt(process.env.K6_HOPS || '1');
-const requestsPerSecondPerVu = parseInt(process.env.K6_REQUESTS_PER_SECOND_PER_VU || '1');
-const duration = parseInt(process.env.K6_TEST_DURATION || '30');
+const skipHoprdSessions = process.env.K6_SKIP_HOPRD_SESSIONS || 'false';
+const skipScenarioDownload = process.env.K6_SKIP_SCENARIO_DOWNLOAD || 'false';
+const skipScenarioUpload = process.env.K6_SKIP_SCENARIO_UPLOAD || 'false';
+const sessionCapabilities = process.env.K6_SESSION_CAPABILITIES || 'NoDelay,Segmentation';
+const sessionMaxSurbUpstream = parseInt(process.env.K6_SESSION_MAX_SURB_UPSTREAM || '2000');
+const sessionResponseBuffer = parseInt(process.env.K6_SESSION_RESPONSE_BUFFER || '2');
+const echoServersReplicas = parseInt(process.env.K6_ECHO_SERVERS_REPLICAS || '3');
+const duration = parseInt(process.env.K6_TEST_DURATION || '1');
 const iterationTimeout = parseInt(process.env.K6_ITERATION_TIMEOUT || '60');
 const vuPerRoute = parseInt(process.env.K6_VU_PER_ROUTE || '1');
+const payloadSize = parseInt(process.env.K6_PAYLOAD_SIZE || '1048576'); // 1MB
+const downloadThroughput = parseInt(process.env.K6_DOWNLOAD_THROUGHPUT || '262144'); // 256KB/s
+const uploadThroughput = parseInt(process.env.K6_UPLOAD_THROUGHPUT || '262144'); // 256KB/s
+
+const templateParams = {
+  executionName,
+  testScript,
+  clusterNodes,
+  topologyName,
+  workloadName,
+  skipHoprdSessions,
+  skipScenarioDownload,
+  skipScenarioUpload,
+  sessionCapabilities,
+  sessionMaxSurbUpstream,
+  sessionResponseBuffer,
+  echoServersReplicas,
+  duration,
+  iterationTimeout,
+  vuPerRoute,
+  payloadSize,
+  downloadThroughput,
+  uploadThroughput
+}
+
+
 let hoprdNodes: HoprdNode[] = [];
 try {
   const clusterNodesData = JSON.parse(fs.readFileSync(`assets/cluster-nodes-${clusterNodes}.json`).toString()).nodes;
@@ -46,6 +77,7 @@ try {
             let node = getClusterNodeByName(topologyNode.name);
             topologyNode.url = node.url;
             topologyNode.instance = node.instance;
+            topologyNode.p2p = node.p2p;
             let hoprdNode = new HoprdNode(topologyNode);
             await hoprdNode.init();
             return hoprdNode;
@@ -63,13 +95,13 @@ Promise.all(hoprdNodes).then((hoprdNodes: HoprdNode[]) => {
     // Generate k6 test run file
     const k6TestRunTemplateData = fs.readFileSync(`assets/k6-test-run.yaml`).toString()
     const k6TestRunTemplate = Handlebars.compile(k6TestRunTemplateData);
-    const k6TestRunTemplateParsed = k6TestRunTemplate({ testScript, clusterNodes, topologyName, workloadName, hops, requestsPerSecondPerVu, executionName, duration, iterationTimeout, vuPerRoute });
+    const k6TestRunTemplateParsed = k6TestRunTemplate(templateParams);
     fs.writeFileSync(`./k6-test-run.yaml`, k6TestRunTemplateParsed)
 
     // Generate k6 test results file
     const k6TestResultsTemplateData = fs.readFileSync(`assets/k6-test-results.yaml`).toString()
     const k6TestResultsTemplate = Handlebars.compile(k6TestResultsTemplateData);
-    const k6TestResultsTemplateParsed = k6TestResultsTemplate({ testScript, clusterNodes, topologyName, workloadName, hops, requestsPerSecondPerVu, executionName, duration, iterationTimeout });
+    const k6TestResultsTemplateParsed = k6TestResultsTemplate(templateParams);
     fs.writeFileSync(`./k6-test-results.yaml`, k6TestResultsTemplateParsed)
 
   }).catch((error) => {
