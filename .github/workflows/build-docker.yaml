@@ -47,7 +47,7 @@ jobs:
         id: vars
         run: |
           if [[ "${{ github.event_name }}" == "pull_request" ]]; then
-            echo "TAG=pr-${{ github.event.pull_request.number }}" >> $GITHUB_ENV
+            echo "TAG=pr-${{ github.event.pull_request.number }}" | tee -a $GITHUB_OUTPUT
           else
             echo "TAG=latest" | tee -a $GITHUB_OUTPUT
           fi
