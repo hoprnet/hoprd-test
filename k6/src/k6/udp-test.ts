@@ -49,7 +49,6 @@ export function setup() {
     cluster: configuration.clusterNodes,
     topology: configuration.topology,
     workload: configuration.workload,
-    hops: configuration.hops.toString(),
     routes: routes.length.toString(),
     vu: configuration.vuPerRoute.toString(), 
     protocol: 'udp',

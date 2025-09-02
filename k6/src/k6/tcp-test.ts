@@ -46,7 +46,6 @@ export function setup() {
     network: routes[0].entryNode.getNetwork(),
     topology: configuration.topology,
     workload: configuration.workload,
-    hops: configuration.hops.toString(),
     routes: routes.length.toString(),
     vu: configuration.vuPerRoute.toString(), 
     protocol: 'tcp'

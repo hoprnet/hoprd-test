@@ -16,7 +16,6 @@ export class K6Configuration {
     public dataPool: Route[];
     public workloadOptions: any;
     public duration: number = 1;
-    public hops: number = 1;
     public vuPerRoute: number = 1;
 
     public constructor() {
@@ -29,7 +28,6 @@ export class K6Configuration {
             console.log(`[Setup] Workload(K6_WORKLOAD_NAME): ${this.workload}`);
             console.log(`[Setup] Topology(K6_TOPOLOGY_NAME): ${this.topology}`);
             console.log(`[Setup] Test duration(K6_TEST_DURATION): ${this.duration}m`);
-            console.log(`[Setup] Hops(K6_HOPS): ${this.hops}`);
             let uniqueEntryNodes = Array.from((new Set(this.dataPool.map((route) => route.entryNode.name))));
             let uniqueRelayerNodes = Array.from((new Set(this.dataPool.map((route) => route.relayerNode.name))));
             let uniqueExitNodes = Array.from((new Set(this.dataPool.map((route) => route.exitNode.name))));
@@ -58,15 +56,6 @@ export class K6Configuration {
                 this.duration = duration;
             } else {
                 fail('[ERROR] Invalid DURATION, using default duration.');
-            }
-        }
-
-        if (__ENV.K6_HOPS) {
-            const hops = parseInt(__ENV.K6_HOPS);
-            if (!Number.isNaN(hops) && hops > 0) {
-                this.hops = hops;
-            } else {
-                fail('[ERROR] Invalid HOPS, using default hops.');
             }
         }
 

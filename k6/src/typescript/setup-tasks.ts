@@ -65,11 +65,15 @@ export async function sendTestMessages(nodes: HoprdNode[]) {
     route.entryNode.nativeAddress !== route.exitNode.nativeAddress &&
     route.entryNode.nativeAddress !== route.relayerNode.nativeAddress &&
     route.relayerNode.nativeAddress !== route.exitNode.nativeAddress
+  ).filter((route) =>
+    route.entryNode.data.routes.some((relayer:{name: string}) => route.relayerNode.data.name === relayer.name) &&
+    route.exitNode.data.routes.some((relayer:{name: string}) => route.relayerNode.data.name === relayer.name)
   );
 
   // Sequentially send messages
   let failedMessages = 0;
   for (const route of routes) {
+    console.log(`[INFO] Sending test message from ${route.entryNode.data.name} to ${route.exitNode.data.name} via ${route.relayerNode.data.name}`);
     const messageSent = await route.entryNode.sendMessageOverSession(route.relayerNode, route.exitNode);
     if (!messageSent) {
       failedMessages++;

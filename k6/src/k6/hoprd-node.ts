@@ -142,7 +142,7 @@ export class HoprdNode {
           const session = JSON.parse(postResponse.body);
           sleep(5); // wait for session to be established
           let listenHost;
-          if (session.ip === '0.0.0.0') { // Kubernetes uses
+          if (session.ip === '0.0.0.0') { // Session created in Kubernetes infrastructure
             listenHost=`${this.p2p}:${session.port}`;
           } else {
             listenHost = `${session.ip}:${session.port}`;
