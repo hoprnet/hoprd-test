@@ -63,21 +63,21 @@ export class SocketConfiguration extends K6Configuration {
     }
 
     public getTargetDestination(action: string): string {
-        let listenHost = ''
+        let targetDestination = ''
         let port = ''
         // Generates a random integer between 0 and this.echoServersReplicas (inclusive)    
         let serverNumber = Math.floor(Math.random() * this.echoServersReplicas);
         if (this.protocol === 'tcp') { // Distribute workload between both services
-            listenHost=`echo-service-tcp-${serverNumber}.staging.hoprnet.link`;
+            targetDestination=`echo-service-tcp-${serverNumber}.staging.hoprnet.link`;
         } else {
-            listenHost=`echo-service-udp-${serverNumber}.staging.hoprnet.link`;
+            targetDestination=`echo-service-udp-${serverNumber}.staging.hoprnet.link`;
         }
         if (action == "download") {
             port='3002';
         } else {
             port='3001';
         }
-        return `${listenHost}:${port}`;
+        return `${targetDestination}:${port}`;
     }
 
     private loadSocketEnvironmentVariables(): void {
