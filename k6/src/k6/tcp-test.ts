@@ -5,7 +5,6 @@ import tcp from 'k6/x/tcp';
 import { HoprdNode } from "./hoprd-node";
 import { stringToArrayBuffer } from './utils'
 import { SocketConfiguration } from "./socket-configuration";
-import { crypto } from 'k6/experimental/webcrypto';
 
 
 // Read nodes
@@ -107,7 +106,7 @@ export function download(routes: [{ entryNode: HoprdNode, relayerNode: HoprdNode
       let downloadDurationSeconds = downloadDurationMiliseconds / 1000;
       console.log(`[Download][VU ${__VU}] ${entryNode.name} downloaded ${(downloadSettings.payloadSize/(1024*1024))} MB in ${downloadDurationSeconds.toFixed(2)} seconds (${(downloadSettings.payloadSize / (downloadDurationSeconds * 1024 * 1024)).toFixed(2)} MB/s) from ${listenHost} through ${relayerNode.name} to ${exitNode.name}`);
       metricDocumentsSucceed.add(1, {job: entryNode.nodeName, entryNode: entryNode.name, exitNode: exitNode.name, relayerNode: relayerNode.name, action: 'download'});
-      metricDocumentLatency.add(downloadDurationMiliseconds, {job: entryNode.nodeName, seentryNodender: entryNode.name, exitNode: exitNode.name, relayerNode: relayerNode.name, action: 'download'});
+      metricDocumentLatency.add(downloadDurationMiliseconds, {job: entryNode.nodeName, seentryNodender: entryNode.name, exitNode: exitNode.name, relayerNode: relayerNode.name, action: 'download', payloadSize: (downloadSettings.payloadSize * (1024*1024)).toString()});
     } catch (err) {
       console.error(`[Download][VU ${vu + 1}] Failed to download file via [${entryNode.name}] => [${relayerNode.name}] => [${exitNode.name}]`);
       console.error(`[Download][VU:${vu + 1}] Error message:`, err);
@@ -161,7 +160,7 @@ export function upload(routes: [{ entryNode: HoprdNode, relayerNode: HoprdNode, 
           let uploadDurationSeconds = uploadDurationMiliseconds / 1000;
           console.log(`[Upload][VU ${__VU}] ${entryNode.name} uploaded ${(uploadSettings.payloadSize/(1024*1024))} MB in ${uploadDurationSeconds.toFixed(2)} seconds (${(uploadSettings.payloadSize / (uploadDurationSeconds * 1024 * 1024)).toFixed(2)} MB/s) to ${listenHost} through ${relayerNode.name} => ${exitNode.name}`);
           metricDocumentsSucceed.add(1, {job: entryNode.nodeName, entryNode: entryNode.name, exitNode: exitNode.name, relayerNode: relayerNode.name, action: 'upload'});
-          metricDocumentLatency.add(uploadDurationMiliseconds, {job: entryNode.nodeName, entryNode: entryNode.name, exitNode: exitNode.name, relayerNode: relayerNode.name, action: 'upload'});
+          metricDocumentLatency.add(uploadDurationMiliseconds, {job: entryNode.nodeName, entryNode: entryNode.name, exitNode: exitNode.name, relayerNode: relayerNode.name, action: 'upload', payloadSize: (uploadSettings.payloadSize * (1024*1024)).toString()});
           break;
         }
       }

@@ -28,6 +28,8 @@ spec:
           secretKeyRef:
             name: hoprd-api-tokens
             key: "{{ clusterNodes }}"
+      - name: K6_EXECUTION_NAME
+        value: "{{ executionName }}"
       - name: K6_CLUSTER_NODES
         value: "{{ clusterNodes }}"
       - name: K6_TOPOLOGY_NAME

@@ -134,7 +134,7 @@ export function download(routes: [{ entryNode: HoprdNode, relayerNode: HoprdNode
         let downloadDurationSeconds = downloadDurationMiliseconds / 1000;
         console.log(`[Download][VU ${__VU}] Downloaded ${(downloadSettings.payloadSize/(1024*1024))} MB in ${downloadDurationSeconds.toFixed(2)} seconds (${(downloadSettings.payloadSize / (downloadDurationSeconds * 1024 * 1024)).toFixed(2)} MB/s) using path ${entryNode.name} => ${relayerNode.name} => ${exitNode.name} from ${listenHost}`);
         metricDocumentsSucceed.add(1, {job: entryNode.nodeName, entryNode: entryNode.name, exitNode: exitNode.name, relayerNode: relayerNode.name, action: 'download'});
-        metricDocumentLatency.add(downloadDurationMiliseconds, {job: entryNode.nodeName, entryNode: entryNode.name, exitNode: exitNode.name, relayerNode: relayerNode.name, action: 'download'});
+        metricDocumentLatency.add(downloadDurationMiliseconds, {job: entryNode.nodeName, entryNode: entryNode.name, exitNode: exitNode.name, relayerNode: relayerNode.name, action: 'download', payloadSize: (downloadSettings.payloadSize * (1024*1024)).toString()});
       }
     } catch (err) {
       let downloadDurationSeconds = (new Date().getTime() - initialStartTime) / 1000;
@@ -189,7 +189,7 @@ export function upload(routes: [{ entryNode: HoprdNode, relayerNode: HoprdNode, 
           let uploadDurationSeconds = uploadDurationMiliseconds / 1000;
           console.log(`[Upload][VU ${__VU}] ${entryNode.name} uploaded ${(uploadSettings.payloadSize/(1024*1024))} MB in ${uploadDurationSeconds.toFixed(2)} seconds (${(uploadSettings.payloadSize / (uploadDurationSeconds * 1024 * 1024)).toFixed(2)} MB/s) to ${listenHost} through ${relayerNode.name} => ${exitNode.name}`);
           metricDocumentsSucceed.add(1, {job: entryNode.nodeName, entryNode: entryNode.name, exitNode: exitNode.name, relayerNode: relayerNode.name, action: 'upload'});
-          metricDocumentLatency.add(uploadDurationMiliseconds, {job: entryNode.nodeName, entryNode: entryNode.name, exitNode: exitNode.name, relayerNode: relayerNode.name, action: 'upload'});
+          metricDocumentLatency.add(uploadDurationMiliseconds, {job: entryNode.nodeName, entryNode: entryNode.name, exitNode: exitNode.name, relayerNode: relayerNode.name, action: 'upload', payloadSize: (uploadSettings.payloadSize * (1024*1024)).toString()});
       }
   } catch (err) {
       console.error(`[Upload][VU ${vu + 1}] Failed to upload file via [${entryNode.name}] => [${relayerNode.name}] => [${exitNode.name}]`);
