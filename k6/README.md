@@ -40,7 +40,8 @@ The cluster of nodes, specified through the environment variable named `K6_CLUST
 - `local`: Uses the nodes of the local-cluster 
 - `core-rotsee`: Uses the set of nodes from core-team at rotsee
 - `core-dufour`: Uses the set of nodes from core-team at dufour
-- `uhttp`: Uses the active nodes of uhttp
+- `ctdapp-rotsee`: Uses the active nodes of ctdapp
+- `demo-rotsee`: Uses the set of demo nodes in rotsee
 - `team`: Users the nodes that belong to the development team
 
 ### API Token
@@ -49,7 +50,7 @@ Before running any execution, the environment variable `HOPRD_API_TOKEN` needs t
 
 ### Workload
 
-The workload environment variable `K6_WORKLOAD_NAME` specifies the kind of workload that has been injected in the executio. Default value is: `sanity-check`. The following workloads are implemented:
+The workload environment variable `K6_WORKLOAD_NAME` specifies the kind of workload that has been injected in the execution. Default value is: `sanity-check`. The following workloads are implemented:
 
 - `sanity-check`: This is the default workload for debuging purposes, and it's meant to send few messages during 1 minute using a constant workload
 - `constant`: This workload injects the same amount of messages from the begining and keeps doing it until the end of the execution. There is a few warm-up and tear-down phase, but most of the time will be injecting the same workload.
