@@ -13,8 +13,8 @@ export class SocketConfiguration extends K6Configuration {
     public iterationsPerVU: number = 1;
     public payloadSize: number = 1 * 1024 * 1024; // 1 MB
     public iterationTimeout: number = 60; // 60 seconds
-    public downloadThroughput: number = 1 * 1024 * 1024; // 1MB/s
-    public uploadThroughput: number = 1 * 1024 * 1024; // 1MB/s
+    public downloadThroughput: number = 512 * 1024; // 512KB/s
+    public uploadThroughput: number = 512 * 1024; // 512KB/s
     public downloadSegmentSize: number;
     public uploadSegmentSize: number;
     public sessionCapabilities: string[] = [];
