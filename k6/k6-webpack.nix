@@ -16,7 +16,7 @@ pkgs.stdenv.mkDerivation rec {
   ];
   
   buildPhase = ''
-    yarn install --frozen-lockfile
+    yarn install --frozen-lockfile --offline
     yarn run webpack
   '';
 
