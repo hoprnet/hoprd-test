@@ -1,23 +1,15 @@
-{ pkgs ? import <nixpkgs> { } }:
+{ pkgs , k6-custom }:
 let
   linuxPkgs = with pkgs; lib.optional stdenv.isLinux (
     inotify-tools
-  );
-  macosPkgs = with pkgs; lib.optional stdenv.isDarwin (
-    with darwin.apple_sdk.frameworks; [
-      CoreFoundation
-      CoreServices
-    ]
   );
 in
 with pkgs;
 mkShell {
   nativeBuildInputs = [
-    nodejs_20
-    (yarn.override { nodejs = nodejs_20; })
-
-    # custom pkg groups
-    linuxPkgs
-    macosPkgs
-  ];
+    pkgs.nodejs_20
+    pkgs.yarn
+    pkgs.xk6
+    k6-custom
+    ] ++ linuxPkgs;
 }

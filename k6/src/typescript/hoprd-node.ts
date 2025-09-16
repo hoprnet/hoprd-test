@@ -228,9 +228,9 @@ export class HoprdNode {
     }
     const payload = Object.assign(this.basePayload, sessionPayload);
 
-    //console.log(`[DEBUG] Opening session: ${JSON.stringify(payload)} for node ${this.data.name} to exitNode ${exitNode.data.name} with relayer ${relayerAddress}`);
+    //console.log(`[DEBUG] Opening session: ${JSON.stringify(payload)}`);
     await this.sdk.api.sessions.OpenSession(payload); // const sessionResponse = 
-    //console.log(`[INFO] Session created ${JSON.stringify(sessionResponse)} for node ${this.data.name} to exitNode ${exitNode.data.name}`);
+    //console.log(`[INFO] Session created ${JSON.stringify(sessionResponse)} for node ${this.data.name} to exitNode ${exitNodeAddress}`);
     let sessionOpened = false 
     const maxAttempts = 12; // e.g., try for 1 minute (12 * 5s)
     let attempts = 0;

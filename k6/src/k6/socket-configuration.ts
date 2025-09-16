@@ -134,7 +134,7 @@ export class SocketConfiguration extends K6Configuration {
                 fail('[ERROR] Invalid K6_DOWNLOAD_SEGMENT_SIZE value.');
             }
         } else {
-            this.downloadSegmentSize = this.protocol === 'tcp' ? 256 * 1024 : 1400; // Default value of 256KB for TCP and 1472 for UDP
+            this.downloadSegmentSize = this.protocol === 'tcp' ? 256 * 1024 : 1400; // Default value of 256KB for TCP and 1400 for UDP
         }
 
         if (__ENV.K6_UPLOAD_SEGMENT_SIZE) {
@@ -145,7 +145,7 @@ export class SocketConfiguration extends K6Configuration {
                 fail('[ERROR] Invalid K6_UPLOAD_SEGMENT_SIZE value.');
             }
         } else {
-            this.uploadSegmentSize = this.protocol === 'tcp' ? 64 * 1024 : 1400; // Default value of 64KB for TCP and 1472 for UDP
+            this.uploadSegmentSize = this.protocol === 'tcp' ? 64 * 1024 : 1400; // Default value of 64KB for TCP and 1400 for UDP
         }
 
         if (__ENV.K6_SESSION_CAPABILITIES) {
