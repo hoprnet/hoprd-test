@@ -5,7 +5,6 @@ import udp from 'k6/x/udp';
 import { HoprdNode } from "./hoprd-node";
 import { stringToArrayBuffer, stringToUint8Array } from './utils'
 import { SocketConfiguration } from "./socket-configuration";
-import { crypto } from 'k6/experimental/webcrypto';
 import exec from 'k6/execution';
 
 
