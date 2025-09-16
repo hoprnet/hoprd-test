@@ -23,7 +23,7 @@
           packages = {
             build-k6 = k6-custom;
             build = k6-webpack;
-            default = k6-custom;
+            default = k6-webpack;
           };
         }
       );

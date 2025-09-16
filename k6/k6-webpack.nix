@@ -16,7 +16,8 @@ pkgs.stdenv.mkDerivation rec {
   ];
   
   buildPhase = ''
-    yarn install --frozen-lockfile --offline
+    export NODE_TLS_REJECT_UNAUTHORIZED=0
+    yarn install --frozen-lockfile
     yarn run webpack
   '';
 
