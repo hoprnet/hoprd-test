@@ -1,4 +1,4 @@
-{ pkgs, nodejs, yarn, k6-custom }:
+{ pkgs, nodejs, yarn }:
 
 let
   # Get the current directory path
