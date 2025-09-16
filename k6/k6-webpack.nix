@@ -1,8 +1,9 @@
-{ pkgs, nodejs, yarn }:
+{ pkgs, nodejs }:
 
 let
   # Get the current directory path
   src = ./.;
+  yarn = pkgs.nodePackages.yarn;
 
 in
 pkgs.stdenv.mkDerivation rec {
@@ -13,11 +14,15 @@ pkgs.stdenv.mkDerivation rec {
   nativeBuildInputs = [
     nodejs
     yarn
+    pkgs.cacert
   ];
   
   buildPhase = ''
-    export NODE_TLS_REJECT_UNAUTHORIZED=0
-    yarn install --frozen-lockfile
+    export NODE_EXTRA_CA_CERTS=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt
+    export YARN_RC_FILENAME=$PWD/.yarnrc
+    export YARN_CACHE_FOLDER=$PWD/.yarn-cache
+    export HOME=$PWD
+    yarn install --frozen-lockfile --network-timeout 60000
     yarn run webpack
   '';
 

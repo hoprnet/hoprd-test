@@ -65,7 +65,7 @@ let
     '';
 
     installPhase = ''
-      install -Dm755 k6 $out/bin/k6
+      install -Dm755 k6 $out/k6
     '';
 
     meta = with lib; {

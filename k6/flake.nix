@@ -12,7 +12,6 @@
           k6-custom = pkgs.callPackage ./k6-custom.nix {};
           k6-webpack = pkgs.callPackage ./k6-webpack.nix { 
             nodejs = pkgs.nodejs_20;
-            yarn = pkgs.yarn;
           };
         in
         {
