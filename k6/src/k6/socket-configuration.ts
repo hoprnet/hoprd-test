@@ -35,7 +35,7 @@ export class SocketConfiguration extends K6Configuration {
             console.log(`[Setup] Protocol: ${this.protocol}`);
             console.log(`[Setup] Session capabilities(K6_SESSION_CAPABILITIES): ${this.sessionCapabilities.join(', ')}`);
             console.log(`[Setup] Session max surb upstream(K6_SESSION_MAX_SURB_UPSTREAM): ${this.sessionMaxSurbUpstream} kb/s`);
-            console.log(`[Setup] Session response buffer(K6_SESSION_RESPONSE_BUFFER): ${this.sessionResponseBuffer} MB`);
+            console.log(`[Setup] Session response buffer(K6_SESSION_RESPONSE_BUFFER): ${this.sessionResponseBuffer} MB`);
             console.log(`[Setup] Document payload size(K6_PAYLOAD_SIZE): ${friendlyPayloadSize} MB`);
             if (__ENV.K6_SKIP_SCENARIO_DOWNLOAD === 'true') {
                 console.log(`[Setup] Download scenario is skipped (K6_SKIP_SCENARIO_DOWNLOAD: ${__ENV.K6_SKIP_SCENARIO_DOWNLOAD})`);

@@ -9,8 +9,7 @@ spec:
   script:
     localFile: /app/hoprnet/{{ testScript }}-test.js
   separate: true
-  arguments: --tag testid={{ executionName }}
-  # --summary-export=/test-results/k6/test-execution-$(date +%Y%m%d-%H%M%S).json
+  arguments: --tag testid={{ executionName }} --summary-export=/app/hoprnet/test-execution-$(date +%Y%m%d-%H%M%S).json
   runner:
     image: europe-west3-docker.pkg.dev/hoprassociation/docker-images/hoprd-k6:latest
     securityContext:
