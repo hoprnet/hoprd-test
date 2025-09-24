@@ -15,16 +15,16 @@ This package is responsible of creating a set of load testing scenarios to be us
 The binary [xk6](https://github.com/grafana/xk6) is used to install a binary named `k6` with certain extensions. Follow the installations guidlelines on how to install locally a `k6` binary bundled with the [xk6-output-prometheus-remote](https://github.com/grafana/xk6-output-prometheus-remote). 
 
 Or alternatively execute:
-- `npm run install:xk6:linux`: Install k6 locally for Linux
-- `npm run install:xk6:mac`: Install k6 locally for Mac
+- `yarn run install:xk6:linux`: Install k6 locally for Linux
+- `yarn run install:xk6:mac`: Install k6 locally for Mac
 
 ## Building
 
 
 Here are the most useful commands:
 
-- `npm install`: Install Node dependencies
-- `npm run build`: Build source code for running tests
+- `yarn install`: Install Node dependencies
+- `yarn run build`: Build source code for running tests
 
 ## Execution Parameters
 
@@ -110,13 +110,13 @@ export K6_UPLOAD_THROUGHPUT=$((512 * 1024))
 
 If required, check the setup of the environment. Not required in local cluster, as the topology is already defined:
 ```bash
-npm run setup
+yarn run setup
 ```
 
 Run tests:
 ```bash
-npm run test:udp
-npm run test:tcp
+yarn run test:udp
+yarn run test:tcp
 ```
 
 ## Running remotely

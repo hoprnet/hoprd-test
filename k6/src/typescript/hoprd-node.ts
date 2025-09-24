@@ -214,6 +214,7 @@ export class HoprdNode {
         "Retransmission" as const,
         "Segmentation" as const
       ],
+      maxSurbUpstream: "2000 kb/s",
       responseBuffer: "2 MB",
       target: {
         Plain: `${target}:80` as const,
@@ -229,8 +230,8 @@ export class HoprdNode {
     const payload = Object.assign(this.basePayload, sessionPayload);
 
     //console.log(`[DEBUG] Opening session: ${JSON.stringify(payload)}`);
-    await this.sdk.api.sessions.OpenSession(payload); // const sessionResponse = 
-    //console.log(`[INFO] Session created ${JSON.stringify(sessionResponse)} for node ${this.data.name} to exitNode ${exitNodeAddress}`);
+    await this.sdk.api.sessions.OpenSession(payload); // const _sessionResponse = 
+    //console.log(`[DEBUG] Session created ${JSON.stringify(sessionResponse)} for node ${this.data.name} to exitNode ${exitNodeAddress}`);
     let sessionOpened = false 
     const maxAttempts = 12; // e.g., try for 1 minute (12 * 5s)
     let attempts = 0;

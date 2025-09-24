@@ -13,6 +13,7 @@
     "@babel/preset-env": "7.27.2",
     "@babel/preset-typescript": "7.27.1",
     "@types/k6": "~1.0.2",
+    "@types/minimatch": "^6.0.0",
     "@types/node": "^22.15.29",
     "@types/node-fetch": "^3.0.2",
     "@types/webpack": "5.28.5",
@@ -42,7 +43,7 @@
     "parse:results": "node parse-results.js test-execution-20240522-113543.json many2many sanity-check 1 test-2.1.0 30"
   },
   "dependencies": {
-    "@hoprnet/hopr-sdk": "3.0.2",
+    "@hoprnet/hopr-sdk": "3.0.3-pr.156-20250916114518",
     "fs": "^0.0.2",
     "handlebars": "^4.7.8",
     "ws": "^8.18.2"
