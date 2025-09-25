@@ -72,6 +72,9 @@ try {
           }
           return node.enabled;
         })
+        .filter((node: any) => {
+          return clusterNodesData.filter((clusterNode: any) => clusterNode.name === node.name).length !== 0 ? true : false;
+        })
         .map(async (topologyNode: any) => {
             topologyNode.apiToken = process.env.HOPRD_API_TOKEN
             let node = getClusterNodeByName(topologyNode.name);
@@ -107,5 +110,6 @@ Promise.all(hoprdNodes).then((hoprdNodes: HoprdNode[]) => {
   }).catch((error) => {
     console.error('Failed to generate k6 manifest files:', error);
     console.error(error)
+    process.exit(1);
   });
 })

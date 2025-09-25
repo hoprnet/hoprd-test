@@ -1,0 +1,22 @@
+{
+  "nodes": [
+    {
+      "name": "node-1",
+      "instance": "columbus",
+      "url": "https://gnosisvpn-js-entry-node-columbus.staging.gnosisvpn.io",
+      "p2p": "gnosisvpn-js-entry-node-columbus.staging.gnosisvpn.io"
+    },
+    {
+      "name": "node-2",
+      "instance": "stockholm",
+      "url": "https://gnosisvpn-js-entry-node-stockholm.staging.gnosisvpn.io",
+      "p2p": "gnosisvpn-js-entry-node-stockholm.staging.gnosisvpn.io"
+    },
+    {
+      "name": "node-5",
+      "instance": "london",
+      "url": "https://uk-london-01.endpoints.staging.gnosisvpn.io",
+      "p2p": "uk-london-01.endpoints.staging.gnosisvpn.io"
+    }
+  ]
+}

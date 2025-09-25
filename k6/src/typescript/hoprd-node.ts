@@ -113,8 +113,9 @@ export class HoprdNode {
   }
 
   private async getChannelsToOpen(nodes: HoprdNode[], channelsToOpen: Promise<{ channelId: string, targetNode: string, desiredStatus: string }>[]) {
-    // Prepare to open channels
-    for (let route of this.data.routes) {
+    // Filter routes to only include nodes that are enabled and exist in the current topology
+    const routes = this.data.routes.filter((route: any) => { nodes.filter((node: HoprdNode) => node.data.name === route.name).length !== 0 });
+    for (let route of routes) {
       // console.log(`[INFO] Checking channel from ${this.data.name} to ${route.name}`)
       const routePeerAddress = this.getNativeAddressByNodeName(route.name, nodes)
       if (routePeerAddress == '') {
@@ -279,14 +280,18 @@ export class HoprdNode {
     // const port = Math.floor(Math.random() * (9100 - 9092) + 9092); // Random port between 9092 and 9100
     const port = await this.openSession(target, relayerNode.nativeAddress?.toLowerCase() || '', exitNode.nativeAddress?.toLowerCase() || '');
 
-    const responseEcho = await this.fetchData(target, port);
-    await this.closeSession(port);
+    return await this.fetchData(target, port).then((responseEcho)=> { 
     if (responseEcho && responseEcho.message) {
       return true;
     } else {
+      console.error(`[ERROR] Unable to parse data from echo service for node ${this.data.name}`);
+      return false;
+    }}).catch(() => {
       console.error(`[ERROR] Unable to fetch data from echo service for node ${this.data.name}`);
       return false;
-    }
+    }).finally(async () => {
+      await this.closeSession(port);
+    });
   }
 
   private async fetchData(host: string, port:number): Promise<any> {

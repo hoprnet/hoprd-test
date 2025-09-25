@@ -77,6 +77,8 @@ export async function sendTestMessages(nodes: HoprdNode[]) {
     const messageSent = await route.entryNode.sendMessageOverSession(route.relayerNode, route.exitNode);
     if (!messageSent) {
       failedMessages++;
+    } else {
+      console.log(`[INFO] Message sent successfully from ${route.entryNode.data.name} to ${route.exitNode.data.name} via ${route.relayerNode.data.name}`);
     }
   }
 
