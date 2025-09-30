@@ -207,9 +207,9 @@ export class HoprdNode {
     return (await waitingChannel)
   }
 
-  private async openSession(target: string, relayerAddress: string, exitNodeAddress: string): Promise<number> {
+  private async openSession(target: string, relayerAddress: string, exitNodeAddress: string): Promise<{ip: string, port: number}> {
     const sessionPayload = {
-      listenHost: `0.0.0.0:0`,
+      listenHost: `:0`,
       protocol: "tcp" as const,
       capabilities: [
         "Retransmission" as const,
@@ -255,9 +255,9 @@ export class HoprdNode {
       //console.debug(`[DEBUG] Session opened successfully for node ${this.data.name} to exitNode ${exitNodeAddress} with relayer ${relayerAddress}: ${JSON.stringify(openedSession)}`);
       
     }
-    return new Promise<number>((resolve, reject) => {
+    return new Promise<{ip: string, port: number}>((resolve, reject) => {
       if (sessionOpened && openedSession) {
-        setTimeout(() => resolve(openedSession.port), 5000);
+        setTimeout(() => resolve({ip: openedSession.ip, port: openedSession.port}), 5000);
       } else {
         reject(new Error("Session could not be opened in time."));
       }
@@ -265,11 +265,11 @@ export class HoprdNode {
   }
 
 
-  private async closeSession(port: number): Promise<boolean> {
+  private async closeSession(listenHost: {ip: string, port: number}): Promise<boolean> {
     const sessionPayload = {
-      listeningIp: `0.0.0.0`,
+      listeningIp: listenHost.ip,
       protocol: "tcp" as const,
-      port: port
+      port: listenHost.port
     }
     const payload = Object.assign(this.basePayload, sessionPayload);
     return this.sdk.api.sessions.closeSession(payload); // const sessionResponse = 
@@ -278,9 +278,9 @@ export class HoprdNode {
   public async sendMessageOverSession(relayerNode: HoprdNode, exitNode: HoprdNode): Promise<boolean> {
     const target="echo-service-http.staging.hoprnet.link";
     // const port = Math.floor(Math.random() * (9100 - 9092) + 9092); // Random port between 9092 and 9100
-    const port = await this.openSession(target, relayerNode.nativeAddress?.toLowerCase() || '', exitNode.nativeAddress?.toLowerCase() || '');
+    const listenHost:{ip: string, port:number} = await this.openSession(target, relayerNode.nativeAddress?.toLowerCase() || '', exitNode.nativeAddress?.toLowerCase() || '');
 
-    return await this.fetchData(target, port).then((responseEcho)=> { 
+    return await this.fetchData(target, listenHost.port).then((responseEcho)=> { 
     if (responseEcho && responseEcho.message) {
       return true;
     } else {
@@ -290,7 +290,7 @@ export class HoprdNode {
       console.error(`[ERROR] Unable to fetch data from echo service for node ${this.data.name}`);
       return false;
     }).finally(async () => {
-      await this.closeSession(port);
+      await this.closeSession(listenHost);
     });
   }
 

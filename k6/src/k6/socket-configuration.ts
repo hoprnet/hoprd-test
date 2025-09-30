@@ -15,8 +15,8 @@ export class SocketConfiguration extends K6Configuration {
     public iterationTimeout: number = 60; // 60 seconds
     public downloadThroughput: number = 512 * 1024; // 512KB/s
     public uploadThroughput: number = 512 * 1024; // 512KB/s
-    public downloadSegmentSize: number;
-    public uploadSegmentSize: number;
+    public downloadSegmentSize: number = 0; // To be set based on protocol
+    public uploadSegmentSize: number = 0; // To be set based on protocol
     public sessionCapabilities: string[] = [];
     public sessionMaxSurbUpstream: number = 2000; // 2000 kb/s
     public sessionResponseBuffer: number = 2; // 2 MB
