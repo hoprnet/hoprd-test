@@ -89,6 +89,7 @@ export function mergeNodesJsonFiles(clusterNodesData: any, topologyNodesData: an
     const getClusterNodeByName = (nodeName: string) => clusterNodesData.filter((node: any) => node.name === nodeName)[0];
     return topologyNodesData
         .filter((node: any) => node.enabled)
+        .filter((node:any) => getClusterNodeByName(node.name)) // Ensure the node exists in clusterNodesData
         .map((topologyNode: any) => {
             topologyNode.apiToken = __ENV.HOPRD_API_TOKEN
             let node = getClusterNodeByName(topologyNode.name);
