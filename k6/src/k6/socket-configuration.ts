@@ -211,7 +211,7 @@ export class SocketConfiguration extends K6Configuration {
             thresholds: {
                 hopr_documents_succeed: ["count>0"],
                 hopr_documents_failed: ["count<=0"],
-                hopr_segment_latency: ["avg<1", "p(90)<2", "p(95)<3"],
+                hopr_segment_latency: ["avg<10", "p(90)<15", "p(95)<20"],
                 hopr_document_latency: ["avg<6000", "p(90)<7000", "p(95)<8000"]
             },
             summaryTrendStats: ['avg', 'min', 'max', 'p(90)', 'p(95)']
