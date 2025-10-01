@@ -209,7 +209,7 @@ export class HoprdNode {
 
   private async openSession(target: string, relayerAddress: string, exitNodeAddress: string): Promise<{ip: string, port: number}> {
     const sessionPayload = {
-      listenHost: `:0`,
+      listenHost: ":0",
       protocol: "tcp" as const,
       capabilities: [
         "Retransmission" as const,

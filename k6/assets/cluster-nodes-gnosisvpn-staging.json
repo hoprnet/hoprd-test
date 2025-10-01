@@ -1,19 +1,19 @@
 {
   "nodes": [
     {
-      "name": "node-7",
+      "name": "node-1",
       "instance": "columbus",
       "url": "https://gnosisvpn-js-entry-node-columbus.staging.gnosisvpn.io",
       "p2p": "34.1.16.20"
     },
     {
-      "name": "node-1",
+      "name": "node-2",
       "instance": "stockholm",
       "url": "https://gnosisvpn-js-entry-node-stockholm.staging.gnosisvpn.io",
       "p2p": "34.2.54.246"
     },
     {
-      "name": "node-2",
+      "name": "node-3",
       "instance": "iowa",
       "url": "https://us-iowa-01.endpoints.staging.gnosisvpn.io",
       "p2p": "185.9.1.177"
