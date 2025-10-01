@@ -23,6 +23,11 @@ export class K6Configuration {
         this.loadJSONFiles();
         if (__VU === 1) { // Only print once to avoid spamming the console
             //dataPool.forEach((route: any) => console.log(`[Setup] DataPool entryNode ${route.entryNode.name} -> ${route.relayerNode.name} -> ${route.exitNode.name}`));
+            if (__ENV.K6_SKIP_HOPRD_SESSIONS === 'true') {
+                console.log(`[Setup] Skipping Hoprd sessions, using direct connections to target services. K6_SKIP_HOPRD_SESSIONS=true`);
+            } else {
+                console.log(`[Setup] Using Hoprd sessions, opening connections through the Hoprd network. K6_SKIP_HOPRD_SESSIONS=false`);
+            }
             console.log(`[Setup] Execution name(K6_EXECUTION_NAME): ${this.executionName}`);
             console.log(`[Setup] Cluster nodes(K6_CLUSTER_NODES): ${this.clusterNodes}`);
             console.log(`[Setup] Workload(K6_WORKLOAD_NAME): ${this.workload}`);

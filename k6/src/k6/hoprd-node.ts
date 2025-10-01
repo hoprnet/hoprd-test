@@ -140,9 +140,12 @@ export class HoprdNode {
         const postResponse: RefinedResponse<"text"> = http.post(url, payload, this.httpParams);
         if (postResponse.status === 200) {
           const session = JSON.parse(postResponse.body);
+          //console.log(`[Setup] New session opened: ${JSON.stringify(session)}`);
           sleep(5); // wait for session to be established
           let listenHost;
           if (session.ip === '0.0.0.0') { // Session created in Kubernetes infrastructure
+            listenHost=`${this.p2p}:${session.port}`;
+          } else if (session.ip.startsWith("172.")) { // Session created in Docker compose infrastructure
             listenHost=`${this.p2p}:${session.port}`;
           } else {
             listenHost = `${session.ip}:${session.port}`;

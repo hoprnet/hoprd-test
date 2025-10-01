@@ -87,7 +87,7 @@ export function download(routes: [{ entryNode: HoprdNode, relayerNode: HoprdNode
     iteration: exec.scenario.iterationInTest,
     iterationTimeout: configuration.iterationTimeout * 1000
   }
-  //console.log(`[Download][VU ${__VU}] Opening download udp connection to ${listenHost}`)
+  //console.log(`[Download][VU ${__VU}] Opening download udp connection to ${listenHost} with settings: ${JSON.stringify(downloadSettings)}`);
   let connection = udp.connectLocalAddress(listenHost, `${configuration.runnerIP}:${10000 + __VU}`, configuration.iterationTimeout);
   console.log(`[Download][VU ${__VU}][ITER ${exec.scenario.iterationInTest}] Opened a downloading UDP Connection from ${connection.localAddr()} to ${listenHost}`)
   udp.writeLn(connection, stringToArrayBuffer(JSON.stringify(downloadSettings)));
