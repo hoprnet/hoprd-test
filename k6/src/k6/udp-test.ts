@@ -72,9 +72,9 @@ export function setup() {
 export function download(routes: [{ entryNode: HoprdNode, relayerNode: HoprdNode, exitNode: HoprdNode, downloadSession: string }]) {
 
   const vu = Math.ceil((__VU - 1) % routes.length);
-  const entryNode = routes[vu].entryNode;
-  const relayerNode = routes[vu].relayerNode;
-  const exitNode = routes[vu].exitNode;
+  const entryNode: HoprdNode = routes[vu].entryNode;
+  const relayerNode: HoprdNode = routes[vu].relayerNode;
+  const exitNode: HoprdNode = routes[vu].exitNode;
   const listenHost = routes[vu].downloadSession;
   //console.log(`[EntryNode][VU ${vu + 1}] Connecting via udp session, entryNode=${entryNode.name}, relayerNode=${relayerNode.name}, exitNode=${exitNode.name}`);
 
@@ -89,7 +89,7 @@ export function download(routes: [{ entryNode: HoprdNode, relayerNode: HoprdNode
   }
   //console.log(`[Download][VU ${__VU}] Opening download udp connection to ${listenHost} with settings: ${JSON.stringify(downloadSettings)}`);
   let connection = udp.connectLocalAddress(listenHost, `${configuration.runnerIP}:${10000 + __VU}`, configuration.iterationTimeout);
-  console.log(`[Download][VU ${__VU}][ITER ${exec.scenario.iterationInTest}] Opened a downloading UDP Connection from ${connection.localAddr()} to ${listenHost}`)
+  console.log(`[Download][VU ${__VU}][ITER ${exec.scenario.iterationInTest}] Opened a downloading UDP Connection from ${connection.localAddr()} to ${listenHost} at ${new Date().toISOString()}`);
   udp.writeLn(connection, stringToArrayBuffer(JSON.stringify(downloadSettings)));
   //console.log(`[Download][VU ${__VU}][ITER ${exec.scenario.iterationInTest}] Start downloading data with settings: ${JSON.stringify(downloadSettings)}`);
   let downloadedDataSize = 0;
@@ -148,9 +148,9 @@ export function download(routes: [{ entryNode: HoprdNode, relayerNode: HoprdNode
 export function upload(routes: [{ entryNode: HoprdNode, relayerNode: HoprdNode, exitNode: HoprdNode, uploadSession: string }]) {
 
   const vu = Math.ceil((__VU - 1) % routes.length);
-  const entryNode = routes[vu].entryNode;
-  const relayerNode = routes[vu].relayerNode;
-  const exitNode = routes[vu].exitNode;
+  const entryNode: HoprdNode = routes[vu].entryNode;
+  const relayerNode: HoprdNode = routes[vu].relayerNode;
+  const exitNode: HoprdNode = routes[vu].exitNode;
   const listenHost = routes[vu].uploadSession;
   //console.log(`[EntryNode][VU ${vu + 1}] Connecting via udp session, entryNode=${entryNode.name}, relayerNode=${relayerNode.name}, exitNode=${exitNode.name}`);
 
@@ -163,7 +163,7 @@ export function upload(routes: [{ entryNode: HoprdNode, relayerNode: HoprdNode, 
 
   //console.log(`[Upload][VU ${vu +1}] Opening upload UDP connection to ${listenHost}`)
   let connection = udp.connect(listenHost);
-  //console.log(`[Upload][VU ${__VU}] Opened an upload UDP Connection to ${listenHost}`)
+  console.log(`[Upload][VU ${__VU}] Opened an upload UDP Connection to ${listenHost} at ${new Date().toISOString()}`);
 
   let uploadedDataSize = 0;
   let uploadedSegmentCount = 0;
@@ -200,6 +200,21 @@ export function upload(routes: [{ entryNode: HoprdNode, relayerNode: HoprdNode, 
 }
 
 // The Teardown Function is run once after the Load Test https://docs.k6.io/docs/test-life-cycle
-export function teardown(_routes: [{ entryNode: HoprdNode, relayerNode: HoprdNode, exitNode: HoprdNode }]) {
-  console.log("[Teardown] Load test finished");
+export function teardown(routes: [{ entryNode: HoprdNode, relayerNode: HoprdNode, exitNode: HoprdNode, downloadSession: string, uploadSession: string }]) {
+  const entryNodes: HoprdNode[] = configuration.dataPool.filter((value, index, self) => index === self.findIndex(r => r.entryNode.name === value.entryNode.name)).map((datapool) => {
+      return new HoprdNode(datapool.entryNode);
+  });
+
+  routes.forEach((route) => {
+      const entryNode = entryNodes.find(en => en.name === route.entryNode.name);
+      if (route.downloadSession !== null && entryNode !== undefined) {
+        console.log(`[Teardown] Closing download session ${route.downloadSession} on entry node ${entryNode.name}`);
+        entryNode.closeSession("udp", 3002);
+      }
+      if (route.uploadSession !== null && entryNode !== undefined) {
+        console.log(`[Teardown] Closing upload session ${route.uploadSession} on entry node ${entryNode.name}`);
+        entryNode.closeSession("udp", 3001);
+      }
+  });
+  console.log("[Teardown] All sessions closed");
 }

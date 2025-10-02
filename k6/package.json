@@ -36,8 +36,8 @@
     "install:xk6:mac": "docker run --rm -it -e GOOS=darwin -u \"$(id -u):$(id -g)\" -v \"${PWD}:/xk6\" grafana/xk6 build v1.0.0 --with github.com/grafana/xk6-output-prometheus-remote --with github.com/NAlexandrov/xk6-tcp --with github.com/hoprnet/xk6-udp",
     "docker:build": "docker build --platform linux/amd64 --tag europe-west3-docker.pkg.dev/hoprassociation/docker-images/hoprd-k6:latest .",
     "docker:push": "docker push europe-west3-docker.pkg.dev/hoprassociation/docker-images/hoprd-k6:latest",
-    "test:tcp": "yarn run webpack && K6_PROMETHEUS_RW_TREND_AS_NATIVE_HISTOGRAM=true K6_OUT=xk6-prometheus-rw K6_PROMETHEUS_RW_SERVER_URL=https://prometheus.staging.hoprnet.link/api/v1/write ./k6 run ./dist/tcp-test.js",
-    "test:udp": "yarn run webpack && K6_PROMETHEUS_RW_TREND_AS_NATIVE_HISTOGRAM=true K6_OUT=xk6-prometheus-rw K6_PROMETHEUS_RW_SERVER_URL=https://prometheus.staging.hoprnet.link/api/v1/write ./k6 run ./dist/udp-test.js",
+    "test:tcp": "yarn run webpack && K6_PROMETHEUS_RW_TREND_AS_NATIVE_HISTOGRAM=true K6_OUT=xk6-prometheus-rw K6_PROMETHEUS_RW_SERVER_URL=https://prometheus.staging.hoprnet.link/api/v1/write ./k6 --tag testid=${K6_EXECUTION_NAME:-local} run ./dist/tcp-test.js",
+    "test:udp": "yarn run webpack && K6_PROMETHEUS_RW_TREND_AS_NATIVE_HISTOGRAM=true K6_OUT=xk6-prometheus-rw K6_PROMETHEUS_RW_SERVER_URL=https://prometheus.staging.hoprnet.link/api/v1/write ./k6 --tag testid=${K6_EXECUTION_NAME:-local} run ./dist/udp-test.js",
     "setup": "yarn run build && node ./dist/setup-environment.js",
     "parse:results": "node parse-results.js test-execution-20240522-113543.json many2many sanity-check 1 test-2.1.0 30"
   },

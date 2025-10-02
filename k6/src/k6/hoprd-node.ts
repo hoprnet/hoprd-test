@@ -97,6 +97,35 @@ export class HoprdNode {
     }
   }
 
+
+  public closeSession(protocol: string, port: number) {
+        let url = `${this.url}/session/${protocol}`;
+        const getResponse: RefinedResponse<"text"> = http.get(url, this.httpParams);
+        if (getResponse.status === 200) {
+              const sessions: {target: string, protocol: string, ip: string, port: number}[] = JSON.parse(getResponse.body);
+              const openedSession = sessions.filter((session) => session.target.endsWith(`:${port.toString()}`) && session.protocol == protocol);
+              if (openedSession.length == 1) {
+                //console.log(`[Teardown] Found opened session for target ${target} on protocol ${protocol}`);
+                url = `${this.url}/session/${protocol}/${openedSession[0].ip}/${openedSession[0].port}`;
+                //console.log(`[Teardown] Closing session at ${url} with ${JSON.stringify(this.httpParams)}`);
+                const deleteResponse: RefinedResponse<"text"> = http.del(url, "{}", this.httpParams);
+                if (deleteResponse.status === 204) {
+                  console.log(`[Teardown] Session closed on protocol ${protocol} for node ${this.name} at ${url}`);
+                } else {
+                  console.error(`Close session response: ${deleteResponse.body}`);
+                  console.error(`Close session response status: ${deleteResponse.status}`);
+                  fail(`Unable to close session for '${this.name}'`);
+                }
+              } else {
+                console.warn(`[Teardown] No opened session found for port ${port} on protocol ${protocol}`);
+              }
+        } else {
+          console.error(`Response: ${getResponse.body}`);
+          console.error(`Response status: ${getResponse.status}`);
+          fail(`Unable to get sessions for '${this.name}'`);
+        }
+  }
+
   private getSessionRequest(url: string, protocol: string, target: string): string {
     const getResponse: RefinedResponse<"text"> = http.get(url, this.httpParams);
     if (getResponse.status === 200) {
@@ -140,8 +169,6 @@ export class HoprdNode {
         const postResponse: RefinedResponse<"text"> = http.post(url, payload, this.httpParams);
         if (postResponse.status === 200) {
           const session = JSON.parse(postResponse.body);
-          //console.log(`[Setup] New session opened: ${JSON.stringify(session)}`);
-          sleep(5); // wait for session to be established
           let listenHost;
           if (session.ip === '0.0.0.0') { // Session created in Kubernetes infrastructure
             listenHost=`${this.p2p}:${session.port}`;
@@ -150,7 +177,9 @@ export class HoprdNode {
           } else {
             listenHost = `${session.ip}:${session.port}`;
           }
-          console.log(`[Setup] New session opened ${this.name} => ${relayer.name} => ${exitNode.name} listening at ${listenHost} to target ${target}`);
+          const waitTime = 15;
+          console.log(`[Setup] New session opened ${this.name} => ${relayer.name} => ${exitNode.name} listening at ${listenHost} to target ${target} and waiting ${waitTime}s to be established`);
+          sleep(waitTime); // wait for session to be established
           return listenHost;
         } else {
           console.error(`Open session response: ${postResponse.body}`);
