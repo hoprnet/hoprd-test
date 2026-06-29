@@ -84,6 +84,11 @@ check:
     nix develop {{hoprnet}} -c cargo fmt --manifest-path integration/Cargo.toml
     nix develop {{hoprnet}} -c cargo check --manifest-path integration/Cargo.toml --tests
 
+# What CI checks: fmt --check + clippy (-D warnings). Run before pushing.
+lint:
+    nix develop {{hoprnet}} -c cargo fmt --manifest-path integration/Cargo.toml --check
+    nix develop {{hoprnet}} -c cargo clippy --manifest-path integration/Cargo.toml -p hoprd-integration-test --all-targets -- -D warnings
+
 # CI-equivalent: resolve versions.toml pins, build from those revs, run (x86_64-linux).
 ci:
     nix develop {{hoprnet}} -c bash scripts/integration/run.sh

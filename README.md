@@ -172,6 +172,12 @@ Unit tests (parse + gate logic, no external deps): `cargo test --lib`.
 
 ## CI
 
+`pr.yaml` runs on every PR: validates the PR title (Conventional Commits) and
+checks the integration crate — `cargo fmt --check`, `cargo clippy -D warnings`,
+and `cargo nextest run --lib` (fast unit tests; the `#[ignore]` e2e is **not**
+run here). It builds in the hoprnet dev shell on a hosted `depot` runner. Locally:
+`just lint` + `just unit`.
+
 `integration.yaml` runs on `repository_dispatch[integration]` (fired by the three
 source repos on merge) and on manual `workflow_dispatch`. **No version state is
 stored:** the triggering project supplies its rev/image via the dispatch; the

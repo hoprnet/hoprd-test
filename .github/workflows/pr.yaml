@@ -1,0 +1,76 @@
+---
+name: PR
+
+# Validate PR metadata and check the integration crate (fmt, clippy, unit tests).
+# The heavy end-to-end run lives in integration.yaml (dispatch / manual only).
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+permissions:
+  contents: read
+concurrency:
+  group: ${{ github.event.pull_request.head.ref || github.ref_name }}-pr
+  cancel-in-progress: true
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  validate-pr-title:
+    name: Validate title
+    runs-on: depot-ubuntu-24.04
+    permissions:
+      pull-requests: read
+    steps:
+      - uses: amannn/action-semantic-pull-request@48f256284bd46cdaab1048c3721360e808335d50 # v6.1.1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          types: |
+            fix
+            feat
+            build
+            chore
+            ci
+            docs
+            style
+            refactor
+            perf
+            test
+          requireScope: false
+
+  check:
+    name: Lint & unit test
+    runs-on: depot-ubuntu-24.04-4
+    timeout-minutes: 30
+    steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@8d3c67de8e2fe68ef647c8db1e6a09f647780f40 # v2.19.0
+        with:
+          disable-sudo: false
+          egress-policy: audit
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Setup Nix
+        uses: hoprnet/hopr-workflows/actions/setup-nix@5477bd53d62ac15c4804b31fbd55966b29a43997 # setup-nix-v2
+        with:
+          cachix_cache_name: hoprnet
+          cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
+      # The crate builds in the hoprnet dev shell (it provides the rust toolchain
+      # + the cached hopr-lib/edgli dependency tree).
+      - name: Format + clippy
+        run: |
+          nix develop github:hoprnet/hoprnet --command bash -c '
+            set -euo pipefail
+            cd integration
+            cargo fmt --check
+            cargo clippy -p hoprd-integration-test --all-targets -- -D warnings
+          '
+      - name: Unit tests
+        run: |
+          nix develop github:hoprnet/hoprnet --command bash -c '
+            set -euo pipefail
+            cd integration
+            cargo nextest run --lib
+          '
