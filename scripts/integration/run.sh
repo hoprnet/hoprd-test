@@ -1,69 +1,65 @@
 #!/usr/bin/env bash
-# Resolve pinned versions, build hoprd + hoprd-localcluster from a git rev, pull
-# the bloklid-anvil chain image, link edgli at its rev, and run the integration
-# throughput test.
+# Resolve versions, build hoprd + hoprd-localcluster, link edgli, pull the chain
+# image, and run the integration throughput test.
+#
+# Version model — no stored state, no commits:
+#   * the triggering project (PROJECT) uses the rev/image from the dispatch;
+#   * the other two default to their main HEAD / :latest image.
+# So a merge to any project is tested against the current tip of the other two.
 #
 # Inputs (env):
-#   PROJECT                 one of: hoprd | edge-client | blokli  (the triggering repo; optional for manual runs)
-#   OVERRIDE_REV            git rev to use for PROJECT when it is hoprd or edge-client
-#   OVERRIDE_IMAGE          image ref to use for PROJECT when it is blokli
-#   NIX_SYSTEM_SUFFIX       nix output arch suffix (default: x86_64-linux)
+#   PROJECT          hoprd | edge-client | blokli | "" (manual = all defaults)
+#   OVERRIDE_REV     git rev for PROJECT when it is hoprd or edge-client
+#   OVERRIDE_IMAGE   image ref for PROJECT when it is blokli
+#   HOPRD_REF        default hoprd ref      (default: main)
+#   EDGLI_REF        default edge-client ref (default: main)
+#   BLOKLID_ANVIL_IMAGE  default chain image (default: …/bloklid-anvil:latest)
+#   NIX_SYSTEM_SUFFIX    nix output arch suffix (default: x86_64-linux)
 #   plus any HOPRD_E2E_* gating knobs, forwarded to the test as-is.
-#
-# Outputs: writes the resolved pins to $RESOLVED_OUT (default ./resolved.env) as
-#   HOPRD_REV=… EDGLI_REV=… BLOKLID_ANVIL_IMAGE=…  so a later promote step can use them.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-VERSIONS="${REPO_ROOT}/versions.toml"
 CRATE_CARGO="${REPO_ROOT}/integration/Cargo.toml"
 ARCH="${NIX_SYSTEM_SUFFIX:-x86_64-linux}"
-RESOLVED_OUT="${RESOLVED_OUT:-${REPO_ROOT}/resolved.env}"
 
-read_toml() { # key.path
-  python3 -c "import tomllib,sys; d=tomllib.load(open('${VERSIONS}','rb'));
-k=sys.argv[1].split('.');
-v=d
-[v:=v[p] for p in k]
-print(v)" "$1"
-}
+HOPRD_REF="${HOPRD_REF:-main}"
+EDGLI_REF="${EDGLI_REF:-main}"
+CHAIN_IMAGE="${BLOKLID_ANVIL_IMAGE:-europe-west3-docker.pkg.dev/hoprassociation/docker-images/bloklid-anvil:latest}"
 
-HOPRD_REV="$(read_toml hoprd.rev)"
-EDGLI_REV="$(read_toml edge-client.rev)"
-BLOKLID_ANVIL_IMAGE="$(read_toml blokli.image)"
-
+# The triggering project overrides its own ref/image; others keep the defaults.
 case "${PROJECT:-}" in
-  hoprd)       HOPRD_REV="${OVERRIDE_REV:?OVERRIDE_REV required for PROJECT=hoprd}" ;;
-  edge-client) EDGLI_REV="${OVERRIDE_REV:?OVERRIDE_REV required for PROJECT=edge-client}" ;;
-  blokli)      BLOKLID_ANVIL_IMAGE="${OVERRIDE_IMAGE:?OVERRIDE_IMAGE required for PROJECT=blokli}" ;;
-  ""|manual)   echo "no PROJECT override — using all last-known-good pins" ;;
+  hoprd)       HOPRD_REF="${OVERRIDE_REV:?OVERRIDE_REV required for PROJECT=hoprd}" ;;
+  edge-client) EDGLI_REF="${OVERRIDE_REV:?OVERRIDE_REV required for PROJECT=edge-client}" ;;
+  blokli)      CHAIN_IMAGE="${OVERRIDE_IMAGE:?OVERRIDE_IMAGE required for PROJECT=blokli}" ;;
+  ""|manual)   echo "no PROJECT override — all three at default (main / latest)" ;;
   *) echo "unknown PROJECT '${PROJECT}'" >&2; exit 2 ;;
 esac
 
+# Resolve edge-client ref → concrete sha (cargo git `rev` needs a commit, not a branch).
+resolve_sha() { # url ref
+  local ref="$2"
+  if [[ "$ref" =~ ^[0-9a-f]{7,40}$ ]]; then echo "$ref"; return; fi
+  git ls-remote "$1" "$ref" | awk 'NR==1{print $1}'
+}
+EDGLI_SHA="$(resolve_sha https://github.com/hoprnet/edge-client "${EDGLI_REF}")"
+[ -n "${EDGLI_SHA}" ] || { echo "could not resolve edge-client ref '${EDGLI_REF}'" >&2; exit 1; }
+
 echo "resolved versions:"
-echo "  hoprd        = ${HOPRD_REV}"
-echo "  edge-client  = ${EDGLI_REV}"
-echo "  bloklid-anvil= ${BLOKLID_ANVIL_IMAGE}"
+echo "  hoprd        = ${HOPRD_REF}"
+echo "  edge-client  = ${EDGLI_REF} (${EDGLI_SHA})"
+echo "  bloklid-anvil= ${CHAIN_IMAGE}"
 
 # ── Preflight: docker daemon up, nix present, chain image pulled ──
-bash "$(dirname "${BASH_SOURCE[0]}")/preflight.sh" "${BLOKLID_ANVIL_IMAGE}"
+bash "$(dirname "${BASH_SOURCE[0]}")/preflight.sh" "${CHAIN_IMAGE}"
 
-cat >"${RESOLVED_OUT}" <<EOF
-HOPRD_REV=${HOPRD_REV}
-EDGLI_REV=${EDGLI_REV}
-BLOKLID_ANVIL_IMAGE=${BLOKLID_ANVIL_IMAGE}
-EOF
+# ── Build hoprd + hoprd-localcluster from the hoprd ref (Cachix-cached) ──
+echo "building hoprd binaries from ref ${HOPRD_REF} ..."
+nix build -L "github:hoprnet/hoprd/${HOPRD_REF}#binary-hoprd-${ARCH}" --out-link "${REPO_ROOT}/result-hoprd"
+nix build -L "github:hoprnet/hoprd/${HOPRD_REF}#binary-hoprd-localcluster-${ARCH}" --out-link "${REPO_ROOT}/result-localcluster"
 
-# ── Build hoprd + hoprd-localcluster from the pinned rev (cached via Cachix) ──
-echo "building hoprd binaries from rev ${HOPRD_REV} ..."
-nix build -L "github:hoprnet/hoprd/${HOPRD_REV}#binary-hoprd-${ARCH}" --out-link "${REPO_ROOT}/result-hoprd"
-nix build -L "github:hoprnet/hoprd/${HOPRD_REV}#binary-hoprd-localcluster-${ARCH}" --out-link "${REPO_ROOT}/result-localcluster"
-HOPRD_BIN="${REPO_ROOT}/result-hoprd/bin/hoprd"
-HOPRD_LOCALCLUSTER_BIN="${REPO_ROOT}/result-localcluster/bin/hoprd-localcluster"
-
-# ── Pin edgli to the requested rev and refresh the lockfile ──
-echo "pinning edgli to rev ${EDGLI_REV} ..."
-python3 - "$CRATE_CARGO" "$EDGLI_REV" <<'PY'
+# ── Pin edgli to the resolved sha and refresh the lockfile ──
+echo "pinning edgli to ${EDGLI_SHA} ..."
+python3 - "$CRATE_CARGO" "$EDGLI_SHA" <<'PY'
 import re, sys
 path, rev = sys.argv[1], sys.argv[2]
 src = open(path).read()
@@ -74,8 +70,9 @@ PY
 ( cd "${REPO_ROOT}/integration" && cargo update -p edgli )
 
 # ── Run the test ──
-export HOPRD_BIN HOPRD_LOCALCLUSTER_BIN
-export HOPRD_CHAIN_IMAGE="${BLOKLID_ANVIL_IMAGE}"
+export HOPRD_BIN="${REPO_ROOT}/result-hoprd/bin/hoprd"
+export HOPRD_LOCALCLUSTER_BIN="${REPO_ROOT}/result-localcluster/bin/hoprd-localcluster"
+export HOPRD_CHAIN_IMAGE="${CHAIN_IMAGE}"
 export HOPRD_E2E_METRICS_PATH="${HOPRD_E2E_METRICS_PATH:-${REPO_ROOT}/metrics.json}"
 echo "running integration test ..."
 ( cd "${REPO_ROOT}/integration" && cargo nextest run --run-ignored all -j 1 )

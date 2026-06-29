@@ -11,7 +11,6 @@ shared HOPR self-hosted runner (`self-hosted-hoprnet-bigger`), and **gates the
 hoprd → first-network deploy**.
 
 - Test crate: [`integration/`](integration/)
-- Version pins: [`versions.toml`](versions.toml)
 - CI workflow: [`.github/workflows/integration.yaml`](.github/workflows/integration.yaml)
 - Runner: [`runner/README.md`](runner/README.md)
 
@@ -81,7 +80,7 @@ just integration         # build binaries, preflight, run all scenarios
 just scenario 0-hop      # one scenario, fresh env
 just unit                # fast unit tests (no cluster)
 just preflight           # docker + nix + chain-image doctor
-just ci                  # CI-equivalent: build from versions.toml pins
+just ci                  # CI-equivalent: build from main/latest (or overrides)
 # fast iteration — one cluster, many runs:
 just cluster-up          # terminal 1 (blocks)
 just attach 1-hop        # terminal 2
@@ -174,18 +173,23 @@ Unit tests (parse + gate logic, no external deps): `cargo test --lib`.
 ## CI
 
 `integration.yaml` runs on `repository_dispatch[integration]` (fired by the three
-source repos on merge) and on manual `workflow_dispatch`. It resolves
-[`versions.toml`](versions.toml) (overriding the triggering project's pin),
-builds `hoprd` + `hoprd-localcluster` from the pinned rev, pulls the pinned
-`bloklid-anvil` image, pins `edgli` to its rev, runs the test, uploads
-`metrics.json`, promotes the pin on green, and notifies Zulip on red.
+source repos on merge) and on manual `workflow_dispatch`. **No version state is
+stored:** the triggering project supplies its rev/image via the dispatch; the
+other two default to their `main` HEAD / `:latest` image. So every run tests one
+project's change against the current tip of the other two. The workflow builds
+`hoprd` + `hoprd-localcluster` from the hoprd ref, pulls the chain image, pins
+`edgli` to the resolved edge-client sha, runs the test, uploads `metrics.json`,
+and notifies Zulip on red. Nothing is committed back.
+
+Defaults are overridable via repo variables `HOPRD_REF`, `EDGLI_REF`,
+`BLOKLID_ANVIL_IMAGE` (unset → main/latest).
 
 Manual run:
 
 ```bash
 gh workflow run integration.yaml -R hoprnet/hoprd-test \
   -f project=hoprd -f rev=<sha>          # or -f project=blokli -f image=<ref>
-# empty inputs → run all last-known-good pins
+# empty inputs → all three at main/latest
 ```
 
 Runs on the shared `self-hosted-hoprnet-bigger` runner. See

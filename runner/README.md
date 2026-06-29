@@ -48,7 +48,8 @@ Optional repo *variables* (the gates; unset = off until calibrated):
      -f 'client_payload[project]=edge-client' \
      -f 'client_payload[rev]=<edge-client main sha>'
    ```
-   On green, `versions.toml` gets the promoted pin committed back.
+   The triggering project's rev is tested against the current main/latest of the
+   other two — no state is stored and nothing is committed back.
 3. **Calibrate gates** from 3–5 green runs' artifacts, then set the repo variables.
 
 ## Caveat — shared box

@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
     inputs:
       project:
-        description: "Triggering project (hoprd | edge-client | blokli); empty = all last-known-good"
+        description: "Triggering project (hoprd | edge-client | blokli); empty = all at main/latest"
         required: false
         default: ""
       rev:
@@ -36,6 +36,10 @@ jobs:
       PROJECT: ${{ github.event.client_payload.project || github.event.inputs.project }}
       OVERRIDE_REV: ${{ github.event.client_payload.rev || github.event.inputs.rev }}
       OVERRIDE_IMAGE: ${{ github.event.client_payload.image || github.event.inputs.image }}
+      # Defaults for the non-triggering projects (empty → main / :latest in run.sh).
+      HOPRD_REF: ${{ vars.HOPRD_REF }}
+      EDGLI_REF: ${{ vars.EDGLI_REF }}
+      BLOKLID_ANVIL_IMAGE: ${{ vars.BLOKLID_ANVIL_IMAGE }}
       # Throughput gates (calibrate on the runner; 0 = floor disabled).
       HOPRD_E2E_PAYLOAD_BYTES: ${{ vars.HOPRD_E2E_PAYLOAD_BYTES || '10485760' }}
       HOPRD_E2E_FLOOR_0HOP_MBPS: ${{ vars.HOPRD_E2E_FLOOR_0HOP_MBPS || '0' }}
@@ -85,21 +89,6 @@ jobs:
           name: integration-metrics
           path: metrics.json
           if-no-files-found: warn
-
-      - name: Promote last-known-good (on green)
-        if: success() && env.PROJECT != ''
-        run: bash scripts/integration/promote.sh
-
-      - name: Commit promoted versions
-        if: success() && env.PROJECT != '' && github.event_name == 'repository_dispatch'
-        run: |
-          if ! git diff --quiet versions.toml; then
-            git config user.name "hopr-ci"
-            git config user.email "noreply@hoprnet.org"
-            git add versions.toml
-            git commit -m "ci: promote ${PROJECT} to last-known-good [skip ci]"
-            git push origin HEAD:main
-          fi
 
       - name: Notify failure (Zulip)
         if: failure()

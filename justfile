@@ -18,8 +18,8 @@ set shell := ["bash", "-uc"]
 #   HOPRNET_SHELL=path:../hoprnet just integration
 hoprnet := env_var_or_default("HOPRNET_SHELL", "github:hoprnet/hoprnet")
 
-# Chain image, read from versions.toml.
-chain_image := `python3 -c "import tomllib;print(tomllib.load(open('versions.toml','rb'))['blokli']['image'])"`
+# Chain image (override: `just chain_image=… integration`, or set BLOKLID_ANVIL_IMAGE).
+chain_image := env_var_or_default("BLOKLID_ANVIL_IMAGE", "europe-west3-docker.pkg.dev/hoprassociation/docker-images/bloklid-anvil:latest")
 
 data_dir := "/tmp/hopr-it"
 
