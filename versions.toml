@@ -1,0 +1,21 @@
+# Last-known-good pinned versions for the cross-repo integration test.
+#
+# On each run CI overrides exactly ONE of these from the triggering repo's
+# dispatch payload; the other two stay at their last-known-good value here.
+# On a green run CI promotes the triggering value back into this file.
+#
+# Hybrid version model:
+#   - hoprd / edge-client are built from git revs via nix + cargo.
+#   - blokli ships the bloklid-anvil image, consumed directly.
+
+[hoprd]
+# github.com/hoprnet/hoprd rev → nix-built into `hoprd` + `hoprd-localcluster`.
+rev = "088b0572901a1efbf9dcd142399afd44d257c1d0"
+
+[edge-client]
+# github.com/hoprnet/edge-client rev → linked into the integration crate (edgli).
+rev = "e51b39049e9136bfc61201f9332f1d29b72d0d5b"
+
+[blokli]
+# bloklid-anvil all-in-one image (anvil + contracts + indexer + GraphQL).
+image = "europe-west3-docker.pkg.dev/hoprassociation/docker-images/bloklid-anvil:latest"

@@ -1,0 +1,7 @@
+---
+self-hosted-runner:
+  labels:
+    # Shared HOPR self-hosted runner (the Hetzner box benchmarks run on).
+    - self-hosted-hoprnet-bigger
+    # Hosted runners used by the legacy k6 build-docker workflow.
+    - depot-ubuntu-24.04

@@ -1,0 +1,122 @@
+---
+name: Integration throughput test
+
+# Triggered by a merge to main of hoprd / edge-client / blokli (via
+# repository_dispatch), or manually. Builds the pinned stack and runs the
+# 0-hop + 1-hop throughput test on the shared self-hosted-hoprnet-bigger runner.
+on:
+  repository_dispatch:
+    types: [integration]
+  workflow_dispatch:
+    inputs:
+      project:
+        description: "Triggering project (hoprd | edge-client | blokli); empty = all last-known-good"
+        required: false
+        default: ""
+      rev:
+        description: "Git rev override (for hoprd or edge-client)"
+        required: false
+        default: ""
+      image:
+        description: "bloklid-anvil image override (for blokli)"
+        required: false
+        default: ""
+
+# One stack at a time — ports/anvil/container are exclusive on the runner.
+concurrency:
+  group: integration
+  cancel-in-progress: false
+
+jobs:
+  integration:
+    name: Integration throughput
+    runs-on: self-hosted-hoprnet-bigger
+    timeout-minutes: 90
+    env:
+      PROJECT: ${{ github.event.client_payload.project || github.event.inputs.project }}
+      OVERRIDE_REV: ${{ github.event.client_payload.rev || github.event.inputs.rev }}
+      OVERRIDE_IMAGE: ${{ github.event.client_payload.image || github.event.inputs.image }}
+      # Throughput gates (calibrate on the runner; 0 = floor disabled).
+      HOPRD_E2E_PAYLOAD_BYTES: ${{ vars.HOPRD_E2E_PAYLOAD_BYTES || '10485760' }}
+      HOPRD_E2E_FLOOR_0HOP_MBPS: ${{ vars.HOPRD_E2E_FLOOR_0HOP_MBPS || '0' }}
+      HOPRD_E2E_FLOOR_1HOP_MBPS: ${{ vars.HOPRD_E2E_FLOOR_1HOP_MBPS || '0' }}
+      HOPRD_E2E_MAX_SECS: ${{ vars.HOPRD_E2E_MAX_SECS || '600' }}
+      RUST_LOG: info,edgli=debug
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Pre-run hygiene
+        run: |
+          rm -rf /tmp/hopr-nodes /tmp/hoprd-it-* || true
+          docker ps -aq --filter "ancestor=${OVERRIDE_IMAGE:-bloklid-anvil}" | xargs -r docker rm -f || true
+          pkill -f hoprd || true
+          pkill -f anvil || true
+          docker system prune -f || true
+
+      - name: Set up Google Cloud Credentials
+        id: auth
+        uses: google-github-actions/auth@c200f3691d83b41bf9bbd8638997a462592937ed # v2.1.13
+        with:
+          token_format: "access_token"
+          credentials_json: ${{ secrets.GOOGLE_HOPRASSOCIATION_CREDENTIALS_REGISTRY }}
+
+      - name: Login Google Container Registry
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: europe-west3-docker.pkg.dev
+          username: oauth2accesstoken
+          password: ${{ steps.auth.outputs.access_token }}
+
+      - name: Configure Cachix substituters
+        run: |
+          cachix use hoprnet || true
+          cachix use blokli || true
+        env:
+          CACHIX_AUTH_TOKEN: ${{ secrets.CACHIX_AUTH_TOKEN }}
+
+      - name: Resolve versions, build stack, run test
+        run: nix develop github:hoprnet/hoprnet --command bash scripts/integration/run.sh
+
+      - name: Upload metrics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: integration-metrics
+          path: metrics.json
+          if-no-files-found: warn
+
+      - name: Promote last-known-good (on green)
+        if: success() && env.PROJECT != ''
+        run: bash scripts/integration/promote.sh
+
+      - name: Commit promoted versions
+        if: success() && env.PROJECT != '' && github.event_name == 'repository_dispatch'
+        run: |
+          if ! git diff --quiet versions.toml; then
+            git config user.name "hopr-ci"
+            git config user.email "noreply@hoprnet.org"
+            git add versions.toml
+            git commit -m "ci: promote ${PROJECT} to last-known-good [skip ci]"
+            git push origin HEAD:main
+          fi
+
+      - name: Notify failure (Zulip)
+        if: failure()
+        uses: zulip/github-actions-zulip/send-message@bd8ec52de371d139ae8313661b7d8318c19266aa # v2.0.1
+        with:
+          api-key: ${{ secrets.ZULIP_API_KEY }}
+          email: ${{ secrets.ZULIP_EMAIL }}
+          organization-url: "https://hopr.zulipchat.com"
+          type: "stream"
+          to: "HOPRd"
+          topic: "integration"
+          content: |
+            Integration throughput test FAILED for ${{ env.PROJECT || 'manual run' }} (rev/image: ${{ env.OVERRIDE_REV }}${{ env.OVERRIDE_IMAGE }}) — [run](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})
+
+      - name: Post-run hygiene
+        if: always()
+        run: |
+          rm -rf /tmp/hopr-nodes /tmp/hoprd-it-* || true
+          pkill -f hoprd || true
+          pkill -f anvil || true

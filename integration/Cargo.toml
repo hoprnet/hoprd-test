@@ -1,0 +1,33 @@
+[package]
+name = "hoprd-integration-test"
+version = "0.1.0"
+edition = "2024"
+description = "Cross-repo integration throughput test: edgli + hoprd localcluster + blokli/anvil"
+license = "GPL-3.0-only"
+publish = false
+
+[dependencies]
+# edgli re-exports hopr_lib, strategy, traits and BlockchainConnectorConfig, so it
+# is the single source of the hoprnet rev — no second git dep to keep in sync.
+# The `rev` is rewritten per CI run from versions.toml (see ../versions.toml).
+edgli = { git = "https://github.com/hoprnet/edge-client", rev = "e51b39049e9136bfc61201f9332f1d29b72d0d5b", default-features = false, features = [
+  "runtime-tokio",
+  "blokli",
+] }
+
+anyhow = "1"
+async-trait = "0.1"
+futures = "0.3"
+tokio = { version = "1", features = ["full", "process"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "json"] }
+tempfile = "3"
+sha2 = "0.11"
+nix = { version = "0.31", features = ["signal"] }
+rand = "0.10"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
+[dev-dependencies]
+test-log = { version = "0.2", features = ["trace"] }

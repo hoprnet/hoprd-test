@@ -4,3 +4,14 @@ k6/test-execution-*.html
 k6/test-execution-*.json
 k6/k6-test-results.yaml
 k6/result
+
+# Rust build output
+target/
+
+# nix build symlinks
+/result
+/result-*
+
+# integration test run artifacts
+/metrics.json
+/resolved.env
