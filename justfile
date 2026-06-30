@@ -9,7 +9,7 @@
 #   just cluster-up             # terminal 1: bring up a persistent cluster
 #   just attach                 # terminal 2: run scenarios against it
 #
-# CI-equivalent (build from versions.toml pins, x86_64-linux):
+# CI-equivalent (build from main/latest via run.sh):
 #   just ci
 
 set shell := ["bash", "-uc"]
@@ -48,7 +48,7 @@ integration *scenarios: build preflight
     export HOPRD_E2E_METRICS_PATH="$PWD/metrics.json"
     export RUST_LOG="${RUST_LOG:-info,edgli=debug}"
     [ -n '{{scenarios}}' ] && export HOPRD_E2E_SCENARIOS="$(echo '{{scenarios}}' | tr ' ' ',')"
-    nix develop {{hoprnet}} -c cargo nextest run --manifest-path integration/Cargo.toml --run-ignored all -j 1
+    nix develop {{hoprnet}} -c cargo nextest run --manifest-path integration/Cargo.toml --test integration --run-ignored all -j 1
 
 # Run a single scenario against a fresh env.
 scenario name:
@@ -73,7 +73,7 @@ attach *scenarios:
     export HOPRD_E2E_METRICS_PATH="$PWD/metrics.json"
     export RUST_LOG="${RUST_LOG:-info,edgli=debug}"
     [ -n '{{scenarios}}' ] && export HOPRD_E2E_SCENARIOS="$(echo '{{scenarios}}' | tr ' ' ',')"
-    nix develop {{hoprnet}} -c cargo nextest run --manifest-path integration/Cargo.toml --run-ignored all -j 1
+    nix develop {{hoprnet}} -c cargo nextest run --manifest-path integration/Cargo.toml --test integration --run-ignored all -j 1
 
 # Fast unit tests (gate + parse logic; no cluster).
 unit:
@@ -89,7 +89,7 @@ lint:
     nix develop {{hoprnet}} -c cargo fmt --manifest-path integration/Cargo.toml --check
     nix develop {{hoprnet}} -c cargo clippy --manifest-path integration/Cargo.toml -p hoprd-integration-test --all-targets -- -D warnings
 
-# CI-equivalent: resolve versions.toml pins, build from those revs, run (x86_64-linux).
+# CI-equivalent: resolve refs (main/latest or overrides), build, run via run.sh.
 ci:
     nix develop {{hoprnet}} -c bash scripts/integration/run.sh
 

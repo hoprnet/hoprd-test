@@ -1,8 +1,9 @@
 # Runner
 
-The integration test currently runs on **hosted `depot-ubuntu-24.04-8`** runners
-(`runs-on: depot-ubuntu-24.04-8` in `integration.yaml`) — 8 vCPUs, needed so the
-CPU-bound onion encoder keeps pace with the traffic. Each run is an isolated
+The integration test currently runs on **hosted `depot-ubuntu-24.04-4`** runners
+(`runs-on: depot-ubuntu-24.04-4` in `integration.yaml`) — 4 vCPUs. The onion
+encoder is CPU-bound, so if runs flood with packet-encode timeouts, bump to a
+larger runner (`-8`/`-16`) or the self-hosted box. Each run is an isolated
 VM: docker is preinstalled, and Nix is installed per run by the
 `hoprnet/hopr-workflows` `setup-nix` action (which also wires the `hoprnet`
 Cachix cache). Nothing to provision.

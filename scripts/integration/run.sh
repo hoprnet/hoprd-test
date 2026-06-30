@@ -75,4 +75,6 @@ export HOPRD_LOCALCLUSTER_BIN="${REPO_ROOT}/result-localcluster/bin/hoprd-localc
 export HOPRD_CHAIN_IMAGE="${CHAIN_IMAGE}"
 export HOPRD_E2E_METRICS_PATH="${HOPRD_E2E_METRICS_PATH:-${REPO_ROOT}/metrics.json}"
 echo "running integration test ..."
-( cd "${REPO_ROOT}/integration" && cargo nextest run --run-ignored all -j 1 )
+# Only the integration scenarios (the `integration` test target) — not the
+# crate's unit tests. Scenario subset via HOPRD_E2E_SCENARIOS.
+( cd "${REPO_ROOT}/integration" && cargo nextest run --test integration --run-ignored all -j 1 )

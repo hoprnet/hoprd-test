@@ -7,7 +7,7 @@ pumps a payload through **0-hop and 1-hop UDP sessions** to the exit node's
 built-in loopback — measuring goodput and datagram loss.
 
 It runs on every merge to `main` of `hoprd`, `edge-client`, and `blokli` (and on
-hoprd-test PRs labelled `run-integration`), on hosted `depot-ubuntu-24.04-8`
+hoprd-test PRs labelled `run-integration`), on hosted `depot-ubuntu-24.04-4`
 runners, and **gates the hoprd → first-network deploy**.
 
 - Test crate: [`integration/`](integration/)
@@ -132,7 +132,7 @@ export HOPRD_CHAIN_IMAGE=europe-west3-docker.pkg.dev/hoprassociation/docker-imag
 export RUST_LOG=info,edgli=debug
 
 cd integration
-cargo nextest run --run-ignored all -j 1
+cargo nextest run --test integration --run-ignored all -j 1   # scenarios only
 ```
 
 The cluster + chain container are torn down automatically on exit.
@@ -202,6 +202,6 @@ gh workflow run integration.yaml -R hoprnet/hoprd-test \
 # empty inputs → all three at main/latest
 ```
 
-Runs on hosted `depot-ubuntu-24.04-8` runners (nix installed per run via the
+Runs on hosted `depot-ubuntu-24.04-4` runners (nix installed per run via the
 `setup-nix` action; docker is present on depot). See [`runner/README.md`](runner/README.md)
 for the repo secrets and validation steps.
