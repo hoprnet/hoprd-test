@@ -5,3 +5,4 @@ self-hosted-runner:
     # k6 build-docker workflow.
     - depot-ubuntu-24.04
     - depot-ubuntu-24.04-4
+    - depot-ubuntu-24.04-8

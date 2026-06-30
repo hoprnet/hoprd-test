@@ -1,7 +1,8 @@
 # Runner
 
-The integration test currently runs on **hosted `depot-ubuntu-24.04`** runners
-(`runs-on: depot-ubuntu-24.04` in `integration.yaml`). Each run is an isolated
+The integration test currently runs on **hosted `depot-ubuntu-24.04-8`** runners
+(`runs-on: depot-ubuntu-24.04-8` in `integration.yaml`) — 8 vCPUs, needed so the
+CPU-bound onion encoder keeps pace with the traffic. Each run is an isolated
 VM: docker is preinstalled, and Nix is installed per run by the
 `hoprnet/hopr-workflows` `setup-nix` action (which also wires the `hoprnet`
 Cachix cache). Nothing to provision.
