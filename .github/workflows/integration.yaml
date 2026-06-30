@@ -1,9 +1,10 @@
 ---
 name: Integration throughput test
 
-# Triggered by a merge to main of hoprd / edge-client / blokli (via
-# repository_dispatch), or manually. Builds the pinned stack and runs the
-# 0-hop + 1-hop throughput test on the shared self-hosted-hoprnet-bigger runner.
+# Runs the 0-hop + 1-hop throughput test (full stack). Triggered by:
+#   * a merge to main of hoprd / edge-client / blokli (repository_dispatch),
+#   * manual workflow_dispatch,
+#   * a hoprd-test PR labelled `run-integration` (to test changes to this repo).
 on:
   repository_dispatch:
     types: [integration]
@@ -21,16 +22,24 @@ on:
         description: "bloklid-anvil image override (for blokli)"
         required: false
         default: ""
+  pull_request:
+    types: [labeled, synchronize, reopened]
 
-# One stack at a time — ports/anvil/container are exclusive on the runner.
+# PR events: one group per PR, cancel-in-progress (a new push supersedes the
+# previous run of that PR). Dispatch/manual: a single shared group that never
+# cancels, so those runs stack and execute one after another.
 concurrency:
-  group: integration
-  cancel-in-progress: false
+  group: ${{ github.event_name == 'pull_request' && format('integration-pr-{0}', github.event.pull_request.number) || 'integration' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   integration:
     name: Integration throughput
-    runs-on: self-hosted-hoprnet-bigger
+    # PR runs only when the `run-integration` label is present; dispatch/manual always run.
+    if: >-
+      github.event_name != 'pull_request' ||
+      contains(github.event.pull_request.labels.*.name, 'run-integration')
+    runs-on: depot-ubuntu-24.04
     timeout-minutes: 90
     env:
       PROJECT: ${{ github.event.client_payload.project || github.event.inputs.project }}
@@ -72,12 +81,11 @@ jobs:
           username: oauth2accesstoken
           password: ${{ steps.auth.outputs.access_token }}
 
-      - name: Configure Cachix substituters
-        run: |
-          cachix use hoprnet || true
-          cachix use blokli || true
-        env:
-          CACHIX_AUTH_TOKEN: ${{ secrets.CACHIX_AUTH_TOKEN }}
+      - name: Setup Nix
+        uses: hoprnet/hopr-workflows/actions/setup-nix@5477bd53d62ac15c4804b31fbd55966b29a43997 # setup-nix-v2
+        with:
+          cachix_cache_name: hoprnet
+          cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
 
       - name: Resolve versions, build stack, run test
         run: nix develop github:hoprnet/hoprnet --command bash scripts/integration/run.sh

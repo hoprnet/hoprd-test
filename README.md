@@ -6,9 +6,9 @@ channels) plus a pre-funded edge identity, boots an `edgli` edge client, and
 pumps a payload through **0-hop and 1-hop UDP sessions** to the exit node's
 built-in loopback — measuring goodput and datagram loss.
 
-It runs on every merge to `main` of `hoprd`, `edge-client`, and `blokli`, on the
-shared HOPR self-hosted runner (`self-hosted-hoprnet-bigger`), and **gates the
-hoprd → first-network deploy**.
+It runs on every merge to `main` of `hoprd`, `edge-client`, and `blokli` (and on
+hoprd-test PRs labelled `run-integration`), on hosted `depot-ubuntu-24.04`
+runners, and **gates the hoprd → first-network deploy**.
 
 - Test crate: [`integration/`](integration/)
 - CI workflow: [`.github/workflows/integration.yaml`](.github/workflows/integration.yaml)
@@ -179,8 +179,12 @@ run here). It builds in the hoprnet dev shell on a hosted `depot` runner. Locall
 `just lint` + `just unit`.
 
 `integration.yaml` runs on `repository_dispatch[integration]` (fired by the three
-source repos on merge) and on manual `workflow_dispatch`. **No version state is
-stored:** the triggering project supplies its rev/image via the dispatch; the
+source repos on merge), on manual `workflow_dispatch`, and on a hoprd-test PR
+labelled **`run-integration`** (to test changes to this repo against the live
+stack). Concurrency: a new push to a PR **cancels** that PR's in-progress run;
+dispatch/manual runs **stack** (shared group, never cancelled) and execute one
+after another. **No version state is stored:** the
+triggering project supplies its rev/image via the dispatch; the
 other two default to their `main` HEAD / `:latest` image. So every run tests one
 project's change against the current tip of the other two. The workflow builds
 `hoprd` + `hoprd-localcluster` from the hoprd ref, pulls the chain image, pins
@@ -198,6 +202,6 @@ gh workflow run integration.yaml -R hoprnet/hoprd-test \
 # empty inputs → all three at main/latest
 ```
 
-Runs on the shared `self-hosted-hoprnet-bigger` runner. See
-[`runner/README.md`](runner/README.md) for its one requirement (docker), the
-repo secrets, and validation steps.
+Runs on hosted `depot-ubuntu-24.04` runners (nix installed per run via the
+`setup-nix` action; docker is present on depot). See [`runner/README.md`](runner/README.md)
+for the repo secrets and validation steps.
