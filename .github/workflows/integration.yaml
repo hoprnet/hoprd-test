@@ -67,20 +67,8 @@ jobs:
           pkill -f anvil || true
           docker system prune -f || true
 
-      - name: Set up Google Cloud Credentials
-        id: auth
-        uses: google-github-actions/auth@c200f3691d83b41bf9bbd8638997a462592937ed # v2.1.13
-        with:
-          token_format: "access_token"
-          credentials_json: ${{ secrets.GOOGLE_HOPRASSOCIATION_CREDENTIALS_REGISTRY }}
-
-      - name: Login Google Container Registry
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
-        with:
-          registry: europe-west3-docker.pkg.dev
-          username: oauth2accesstoken
-          password: ${{ steps.auth.outputs.access_token }}
-
+      # The bloklid-anvil image lives in a public GCP Artifact Registry repo
+      # (allUsers reader) — no registry login needed to pull it.
       - name: Setup Nix
         uses: hoprnet/hopr-workflows/actions/setup-nix@5477bd53d62ac15c4804b31fbd55966b29a43997 # setup-nix-v2
         with:
