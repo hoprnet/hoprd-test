@@ -15,7 +15,6 @@
 #   EDGLI_REF        default edge-client ref (default: main)
 #   BLOKLID_ANVIL_IMAGE  default chain image (default: …/bloklid-anvil:latest)
 #   NIX_SYSTEM_SUFFIX    nix output arch suffix (default: x86_64-linux)
-#   plus any HOPRD_E2E_* gating knobs, forwarded to the test as-is.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -73,8 +72,7 @@ PY
 export HOPRD_BIN="${REPO_ROOT}/result-hoprd/bin/hoprd"
 export HOPRD_LOCALCLUSTER_BIN="${REPO_ROOT}/result-localcluster/bin/hoprd-localcluster"
 export HOPRD_CHAIN_IMAGE="${CHAIN_IMAGE}"
-export HOPRD_E2E_METRICS_PATH="${HOPRD_E2E_METRICS_PATH:-${REPO_ROOT}/metrics.json}"
-echo "running integration test ..."
-# Only the integration scenarios (the `integration` test target) — not the
-# crate's unit tests. Scenario subset via HOPRD_E2E_SCENARIOS.
-( cd "${REPO_ROOT}/integration" && cargo nextest run --test integration --run-ignored all -j 1 )
+echo "running integration tests ..."
+# Only the integration tests (the `integration` test target) — not the crate's
+# unit tests. Both hop counts (zero_hop, one_hop) run as separate tests.
+( cd "${REPO_ROOT}/integration" && cargo nextest run --test integration --run-ignored all --no-fail-fast -j 1 )

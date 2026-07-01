@@ -9,14 +9,16 @@ publish = false
 [dependencies]
 # edgli re-exports hopr_lib, strategy, traits and BlockchainConnectorConfig, so it
 # is the single source of the hoprnet rev — no second git dep to keep in sync.
-# The `rev` is rewritten per CI run from versions.toml (see ../versions.toml).
-edgli = { git = "https://github.com/hoprnet/edge-client", rev = "e51b39049e9136bfc61201f9332f1d29b72d0d5b", default-features = false, features = [
+# This `rev` is only the local-dev pin; CI ignores it — scripts/integration/run.sh
+# rewrites it to the resolved edge-client ref (EDGLI_REF, default main HEAD, or the
+# rev from a merge dispatch) and runs `cargo update -p edgli`. Keep it recent so
+# local `just` builds match what CI tests.
+edgli = { git = "https://github.com/hoprnet/edge-client", rev = "a83c9accdea190f3e84610f34145ec9eab8b16d5", default-features = false, features = [
   "runtime-tokio",
   "blokli",
 ] }
 
 anyhow = "1"
-async-trait = "0.1"
 futures = "0.3"
 tokio = { version = "1", features = ["full", "process"] }
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "json"] }

@@ -52,4 +52,12 @@ if ! pull_out="$("${RUNTIME}" pull "${PLATFORM_ARGS[@]}" "${IMAGE}" 2>&1)"; then
   fi
 fi
 
-echo "preflight: OK — runtime up, nix present, chain image ready."
+# A leftover chain container from a crashed/prior run still holds port 8080 and
+# collides with the one localcluster starts — blokli's /readyz then never comes
+# up. Refuse to proceed rather than fail obscurely mid-bring-up.
+running="$("${RUNTIME}" ps -q --filter "ancestor=${IMAGE}" 2>/dev/null || true)"
+if [ -n "${running}" ]; then
+  fail "a container from ${IMAGE} is already running (holds port 8080). Stop it — \`${RUNTIME} rm -f ${running}\` or \`just clean\` — then retry."
+fi
+
+echo "preflight: OK — runtime up, nix present, chain image ready, no stale container."

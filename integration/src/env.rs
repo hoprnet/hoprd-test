@@ -1,6 +1,6 @@
-//! The shared integration environment: a running cluster + a booted `edgli` edge
-//! client with open channels. Built once; every scenario runs against it without
-//! tearing it down. Scenarios get sessions via [`IntegrationEnv::open_udp_session`].
+//! The integration environment: a running cluster + a booted `edgli` edge client
+//! with open channels. Each test builds one via [`IntegrationEnv::setup`] and gets
+//! sessions via [`IntegrationEnv::open_unreliable_session`]; it tears down on drop.
 
 use std::time::Duration;
 
@@ -20,9 +20,8 @@ use edgli::{
 };
 
 use crate::{
-    Address,
+    Address, PAYLOAD_BYTES,
     cluster::{self, CLUSTER_SIZE, ClusterHandle, P2P_PORT_BASE},
-    config::RunConfig,
 };
 
 /// Equal to `hopr_transport_session::SESSION_MTU = 1018`; used only to size the
@@ -48,7 +47,7 @@ pub struct IntegrationEnv {
 impl IntegrationEnv {
     /// Bring up the cluster, boot Edgli on the pre-funded extra identity, start the
     /// channel strategy, and wait until at least one outgoing channel is open.
-    pub async fn setup(cfg: &RunConfig) -> anyhow::Result<Self> {
+    pub async fn setup() -> anyhow::Result<Self> {
         let cluster = cluster::bring_up().await?;
         let summary = cluster.summary.clone();
         let extra = summary.extras[0].clone();
@@ -64,6 +63,7 @@ impl IntegrationEnv {
             edgli_config(&extra.safe_address, &extra.module_address),
             hopr_keys,
             Some(summary.blokli_url.clone()),
+            None, // blokli_dns_override
             Some(connector_cfg()),
             |s: EdgliInitState| tracing::info!(?s, "edgli init"),
         )
@@ -74,7 +74,7 @@ impl IntegrationEnv {
 
         // Fund generously: 1000× the expected session packet count (fwd + SURB
         // return) absorbs probe traffic + probabilistic winning-ticket accrual.
-        let session_packets = (cfg.payload_bytes / SESSION_MTU + 1) * 2;
+        let session_packets = (PAYLOAD_BYTES / SESSION_MTU + 1) * 2;
         let sizing = IncentiveConfiguration {
             desired_message_count: (session_packets as u64) * 1_000,
             min_open_channels: 1,
@@ -107,9 +107,10 @@ impl IntegrationEnv {
         })
     }
 
-    /// Open a UDP (unreliable, `Segmentation`-only) session over `hops` relays to
-    /// the exit node's built-in loopback service. Rate control is left ON.
-    pub async fn open_udp_session(&self, hops: usize) -> anyhow::Result<HoprSession> {
+    /// Open an unreliable (`Segmentation`-only, no retransmission) session over
+    /// `hops` relays to the exit node's built-in loopback service. Rate control
+    /// is left ON.
+    pub async fn open_unreliable_session(&self, hops: usize) -> anyhow::Result<HoprSession> {
         let dest = match hops {
             0 => self.dest_zero_hop,
             1 => self.dest_one_hop,

@@ -1,9 +1,9 @@
 # Runner
 
-The integration test currently runs on **hosted `depot-ubuntu-24.04-4`** runners
-(`runs-on: depot-ubuntu-24.04-4` in `integration.yaml`) — 4 vCPUs. The onion
-encoder is CPU-bound, so if runs flood with packet-encode timeouts, bump to a
-larger runner (`-8`/`-16`) or the self-hosted box. Each run is an isolated
+The integration test currently runs on **hosted `depot-ubuntu-24.04-8`** runners
+(`runs-on: depot-ubuntu-24.04-8` in `integration.yaml`) — 8 vCPUs. The onion
+encoder is CPU-bound; `-4` floods with packet-encode timeouts, so `-8` (or a
+larger / self-hosted box) is needed. Each run is an isolated
 VM: docker is preinstalled, and Nix is installed per run by the
 `hoprnet/hopr-workflows` `setup-nix` action (which also wires the `hoprnet`
 Cachix cache). Nothing to provision.
@@ -29,9 +29,8 @@ Plus `HOPRD_TEST_DISPATCH_TOKEN` in **hoprd / edge-client / blokli** (Actions
 read+write on hoprd-test) so their merge workflows can trigger this one.
 
 Optional repo *variables*: `HOPRD_REF`, `EDGLI_REF`, `BLOKLID_ANVIL_IMAGE`
-(non-triggering-project defaults; unset → main/latest) and the gates
-`HOPRD_E2E_FLOOR_0HOP_MBPS`, `HOPRD_E2E_FLOOR_1HOP_MBPS`, `HOPRD_E2E_MAX_LOSS_PCT`,
-`HOPRD_E2E_PAYLOAD_BYTES`.
+(non-triggering-project defaults; unset → main/latest). There are no gate
+variables — thresholds are hardcoded in `integration/tests/integration.rs`.
 
 ## Triggering / validating
 

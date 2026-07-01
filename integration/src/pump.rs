@@ -6,7 +6,25 @@ use edgli::hopr_lib::exports::transport::HoprSession;
 use sha2::{Digest, Sha256};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-use crate::metrics::ScenarioMetric;
+/// Result of one loopback round-trip.
+#[derive(Debug, Clone)]
+pub struct Transfer {
+    pub sent_bytes: usize,
+    pub received_bytes: usize,
+    /// Wall-clock from first byte written to last byte read back.
+    pub seconds: f64,
+    /// Goodput = received_bytes / seconds, in MB/s.
+    pub mbps: f64,
+    /// True only when the full payload returned intact (received == sent and bytes match).
+    pub sha_ok: bool,
+}
+
+impl Transfer {
+    /// Percent of sent bytes that returned.
+    pub fn arrival_pct(&self) -> f64 {
+        (self.received_bytes as f64) / (self.sent_bytes.max(1) as f64) * 100.0
+    }
+}
 
 const IO_CHUNK: usize = 64 * 1024;
 /// If no bytes arrive for this long after the first byte, the return transfer is
@@ -36,52 +54,52 @@ pub async fn pump_loopback(
     payload: &[u8],
     label: &str,
     timeout: Duration,
-) -> anyhow::Result<ScenarioMetric> {
-    let (mut r, mut w) = tokio::io::split(session);
-    let payload_bytes = payload.to_vec();
+) -> anyhow::Result<Transfer> {
+    let (mut rx, mut tx) = tokio::io::split(session);
+    let to_send = payload.to_vec();
     let expected = sha256_digest(payload);
-    let n = payload.len();
+    let total_bytes = payload.len();
 
-    let writer = tokio::spawn(async move {
+    let sender = tokio::spawn(async move {
         let mut offset = 0;
-        while offset < payload_bytes.len() {
-            let end = (offset + IO_CHUNK).min(payload_bytes.len());
-            w.write_all(&payload_bytes[offset..end]).await?;
+        while offset < to_send.len() {
+            let end = (offset + IO_CHUNK).min(to_send.len());
+            tx.write_all(&to_send[offset..end]).await?;
             offset = end;
         }
-        w.flush().await?;
+        tx.flush().await?;
         Ok::<_, std::io::Error>(())
     });
 
-    let mut received: Vec<u8> = Vec::with_capacity(n);
+    let mut received: Vec<u8> = Vec::with_capacity(total_bytes);
     let mut buf = vec![0u8; IO_CHUNK];
     let mut first_at: Option<std::time::Instant> = None;
     let mut last_at = std::time::Instant::now();
     let overall_deadline = std::time::Instant::now() + timeout;
 
-    while received.len() < n {
+    while received.len() < total_bytes {
         if std::time::Instant::now() >= overall_deadline {
             tracing::warn!(
-                "{label}: overall timeout, received {}/{n} B",
+                "{label}: overall timeout, received {}/{total_bytes} B",
                 received.len()
             );
             break;
         }
-        match tokio::time::timeout(READ_IDLE_TIMEOUT, r.read(&mut buf)).await {
+        match tokio::time::timeout(READ_IDLE_TIMEOUT, rx.read(&mut buf)).await {
             Ok(Ok(0)) => break, // EOF
-            Ok(Ok(m)) => {
+            Ok(Ok(just_read)) => {
                 first_at.get_or_insert_with(std::time::Instant::now);
                 last_at = std::time::Instant::now();
-                received.extend_from_slice(&buf[..m]);
+                received.extend_from_slice(&buf[..just_read]);
             }
             Ok(Err(e)) => {
-                writer.abort();
+                sender.abort();
                 return Err(anyhow::anyhow!("{label}: read error: {e}"));
             }
             Err(_) => {
                 if !received.is_empty() {
                     tracing::info!(
-                        "{label}: return idle {READ_IDLE_TIMEOUT:?}, stopping at {}/{n} B",
+                        "{label}: return idle {READ_IDLE_TIMEOUT:?}, stopping at {}/{total_bytes} B",
                         received.len()
                     );
                     break;
@@ -90,11 +108,11 @@ pub async fn pump_loopback(
         }
     }
 
-    match tokio::time::timeout(Duration::from_secs(10), writer).await {
+    match tokio::time::timeout(Duration::from_secs(10), sender).await {
         Ok(Ok(Ok(()))) => {}
-        Ok(Ok(Err(e))) => tracing::warn!("{label}: writer error: {e}"),
-        Ok(Err(e)) => tracing::warn!("{label}: writer panicked: {e}"),
-        Err(_) => tracing::warn!("{label}: writer did not finish within 10s"),
+        Ok(Ok(Err(e))) => tracing::warn!("{label}: sender error: {e}"),
+        Ok(Err(e)) => tracing::warn!("{label}: sender panicked: {e}"),
+        Err(_) => tracing::warn!("{label}: sender did not finish within 10s"),
     }
 
     let first_at = first_at.unwrap_or(last_at);
@@ -104,21 +122,19 @@ pub async fn pump_loopback(
         .max(1e-9);
     let received_bytes = received.len();
     let mbps = (received_bytes as f64) / 1_000_000.0 / seconds;
-    let loss_pct = ((n.saturating_sub(received_bytes)) as f64) / (n.max(1) as f64) * 100.0;
-    let sha_ok = received_bytes == n && sha256_digest(&received) == expected;
+    let sha_ok = received_bytes == total_bytes && sha256_digest(&received) == expected;
 
     tracing::info!(
-        "{label}: recv {received_bytes}/{n} B in {seconds:.2}s = {mbps:.2} MB/s, \
-         loss {loss_pct:.2}%, sha_ok={sha_ok}"
+        "{label}: recv {received_bytes}/{total_bytes} B in {seconds:.2}s = {mbps:.2} MB/s, \
+         arrival {:.2}%, sha_ok={sha_ok}",
+        (received_bytes as f64) / (total_bytes.max(1) as f64) * 100.0,
     );
 
-    Ok(ScenarioMetric {
-        scenario: label.to_string(),
-        sent_bytes: n,
+    Ok(Transfer {
+        sent_bytes: total_bytes,
         received_bytes,
         seconds,
         mbps,
-        loss_pct,
         sha_ok,
     })
 }

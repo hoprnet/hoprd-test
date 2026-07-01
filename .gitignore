@@ -13,5 +13,4 @@ target/
 /result-*
 
 # integration test run artifacts
-/metrics.json
 /resolved.env

@@ -7,7 +7,7 @@ pumps a payload through **0-hop and 1-hop UDP sessions** to the exit node's
 built-in loopback — measuring goodput and datagram loss.
 
 It runs on every merge to `main` of `hoprd`, `edge-client`, and `blokli` (and on
-hoprd-test PRs labelled `run-integration`), on hosted `depot-ubuntu-24.04-4`
+hoprd-test PRs labelled `run-integration`), on hosted `depot-ubuntu-24.04-8`
 runners, and **gates the hoprd → first-network deploy**.
 
 - Test crate: [`integration/`](integration/)
@@ -19,16 +19,15 @@ runners, and **gates the hoprd → first-network deploy**.
 
 ## Framework
 
-The environment is built **once** and shared across scenarios (no teardown
-between them):
+Each hop count is its own `#[test]` in `integration/tests/integration.rs`
+(`zero_hop`, `one_hop`), so nextest reports them independently. Every test owns
+its cluster: bring up → run → tear down. Three source modules:
 
 | Module | Responsibility |
 |--------|----------------|
 | `cluster.rs` | bring up / attach to `hoprd-localcluster`; contracts are deployed by the chain container (see note below) |
-| `env.rs` | `IntegrationEnv`: cluster + booted `edgli` + open channels; `open_udp_session(hops)` session factory |
-| `pump.rs` | reusable goodput/loss pump |
-| `scenario.rs` | `Scenario` trait + `registry()` + per-scenario gating |
-| `scenarios/` | one file per scenario — `zero_hop.rs`, `one_hop.rs`, … |
+| `env.rs` | `IntegrationEnv`: cluster + booted `edgli` + open channels; `open_unreliable_session(hops)` session factory |
+| `pump.rs` | reusable goodput/loss pump; returns a `Transfer` result |
 
 **Contracts:** the `bloklid-anvil` image deploys the full HOPR contract set on
 startup (entrypoint: anvil → `blokli-contract-deployer` → addresses baked into
@@ -38,36 +37,31 @@ lack them.
 
 ### Adding a scenario
 
-1. Add `integration/src/scenarios/<name>.rs` implementing `Scenario` (`name()` +
-   `run(&env, &cfg)`), using `env.open_udp_session(hops)` + `pump::pump_loopback`.
-2. Export it in `scenarios/mod.rs` and register it in `scenario::registry()`.
-3. Optional floor knob: `HOPRD_E2E_FLOOR_<NAME>_MBPS` (name upper-cased,
-   non-alphanumerics → `_`).
-
-Run a subset against the shared env with `HOPRD_E2E_SCENARIOS=0-hop,...`.
+Add a `#[test_log::test(tokio::test(...))] #[ignore]` fn to
+`tests/integration.rs` that calls `run_hop(hops, name)`. Thresholds
+(`PAYLOAD_BYTES`, `MIN_ARRIVAL_PCT`, `PUMP_TIMEOUT`) are hardcoded constants —
+there is nothing to configure.
 
 ---
 
 ## What it measures
 
-| Metric | Meaning |
+| Field (`Transfer`) | Meaning |
 |--------|---------|
-| `mbps` | Return **goodput** = bytes echoed back / (first→last byte), MB/s |
-| `loss_pct` | `(sent − received) / sent` — UDP is unreliable, some loss is normal |
+| `mbps` | Return **goodput** = bytes echoed back / (first→last byte), MB/s (logged) |
+| `arrival_pct()` | `received / sent` — UDP is unreliable, some loss is normal |
 | `sha_ok` | `true` only on a lossless, byte-identical round-trip |
 
 Sessions are **UDP** (HOPR `Segmentation`-only unreliable socket, no
 retransmission), with the exit's SURB egress rate control left **on** — so the
 numbers reflect the real rate-controlled path.
 
-### Gates (per scenario)
+### Gates (per test, hardcoded)
 
-- **No data returned** → fail (broken path).
+- **Arrival** < `MIN_ARRIVAL_PCT` (99%) → fail (broken/lossy path).
 - **Corruption** → full payload returned but bytes differ → fail.
-- **Loss** > `HOPRD_E2E_MAX_LOSS_PCT` → fail.
-- **Goodput** < `HOPRD_E2E_FLOOR_{0,1}HOP_MBPS` → fail.
 
-Defaults leave floors/loss disabled (`0` / `100`) until calibrated on the runner.
+Goodput (`mbps`) is logged but not gated.
 
 ---
 
@@ -76,14 +70,14 @@ Defaults leave floors/loss disabled (`0` / `100`) until calibrated on the runner
 ### Quickstart (`just`)
 
 ```bash
-just integration         # build binaries, preflight, run all scenarios
-just scenario 0-hop      # one scenario, fresh env
+just integration         # build binaries, preflight, run both tests
+just scenario zero_hop   # one test, fresh env
 just unit                # fast unit tests (no cluster)
 just preflight           # docker + nix + chain-image doctor
 just ci                  # CI-equivalent: build from main/latest (or overrides)
 # fast iteration — one cluster, many runs:
 just cluster-up          # terminal 1 (blocks)
-just attach 1-hop        # terminal 2
+just attach one_hop      # terminal 2
 just clean               # tear down container + temp state
 ```
 
@@ -132,7 +126,8 @@ export HOPRD_CHAIN_IMAGE=europe-west3-docker.pkg.dev/hoprassociation/docker-imag
 export RUST_LOG=info,edgli=debug
 
 cd integration
-cargo nextest run --test integration --run-ignored all -j 1   # scenarios only
+cargo nextest run --test integration --run-ignored all -j 1   # both tests
+# one hop count: append `zero_hop` or `one_hop`
 ```
 
 The cluster + chain container are torn down automatically on exit.
@@ -155,18 +150,10 @@ export HOPRD_CLUSTER_DATA_DIR=/tmp/hopr-it
 cd integration && cargo nextest run --run-ignored all -j 1
 ```
 
-### Tuning knobs
+There are no tuning knobs — payload size, arrival floor, and timeout are
+hardcoded constants in `tests/integration.rs`.
 
-| Var | Default | Meaning |
-|-----|---------|---------|
-| `HOPRD_E2E_PAYLOAD_BYTES` | `10485760` | payload size, 10–50 MiB |
-| `HOPRD_E2E_SCENARIOS` | (all) | comma list of scenario names to run |
-| `HOPRD_E2E_FLOOR_<NAME>_MBPS` | `0` (off) | min goodput per scenario, e.g. `HOPRD_E2E_FLOOR_0HOP_MBPS` |
-| `HOPRD_E2E_MAX_LOSS_PCT` | `100` (off) | max datagram loss percent |
-| `HOPRD_E2E_MAX_SECS` | `600` | per-scenario timeout |
-| `HOPRD_E2E_METRICS_PATH` | `metrics.json` | metrics output path |
-
-Unit tests (parse + gate logic, no external deps): `cargo test --lib`.
+Unit tests (cluster status parsing, no external deps): `cargo test --lib`.
 
 ---
 
@@ -188,8 +175,8 @@ triggering project supplies its rev/image via the dispatch; the
 other two default to their `main` HEAD / `:latest` image. So every run tests one
 project's change against the current tip of the other two. The workflow builds
 `hoprd` + `hoprd-localcluster` from the hoprd ref, pulls the chain image, pins
-`edgli` to the resolved edge-client sha, runs the test, uploads `metrics.json`,
-and notifies Zulip on red. Nothing is committed back.
+`edgli` to the resolved edge-client sha, runs the tests, and notifies Zulip on
+red. Nothing is committed back.
 
 Defaults are overridable via repo variables `HOPRD_REF`, `EDGLI_REF`,
 `BLOKLID_ANVIL_IMAGE` (unset → main/latest).
@@ -202,6 +189,6 @@ gh workflow run integration.yaml -R hoprnet/hoprd-test \
 # empty inputs → all three at main/latest
 ```
 
-Runs on hosted `depot-ubuntu-24.04-4` runners (nix installed per run via the
+Runs on hosted `depot-ubuntu-24.04-8` runners (nix installed per run via the
 `setup-nix` action; docker is present on depot). See [`runner/README.md`](runner/README.md)
 for the repo secrets and validation steps.

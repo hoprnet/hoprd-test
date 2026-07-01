@@ -37,20 +37,21 @@ build:
 preflight:
     bash scripts/integration/preflight.sh '{{chain_image}}'
 
-# Full local run (managed mode): build → preflight → run scenarios.
-# Optional args = scenario names to run (default: all), e.g. `just integration 0-hop`.
-integration *scenarios: build preflight
+# Full local run (managed mode): build → preflight → run both tests.
+# Optional args = nextest test-name filters (e.g. `just integration zero_hop`).
+integration *filter: build preflight
     #!/usr/bin/env bash
     set -euo pipefail
     export HOPRD_BIN="$PWD/result-hoprd/bin/hoprd"
     export HOPRD_LOCALCLUSTER_BIN="$PWD/result-localcluster/bin/hoprd-localcluster"
     export HOPRD_CHAIN_IMAGE='{{chain_image}}'
-    export HOPRD_E2E_METRICS_PATH="$PWD/metrics.json"
     export RUST_LOG="${RUST_LOG:-info,edgli=debug}"
-    [ -n '{{scenarios}}' ] && export HOPRD_E2E_SCENARIOS="$(echo '{{scenarios}}' | tr ' ' ',')"
-    nix develop {{hoprnet}} -c cargo nextest run --manifest-path integration/Cargo.toml --test integration --run-ignored all -j 1
+    # Safety-net teardown: remove any chain container left behind (localcluster
+    # cleans up on graceful exit; this covers crashes/timeouts).
+    trap 'docker ps -aq --filter "ancestor={{chain_image}}" | xargs -r docker rm -f' EXIT
+    nix develop {{hoprnet}} -c cargo nextest run --manifest-path integration/Cargo.toml --test integration --run-ignored all --no-fail-fast -j 1 {{filter}}
 
-# Run a single scenario against a fresh env.
+# Run a single test against a fresh env (e.g. `just scenario zero_hop`).
 scenario name:
     @just integration '{{name}}'
 
@@ -64,16 +65,15 @@ cluster-up: build preflight
       --hoprd-bin ./result-hoprd/bin/hoprd \
       --data-dir '{{data_dir}}'
 
-# Run scenarios against the persistent cluster from `cluster-up` (no bring-up).
-attach *scenarios:
+# Run tests against the persistent cluster from `cluster-up` (no bring-up).
+# Optional args = nextest test-name filters (e.g. `just attach one_hop`).
+attach *filter:
     #!/usr/bin/env bash
     set -euo pipefail
     export HOPRD_LOCALCLUSTER_BIN="$PWD/result-localcluster/bin/hoprd-localcluster"
     export HOPRD_CLUSTER_DATA_DIR='{{data_dir}}'
-    export HOPRD_E2E_METRICS_PATH="$PWD/metrics.json"
     export RUST_LOG="${RUST_LOG:-info,edgli=debug}"
-    [ -n '{{scenarios}}' ] && export HOPRD_E2E_SCENARIOS="$(echo '{{scenarios}}' | tr ' ' ',')"
-    nix develop {{hoprnet}} -c cargo nextest run --manifest-path integration/Cargo.toml --test integration --run-ignored all -j 1
+    nix develop {{hoprnet}} -c cargo nextest run --manifest-path integration/Cargo.toml --test integration --run-ignored all --no-fail-fast -j 1 {{filter}}
 
 # Fast unit tests (gate + parse logic; no cluster).
 unit:
@@ -98,4 +98,4 @@ clean:
     -docker ps -aq --filter ancestor='{{chain_image}}' | xargs -r docker rm -f
     -pkill -f result-hoprd/bin/hoprd
     -pkill -f hoprd-localcluster
-    -rm -rf '{{data_dir}}' /tmp/hoprd-it-* metrics.json resolved.env
+    -rm -rf '{{data_dir}}' /tmp/hoprd-it-* resolved.env

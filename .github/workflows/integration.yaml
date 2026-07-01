@@ -39,7 +39,7 @@ jobs:
     if: >-
       github.event_name != 'pull_request' ||
       contains(github.event.pull_request.labels.*.name, 'run-integration')
-    runs-on: depot-ubuntu-24.04-4
+    runs-on: depot-ubuntu-24.04-8
     timeout-minutes: 90
     env:
       PROJECT: ${{ github.event.client_payload.project || github.event.inputs.project }}
@@ -49,11 +49,6 @@ jobs:
       HOPRD_REF: ${{ vars.HOPRD_REF }}
       EDGLI_REF: ${{ vars.EDGLI_REF }}
       BLOKLID_ANVIL_IMAGE: ${{ vars.BLOKLID_ANVIL_IMAGE }}
-      # Throughput gates (calibrate on the runner; 0 = floor disabled).
-      HOPRD_E2E_PAYLOAD_BYTES: ${{ vars.HOPRD_E2E_PAYLOAD_BYTES || '10485760' }}
-      HOPRD_E2E_FLOOR_0HOP_MBPS: ${{ vars.HOPRD_E2E_FLOOR_0HOP_MBPS || '0' }}
-      HOPRD_E2E_FLOOR_1HOP_MBPS: ${{ vars.HOPRD_E2E_FLOOR_1HOP_MBPS || '0' }}
-      HOPRD_E2E_MAX_SECS: ${{ vars.HOPRD_E2E_MAX_SECS || '600' }}
       RUST_LOG: info,edgli=debug
     steps:
       - name: Checkout
@@ -77,14 +72,6 @@ jobs:
 
       - name: Resolve versions, build stack, run test
         run: nix develop github:hoprnet/hoprnet --command bash scripts/integration/run.sh
-
-      - name: Upload metrics
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: integration-metrics
-          path: metrics.json
-          if-no-files-found: warn
 
       - name: Notify failure (Zulip)
         if: failure()
