@@ -40,13 +40,11 @@ pub fn sha256_digest(data: &[u8]) -> Vec<u8> {
 /// Pump `payload` through `session` to the exit-node loopback and measure return
 /// goodput + loss.
 ///
-/// The writer pushes the whole payload as fast as the session sink accepts it
-/// (bounded-buffer backpressure paces it — no artificial sleep), so the rate
-/// reflects the stack under the exit's SURB egress rate control. The reader
-/// accumulates returned bytes until it has the full payload back or the return
-/// stream goes idle (UDP loss means the tail may never arrive). Goodput =
-/// received_bytes / (first→last byte). `sha_ok` is only asserted on a lossless
-/// round-trip.
+/// The writer pushes the payload as the session sink accepts it (bounded-buffer
+/// backpressure + the session's SURB egress cap pace it). The reader accumulates
+/// returned bytes until it has the full payload back or the return stream goes idle
+/// (UDP loss means the tail may never arrive). Goodput = received_bytes /
+/// (first→last byte). `sha_ok` is only asserted on a lossless round-trip.
 ///
 /// Does NOT `shutdown()` the write half: HOPR sessions have no TCP half-close.
 pub async fn pump_loopback(

@@ -63,7 +63,7 @@ impl IntegrationEnv {
             edgli_config(&extra.safe_address, &extra.module_address),
             hopr_keys,
             Some(summary.blokli_url.clone()),
-            None, // blokli_dns_override
+            None,
             Some(connector_cfg()),
             |s: EdgliInitState| tracing::info!(?s, "edgli init"),
         )
@@ -126,8 +126,8 @@ impl IntegrationEnv {
                     return_path: HopRouting::try_from(hops)?,
                     capabilities: SessionCapability::Segmentation.into(),
                     surb_management: Some(SurbBalancerConfig {
-                        target_surb_buffer_size: 600,
-                        max_surbs_per_sec: 300,
+                        target_surb_buffer_size: 3000,
+                        max_surbs_per_sec: 500,
                         ..SurbBalancerConfig::default()
                     }),
                     ..Default::default()
