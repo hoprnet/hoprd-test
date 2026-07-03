@@ -13,7 +13,7 @@
 #   OVERRIDE_IMAGE   image ref for PROJECT when it is blokli
 #   HOPRD_REF        default hoprd ref      (default: main)
 #   EDGLI_REF        default edge-client ref (default: main)
-#   BLOKLID_ANVIL_IMAGE  default chain image (default: …/bloklid-anvil:latest)
+#   BLOKLID_ANVIL_IMAGE  default chain image (default: …/bloklid-anvil:latest-rhine)
 #   NIX_SYSTEM_SUFFIX    nix output arch suffix (default: x86_64-linux)
 set -euo pipefail
 
@@ -23,7 +23,7 @@ ARCH="${NIX_SYSTEM_SUFFIX:-x86_64-linux}"
 
 HOPRD_REF="${HOPRD_REF:-main}"
 EDGLI_REF="${EDGLI_REF:-main}"
-CHAIN_IMAGE="${BLOKLID_ANVIL_IMAGE:-europe-west3-docker.pkg.dev/hoprassociation/docker-images/bloklid-anvil:latest}"
+CHAIN_IMAGE="${BLOKLID_ANVIL_IMAGE:-europe-west3-docker.pkg.dev/hoprassociation/docker-images/bloklid-anvil:latest-rhine}"
 
 # The triggering project overrides its own ref/image; others keep the defaults.
 case "${PROJECT:-}" in
