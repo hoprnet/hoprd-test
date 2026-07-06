@@ -72,5 +72,5 @@ jobs:
           nix develop github:hoprnet/hoprnet --command bash -c '
             set -euo pipefail
             cd integration
-            cargo nextest run --lib
+            cargo test --lib
           '

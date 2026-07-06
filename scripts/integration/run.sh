@@ -75,4 +75,4 @@ export HOPRD_CHAIN_IMAGE="${CHAIN_IMAGE}"
 echo "running integration tests ..."
 # Only the integration tests (the `integration` test target) — not the crate's
 # unit tests. Both hop counts (zero_hop, one_hop) run as separate tests.
-( cd "${REPO_ROOT}/integration" && cargo nextest run --test integration --run-ignored all --no-fail-fast -j 1 )
+( cd "${REPO_ROOT}/integration" && cargo test --test integration --no-fail-fast -- --include-ignored --test-threads=1 )

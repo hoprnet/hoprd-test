@@ -7,8 +7,8 @@
 //! export HOPRD_LOCALCLUSTER_BIN=/path/to/hoprd-localcluster
 //! export HOPRD_BIN=/path/to/hoprd
 //! export HOPRD_CHAIN_IMAGE=<bloklid-anvil image tag>
-//! cargo nextest run --test integration --run-ignored all -j 1
-//! # one hop count: append `zero_hop` or `one_hop` as a filter
+//! cargo test --test integration -- --include-ignored --test-threads=1
+//! # one hop count: append `zero_hop` or `one_hop` as a filter (before `--`)
 //! ```
 
 use std::time::Duration;

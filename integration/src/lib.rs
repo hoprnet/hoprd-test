@@ -6,8 +6,8 @@
 //! [`IntegrationEnv`](env::IntegrationEnv), then pumps a payload through a UDP
 //! session to the exit node's built-in loopback and measures goodput + loss.
 //!
-//! Each hop count is its own `#[test]` (see `tests/integration.rs`) so nextest
-//! reports 0-hop and 1-hop independently; every test owns its cluster (bring up →
+//! Each hop count is its own `#[test]` (see `tests/integration.rs`) so 0-hop and
+//! 1-hop are reported independently; every test owns its cluster (bring up →
 //! run → tear down). There are no tuning knobs — thresholds are hardcoded in the
 //! test.
 //!

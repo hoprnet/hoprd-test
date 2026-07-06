@@ -20,7 +20,7 @@ runners, and **gates the hoprd → first-network deploy**.
 ## Framework
 
 Each hop count is its own `#[test]` in `integration/tests/integration.rs`
-(`zero_hop`, `one_hop`), so nextest reports them independently. Every test owns
+(`zero_hop`, `one_hop`), reported independently. Every test owns
 its cluster: bring up → run → tear down. Three source modules:
 
 | Module | Responsibility |
@@ -126,8 +126,8 @@ export HOPRD_CHAIN_IMAGE=europe-west3-docker.pkg.dev/hoprassociation/docker-imag
 export RUST_LOG=info,edgli=debug
 
 cd integration
-cargo nextest run --test integration --run-ignored all -j 1   # both tests
-# one hop count: append `zero_hop` or `one_hop`
+cargo test --test integration -- --include-ignored --test-threads=1   # both tests
+# one hop count: append `zero_hop` or `one_hop` before the `--`
 ```
 
 The cluster + chain container are torn down automatically on exit.
@@ -147,7 +147,7 @@ hoprd-localcluster --size 3 --extra-identities 1 \
 # "state": "running", run the test repeatedly without re-bringup
 export HOPRD_LOCALCLUSTER_BIN=$PWD/result-localcluster/bin/hoprd-localcluster
 export HOPRD_CLUSTER_DATA_DIR=/tmp/hopr-it
-cd integration && cargo nextest run --run-ignored all -j 1
+cd integration && cargo test --test integration -- --include-ignored --test-threads=1
 ```
 
 There are no tuning knobs — payload size, arrival floor, and timeout are
@@ -161,7 +161,7 @@ Unit tests (cluster status parsing, no external deps): `cargo test --lib`.
 
 `pr.yaml` runs on every PR: validates the PR title (Conventional Commits) and
 checks the integration crate — `cargo fmt --check`, `cargo clippy -D warnings`,
-and `cargo nextest run --lib` (fast unit tests; the `#[ignore]` e2e is **not**
+and `cargo test --lib` (fast unit tests; the `#[ignore]` e2e is **not**
 run here). It builds in the hoprnet dev shell on a hosted `depot` runner. Locally:
 `just lint` + `just unit`.
 
