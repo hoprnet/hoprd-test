@@ -1,6 +1,4 @@
----
 name: PR
-
 # Validate PR metadata and check the integration crate (fmt, clippy, unit tests).
 # The heavy end-to-end run lives in integration.yaml (dispatch / manual only).
 on:
@@ -13,7 +11,6 @@ concurrency:
   cancel-in-progress: true
 env:
   CARGO_TERM_COLOR: always
-
 jobs:
   validate-pr-title:
     name: Validate title
@@ -37,7 +34,6 @@ jobs:
             perf
             test
           requireScope: false
-
   check:
     name: Lint & unit test
     runs-on: depot-ubuntu-24.04-4

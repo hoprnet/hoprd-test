@@ -1,4 +1,3 @@
----
 self-hosted-runner:
   labels:
     # Hosted (depot) runners for PR checks, the integration test, and the legacy

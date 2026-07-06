@@ -15,7 +15,10 @@ IMAGE="${1:?usage: preflight.sh <bloklid-anvil-image-ref>}"
 RUNTIME="${HOPRD_CONTAINER_RUNTIME:-docker}"
 GCP_AR_HOST="${GCP_AR_HOST:-europe-west3-docker.pkg.dev}"
 
-fail() { echo "preflight: $*" >&2; exit 1; }
+fail() {
+  echo "preflight: $*" >&2
+  exit 1
+}
 
 echo "preflight: container runtime = ${RUNTIME}"
 command -v "${RUNTIME}" >/dev/null || fail "'${RUNTIME}' not found on PATH. Install it, or set HOPRD_CONTAINER_RUNTIME."
@@ -34,7 +37,7 @@ command -v nix >/dev/null || fail "nix not found. Needed to build hoprd + hoprd-
 # instead of failing on a missing arm manifest.
 PLATFORM_ARGS=()
 case "${RUNTIME}" in
-  docker | podman) PLATFORM_ARGS=(--platform linux/amd64) ;;
+docker | podman) PLATFORM_ARGS=(--platform linux/amd64) ;;
 esac
 
 # Pull the chain image. Capture output so an auth failure can be distinguished

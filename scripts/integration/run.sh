@@ -27,21 +27,30 @@ CHAIN_IMAGE="${BLOKLID_ANVIL_IMAGE:-europe-west3-docker.pkg.dev/hoprassociation/
 
 # The triggering project overrides its own ref/image; others keep the defaults.
 case "${PROJECT:-}" in
-  hoprd)       HOPRD_REF="${OVERRIDE_REV:?OVERRIDE_REV required for PROJECT=hoprd}" ;;
-  edge-client) EDGLI_REF="${OVERRIDE_REV:?OVERRIDE_REV required for PROJECT=edge-client}" ;;
-  blokli)      CHAIN_IMAGE="${OVERRIDE_IMAGE:?OVERRIDE_IMAGE required for PROJECT=blokli}" ;;
-  ""|manual)   echo "no PROJECT override — all three at default (main / latest)" ;;
-  *) echo "unknown PROJECT '${PROJECT}'" >&2; exit 2 ;;
+hoprd) HOPRD_REF="${OVERRIDE_REV:?OVERRIDE_REV required for PROJECT=hoprd}" ;;
+edge-client) EDGLI_REF="${OVERRIDE_REV:?OVERRIDE_REV required for PROJECT=edge-client}" ;;
+blokli) CHAIN_IMAGE="${OVERRIDE_IMAGE:?OVERRIDE_IMAGE required for PROJECT=blokli}" ;;
+"" | manual) echo "no PROJECT override — all three at default (main / latest)" ;;
+*)
+  echo "unknown PROJECT '${PROJECT}'" >&2
+  exit 2
+  ;;
 esac
 
 # Resolve edge-client ref → concrete sha (cargo git `rev` needs a commit, not a branch).
 resolve_sha() { # url ref
   local ref="$2"
-  if [[ "$ref" =~ ^[0-9a-f]{7,40}$ ]]; then echo "$ref"; return; fi
+  if [[ $ref =~ ^[0-9a-f]{7,40}$ ]]; then
+    echo "$ref"
+    return
+  fi
   git ls-remote "$1" "$ref" | awk 'NR==1{print $1}'
 }
 EDGLI_SHA="$(resolve_sha https://github.com/hoprnet/edge-client "${EDGLI_REF}")"
-[ -n "${EDGLI_SHA}" ] || { echo "could not resolve edge-client ref '${EDGLI_REF}'" >&2; exit 1; }
+[ -n "${EDGLI_SHA}" ] || {
+  echo "could not resolve edge-client ref '${EDGLI_REF}'" >&2
+  exit 1
+}
 
 echo "resolved versions:"
 echo "  hoprd        = ${HOPRD_REF}"
@@ -66,7 +75,7 @@ src = re.sub(r'(edgli\s*=\s*\{[^}]*?\brev\s*=\s*")[0-9a-f]{7,40}(")',
              rf'\g<1>{rev}\g<2>', src, count=1)
 open(path, 'w').write(src)
 PY
-( cd "${REPO_ROOT}/integration" && cargo update -p edgli )
+(cd "${REPO_ROOT}/integration" && cargo update -p edgli)
 
 # ── Run the test ──
 export HOPRD_BIN="${REPO_ROOT}/result-hoprd/bin/hoprd"
@@ -75,4 +84,4 @@ export HOPRD_CHAIN_IMAGE="${CHAIN_IMAGE}"
 echo "running integration tests ..."
 # Only the integration tests (the `integration` test target) — not the crate's
 # unit tests. Both hop counts (zero_hop, one_hop) run as separate tests.
-( cd "${REPO_ROOT}/integration" && cargo test --test integration --no-fail-fast -- --include-ignored --test-threads=1 )
+(cd "${REPO_ROOT}/integration" && cargo test --test integration --no-fail-fast -- --include-ignored --test-threads=1)

@@ -6,6 +6,8 @@
     flake-utils.url = "github:numtide/flake-utils";
     pre-commit.url = "github:cachix/git-hooks.nix";
     pre-commit.inputs.nixpkgs.follows = "nixpkgs";
+    treefmt-nix.url = "github:numtide/treefmt-nix";
+    treefmt-nix.inputs.nixpkgs.follows = "nixpkgs";
   };
 
   outputs =
@@ -14,12 +16,41 @@
       nixpkgs,
       flake-utils,
       pre-commit,
+      treefmt-nix,
       ...
     }:
     flake-utils.lib.eachDefaultSystem (
       system:
       let
         pkgs = import nixpkgs { inherit system; };
+
+        treefmt = treefmt-nix.lib.evalModule pkgs {
+          projectRootFile = "flake.nix";
+
+          programs.nixfmt.enable = true;
+          programs.shfmt.enable = true;
+          programs.taplo.enable = true;
+          programs.yamlfmt.enable = true;
+          programs.prettier.enable = true;
+
+          settings.global.excludes = [
+            "*.lock"
+            ".pre-commit-config.yaml"
+            "LICENSE"
+            "*.env"
+            "echo-service/*"
+            "k6/*"
+          ];
+
+          settings.formatter.prettier.includes = [
+            "*.md"
+            "*.json"
+          ];
+          settings.formatter.prettier.excludes = [
+            "*.yml"
+            "*.yaml"
+          ];
+        };
 
         # Lightweight hook set — generic hygiene + workflow checks. Deliberately
         # excludes hoprnet's Rust/metrics hooks (check-bench-names,
@@ -57,6 +88,8 @@
         };
       in
       {
+        formatter = treefmt.config.build.wrapper;
+
         checks.pre-commit-check = pre-commit-check;
 
         # `nix develop` installs the git hooks and (re)writes .pre-commit-config.yaml.

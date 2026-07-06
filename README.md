@@ -23,11 +23,11 @@ Each hop count is its own `#[test]` in `integration/tests/integration.rs`
 (`zero_hop`, `one_hop`), reported independently. Every test owns
 its cluster: bring up → run → tear down. Three source modules:
 
-| Module | Responsibility |
-|--------|----------------|
-| `cluster.rs` | bring up / attach to `hoprd-localcluster`; contracts are deployed by the chain container (see note below) |
-| `env.rs` | `IntegrationEnv`: cluster + booted `edgli` + open channels; `open_unreliable_session(hops)` session factory |
-| `pump.rs` | reusable goodput/loss pump; returns a `Transfer` result |
+| Module       | Responsibility                                                                                              |
+| ------------ | ----------------------------------------------------------------------------------------------------------- |
+| `cluster.rs` | bring up / attach to `hoprd-localcluster`; contracts are deployed by the chain container (see note below)   |
+| `env.rs`     | `IntegrationEnv`: cluster + booted `edgli` + open channels; `open_unreliable_session(hops)` session factory |
+| `pump.rs`    | reusable goodput/loss pump; returns a `Transfer` result                                                     |
 
 **Contracts:** the `bloklid-anvil` image deploys the full HOPR contract set on
 startup (entrypoint: anvil → `blokli-contract-deployer` → addresses baked into
@@ -46,11 +46,11 @@ there is nothing to configure.
 
 ## What it measures
 
-| Field (`Transfer`) | Meaning |
-|--------|---------|
-| `mbps` | Return **goodput** = bytes echoed back / (first→last byte), MB/s (logged) |
-| `arrival_pct()` | `received / sent` — UDP is unreliable, some loss is normal |
-| `sha_ok` | `true` only on a lossless, byte-identical round-trip |
+| Field (`Transfer`) | Meaning                                                                   |
+| ------------------ | ------------------------------------------------------------------------- |
+| `mbps`             | Return **goodput** = bytes echoed back / (first→last byte), MB/s (logged) |
+| `arrival_pct()`    | `received / sent` — UDP is unreliable, some loss is normal                |
+| `sha_ok`           | `true` only on a lossless, byte-identical round-trip                      |
 
 Sessions are **UDP** (HOPR `Segmentation`-only unreliable socket, no
 retransmission), with the exit's SURB egress rate control left **on** — so the
@@ -89,13 +89,13 @@ The test is `#[ignore]` — it needs external binaries + a container runtime.
 
 ### Prerequisites
 
-| Var | Required | Meaning |
-|-----|----------|---------|
-| `HOPRD_BIN` | managed mode | path to a `hoprd` binary |
-| `HOPRD_LOCALCLUSTER_BIN` | always | path to a `hoprd-localcluster` binary |
-| `HOPRD_CHAIN_IMAGE` | managed mode | a `bloklid-anvil` image tag |
-| `HOPRD_CONTAINER_RUNTIME` | no | `docker` (default), `container`, `podman` |
-| `HOPRD_CLUSTER_DATA_DIR` | external mode | data-dir of an already-running cluster |
+| Var                       | Required      | Meaning                                   |
+| ------------------------- | ------------- | ----------------------------------------- |
+| `HOPRD_BIN`               | managed mode  | path to a `hoprd` binary                  |
+| `HOPRD_LOCALCLUSTER_BIN`  | always        | path to a `hoprd-localcluster` binary     |
+| `HOPRD_CHAIN_IMAGE`       | managed mode  | a `bloklid-anvil` image tag               |
+| `HOPRD_CONTAINER_RUNTIME` | no            | `docker` (default), `container`, `podman` |
+| `HOPRD_CLUSTER_DATA_DIR`  | external mode | data-dir of an already-running cluster    |
 
 Docker is the only external service: the chain (anvil + blokli + contracts) runs
 as a single `bloklid-anvil` container on the host daemon — `localcluster` launches

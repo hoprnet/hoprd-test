@@ -16,10 +16,10 @@ Cachix cache). Nothing to provision.
 
 Set under Settings → Secrets and variables → Actions:
 
-| Secret | Used for |
-|--------|----------|
-| `CACHIX_AUTH_TOKEN` | hoprnet nix cache (avoid full compiles) |
-| `ZULIP_API_KEY`, `ZULIP_EMAIL` | red-run notification |
+| Secret                         | Used for                                |
+| ------------------------------ | --------------------------------------- |
+| `CACHIX_AUTH_TOKEN`            | hoprnet nix cache (avoid full compiles) |
+| `ZULIP_API_KEY`, `ZULIP_EMAIL` | red-run notification                    |
 
 The `bloklid-anvil` image is in a **public** GCP Artifact Registry repo
 (`hoprassociation/docker-images`, `allUsers` reader) — no registry credentials
@@ -28,7 +28,7 @@ needed to pull it.
 Plus `HOPRD_TEST_DISPATCH_TOKEN` in **hoprd / edge-client / blokli** (Actions
 read+write on hoprd-test) so their merge workflows can trigger this one.
 
-Optional repo *variables*: `HOPRD_REF`, `EDGLI_REF`, `BLOKLID_ANVIL_IMAGE`
+Optional repo _variables_: `HOPRD_REF`, `EDGLI_REF`, `BLOKLID_ANVIL_IMAGE`
 (non-triggering-project defaults; unset → main/latest). There are no gate
 variables — thresholds are hardcoded in `integration/tests/integration.rs`.
 
