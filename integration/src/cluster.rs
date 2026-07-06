@@ -228,7 +228,11 @@ fn reap_stale(chain_image: &str, runtime: &str, lc_bin: &str, hoprd_bin: &str) {
         "{runtime} ps -aq --filter ancestor={chain_image} | xargs -r {runtime} rm -f; \
          pkill -9 -f {lc_bin}; pkill -9 -f {hoprd_bin}; true"
     );
-    match std::process::Command::new("sh").arg("-c").arg(&script).status() {
+    match std::process::Command::new("sh")
+        .arg("-c")
+        .arg(&script)
+        .status()
+    {
         Ok(_) => tracing::info!("reaped stale cluster state (container + node processes)"),
         Err(e) => tracing::warn!("reap of stale cluster state failed: {e}"),
     }
@@ -243,7 +247,12 @@ async fn spawn_managed() -> anyhow::Result<ClusterHandle> {
         .map_err(|_| anyhow::anyhow!("HOPRD_CHAIN_IMAGE is not set"))?;
     let container_runtime = std::env::var("HOPRD_CONTAINER_RUNTIME").ok();
 
-    reap_stale(&chain_image, container_runtime.as_deref().unwrap_or("docker"), &lc_bin, &hoprd_bin);
+    reap_stale(
+        &chain_image,
+        container_runtime.as_deref().unwrap_or("docker"),
+        &lc_bin,
+        &hoprd_bin,
+    );
 
     let tempdir = tempfile::TempDir::with_prefix("hoprd-it-")?;
     let data_dir = tempdir.path().to_path_buf();

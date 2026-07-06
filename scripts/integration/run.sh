@@ -81,6 +81,8 @@ PY
 export HOPRD_BIN="${REPO_ROOT}/result-hoprd/bin/hoprd"
 export HOPRD_LOCALCLUSTER_BIN="${REPO_ROOT}/result-localcluster/bin/hoprd-localcluster"
 export HOPRD_CHAIN_IMAGE="${CHAIN_IMAGE}"
+# Debug-build async setup overflows the default thread stack on x86_64 CI.
+export RUST_MIN_STACK="${RUST_MIN_STACK:-33554432}"
 echo "running integration tests ..."
 # Only the integration tests (the `integration` test target) — not the crate's
 # unit tests. Both hop counts (zero_hop, one_hop) run as separate tests.
