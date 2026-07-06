@@ -27,6 +27,19 @@ impl Transfer {
 }
 
 const IO_CHUNK: usize = 64 * 1024;
+
+/// Per-chunk delay to cap the send rate at `HOPRD_PUMP_MBPS` MB/s. Blasting a large
+/// payload saturates the node's rayon packet pool on CPU-constrained CI runners
+/// (decode timeouts → heavy loss). Unset or ≤0 = unpaced.
+fn send_pace_per_chunk() -> Option<Duration> {
+    let mbps: f64 = std::env::var("HOPRD_PUMP_MBPS").ok()?.parse().ok()?;
+    if mbps <= 0.0 {
+        return None;
+    }
+    Some(Duration::from_secs_f64(
+        IO_CHUNK as f64 / (mbps * 1_000_000.0),
+    ))
+}
 /// If no bytes arrive for this long after the first byte, the return transfer is
 /// considered finished (UDP loopback gives no EOF; lost tail bytes never arrive).
 const READ_IDLE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -58,11 +71,15 @@ pub async fn pump_loopback(
     let expected = sha256_digest(payload);
     let total_bytes = payload.len();
 
+    let pace = send_pace_per_chunk();
     let sender = tokio::spawn(async move {
         let mut offset = 0;
         while offset < to_send.len() {
             let end = (offset + IO_CHUNK).min(to_send.len());
             tx.write_all(&to_send[offset..end]).await?;
+            if let Some(d) = pace {
+                tokio::time::sleep(d).await;
+            }
             offset = end;
         }
         tx.flush().await?;

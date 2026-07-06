@@ -34,7 +34,7 @@ jobs:
     # PR runs only when the `run-integration` label is present; dispatch/manual always run.
     if: >-
       github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'run-integration')
-    runs-on: depot-ubuntu-24.04-16
+    runs-on: depot-ubuntu-24.04-8
     timeout-minutes: 90
     env:
       PROJECT: ${{ github.event.client_payload.project || github.event.inputs.project }}

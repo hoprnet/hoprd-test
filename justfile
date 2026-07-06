@@ -48,6 +48,8 @@ integration *filter: build preflight
     export RUST_LOG="${RUST_LOG:-info,edgli=debug}"
     # Debug-build async setup overflows the default thread stack on x86_64 CI.
     export RUST_MIN_STACK="${RUST_MIN_STACK:-33554432}"
+    # Cap send rate so the CPU-constrained runner's packet pool doesn't saturate.
+    export HOPRD_PUMP_MBPS="${HOPRD_PUMP_MBPS:-2}"
     # Safety-net teardown: remove any chain container left behind (localcluster
     # cleans up on graceful exit; this covers crashes/timeouts).
     trap 'docker ps -aq --filter "ancestor={{chain_image}}" | xargs -r docker rm -f' EXIT
@@ -76,6 +78,7 @@ attach *filter:
     export HOPRD_CLUSTER_DATA_DIR='{{data_dir}}'
     export RUST_LOG="${RUST_LOG:-info,edgli=debug}"
     export RUST_MIN_STACK="${RUST_MIN_STACK:-33554432}"
+    export HOPRD_PUMP_MBPS="${HOPRD_PUMP_MBPS:-2}"
     nix develop {{hoprnet}} -c cargo test --manifest-path integration/Cargo.toml --test integration --no-fail-fast {{filter}} -- --include-ignored --test-threads=1
 
 # Fast unit tests (gate + parse logic; no cluster).
