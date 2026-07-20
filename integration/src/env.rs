@@ -20,7 +20,7 @@ use edgli::{
 };
 
 use crate::{
-    Address, PAYLOAD_BYTES,
+    Address,
     cluster::{self, CLUSTER_SIZE, ClusterHandle, P2P_PORT_BASE},
 };
 
@@ -65,6 +65,9 @@ impl IntegrationEnv {
             Some(summary.blokli_url.clone()),
             None,
             Some(connector_cfg()),
+            // Cluster is loopback-only; peers announce 127.0.0.1/private addrs that
+            // edgli would otherwise filter out, so always dial local addresses.
+            true,
             |s: EdgliInitState| tracing::info!(?s, "edgli init"),
         )
         .await?;
@@ -74,7 +77,7 @@ impl IntegrationEnv {
 
         // Fund generously: 1000× the expected session packet count (fwd + SURB
         // return) absorbs probe traffic + probabilistic winning-ticket accrual.
-        let session_packets = (PAYLOAD_BYTES / SESSION_MTU + 1) * 2;
+        let session_packets = (crate::payload_bytes() / SESSION_MTU + 1) * 2;
         let sizing = IncentiveConfiguration {
             desired_message_count: (session_packets as u64) * 1_000,
             min_open_channels: 1,
@@ -126,7 +129,7 @@ impl IntegrationEnv {
                     return_path: HopRouting::try_from(hops)?,
                     capabilities: SessionCapability::Segmentation.into(),
                     surb_management: Some(SurbBalancerConfig {
-                        target_surb_buffer_size: 3000,
+                        target_surb_buffer_size: crate::target_surb_buffer_size(),
                         max_surbs_per_sec: 500,
                         ..SurbBalancerConfig::default()
                     }),

@@ -14,12 +14,29 @@
 #   HOPRD_REF        default hoprd ref      (default: main)
 #   EDGLI_REF        default edge-client ref (default: main)
 #   BLOKLID_ANVIL_IMAGE  default chain image (default: …/bloklid-anvil:latest-rhine)
-#   NIX_SYSTEM_SUFFIX    nix output arch suffix (default: x86_64-linux)
+#   NIX_SYSTEM_SUFFIX    nix output arch suffix (default: detected from host)
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 CRATE_CARGO="${REPO_ROOT}/integration/Cargo.toml"
-ARCH="${NIX_SYSTEM_SUFFIX:-x86_64-linux}"
+
+# Nix system double from the host, e.g. aarch64-darwin, x86_64-linux. Override
+# with NIX_SYSTEM_SUFFIX to cross-target (CI builds x86_64-linux on any host).
+detect_arch() {
+  local m s
+  case "$(uname -m)" in
+  arm64 | aarch64) m=aarch64 ;;
+  x86_64 | amd64) m=x86_64 ;;
+  *) m="$(uname -m)" ;;
+  esac
+  case "$(uname -s)" in
+  Darwin) s=darwin ;;
+  Linux) s=linux ;;
+  *) s="$(uname -s | tr '[:upper:]' '[:lower:]')" ;;
+  esac
+  echo "${m}-${s}"
+}
+ARCH="${NIX_SYSTEM_SUFFIX:-$(detect_arch)}"
 
 HOPRD_REF="${HOPRD_REF:-main}"
 EDGLI_REF="${EDGLI_REF:-main}"
@@ -61,9 +78,20 @@ echo "  bloklid-anvil= ${CHAIN_IMAGE}"
 bash "$(dirname "${BASH_SOURCE[0]}")/preflight.sh" "${CHAIN_IMAGE}"
 
 # ── Build hoprd + hoprd-localcluster from the hoprd ref (Cachix-cached) ──
-echo "building hoprd binaries from ref ${HOPRD_REF} ..."
-nix build -L "github:hoprnet/hoprd/${HOPRD_REF}#binary-hoprd-${ARCH}" --out-link "${REPO_ROOT}/result-hoprd"
-nix build -L "github:hoprnet/hoprd/${HOPRD_REF}#binary-hoprd-localcluster-${ARCH}" --out-link "${REPO_ROOT}/result-localcluster"
+# Prefer the arch-suffixed output (CI cross-targets x86_64-linux); fall back to
+# the unsuffixed host-arch output where a suffixed variant is missing (the flake
+# has no binary-hoprd-localcluster-aarch64-darwin).
+build_binary() { # base-attr out-link
+  local base="$1" out="$2" attr="$1-${ARCH}"
+  if ! nix eval "github:hoprnet/hoprd/${HOPRD_REF}#${attr}.name" >/dev/null 2>&1; then
+    echo "  ${attr} absent; using host-arch ${base}"
+    attr="$base"
+  fi
+  nix build -L "github:hoprnet/hoprd/${HOPRD_REF}#${attr}" --out-link "$out"
+}
+echo "building hoprd binaries from ref ${HOPRD_REF} (${ARCH}) ..."
+build_binary binary-hoprd "${REPO_ROOT}/result-hoprd"
+build_binary binary-hoprd-localcluster "${REPO_ROOT}/result-localcluster"
 
 # ── Pin edgli to the resolved sha and refresh the lockfile ──
 echo "pinning edgli to ${EDGLI_SHA} ..."
@@ -87,5 +115,6 @@ export RUST_MIN_STACK="${RUST_MIN_STACK:-33554432}"
 export HOPRD_PUMP_MBPS="${HOPRD_PUMP_MBPS:-0.5}"
 echo "running integration tests ..."
 # Only the integration tests (the `integration` test target) — not the crate's
-# unit tests. Both hop counts (zero_hop, one_hop) run as separate tests.
-(cd "${REPO_ROOT}/integration" && cargo test --test integration --no-fail-fast -- --include-ignored --test-threads=1)
+# unit tests. The zero_hop/one_hop correctness gates run; high_volume_downlink is
+# a manual repro (200 MiB, ~15 min) skipped in CI — run it on demand instead.
+(cd "${REPO_ROOT}/integration" && cargo test --test integration --no-fail-fast -- --include-ignored --skip high_volume_downlink --test-threads=1)

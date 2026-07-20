@@ -13,7 +13,7 @@
 
 use std::time::Duration;
 
-use hoprd_integration_test::{IntegrationEnv, PAYLOAD_BYTES, pump::pump_loopback};
+use hoprd_integration_test::{IntegrationEnv, PAYLOAD_BYTES, payload_bytes, pump::pump_loopback};
 use rand::RngExt as _;
 
 /// Per-test transfer timeout.
@@ -55,4 +55,46 @@ async fn zero_hop() -> anyhow::Result<()> {
 #[ignore = "requires hoprd/hoprd-localcluster binaries + a bloklid-anvil container"]
 async fn one_hop() -> anyhow::Result<()> {
     run_hop(1, "1-hop").await
+}
+
+/// High-volume downlink repro for the SURB-balancer stall (findings F2).
+///
+/// Defaults reproduce the stall out of the box (see `stress-findings/`): 200 MiB
+/// 1-hop to the exit loopback at 0.46 MB/s. The collapse is volume-driven — the
+/// return/SURB path runs clean for a while, then cascades — so a large payload,
+/// not a high rate, is what triggers it. Unlike [`run_hop`] this does NOT gate on
+/// an arrival floor; the pump's `arrival %` + "return idle … stopping at N/total"
+/// log line is the stall signal, and only corruption of *returned* bytes fails
+/// the test.
+///
+/// Levers (all env-driven, no rebuild): `HOPRD_PAYLOAD_BYTES` (default 200 MiB),
+/// `HOPRD_PUMP_MBPS` (default 0.46 MB/s, ≤0 = unpaced blast), `HOPRD_TARGET_SURB`
+/// (3000 default, 9785 = prod scale), `HOPRD_READ_IDLE_SECS` (default 30).
+const VOLUME_TIMEOUT: Duration = Duration::from_secs(1800);
+
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+#[ignore = "requires hoprd/hoprd-localcluster binaries + a bloklid-anvil container"]
+async fn high_volume_downlink() -> anyhow::Result<()> {
+    let env = IntegrationEnv::setup().await?;
+    let session = env.open_unreliable_session(1).await?;
+
+    let mut payload = vec![0u8; payload_bytes()];
+    rand::rng().fill(&mut payload[..]);
+
+    let t = pump_loopback(session, &payload, "high-volume", VOLUME_TIMEOUT).await?;
+
+    tracing::warn!(
+        arrival_pct = t.arrival_pct(),
+        sent_bytes = t.sent_bytes,
+        received_bytes = t.received_bytes,
+        mbps = t.mbps,
+        sha_ok = t.sha_ok,
+        "high-volume result (arrival < 100% with no recovery ⇒ stall reproduced)",
+    );
+
+    assert!(
+        t.received_bytes < t.sent_bytes || t.sha_ok,
+        "returned bytes corrupted (SHA-256 mismatch)",
+    );
+    Ok(())
 }
