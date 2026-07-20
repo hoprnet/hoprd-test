@@ -115,5 +115,6 @@ export RUST_MIN_STACK="${RUST_MIN_STACK:-33554432}"
 export HOPRD_PUMP_MBPS="${HOPRD_PUMP_MBPS:-0.5}"
 echo "running integration tests ..."
 # Only the integration tests (the `integration` test target) — not the crate's
-# unit tests. Both hop counts (zero_hop, one_hop) run as separate tests.
-(cd "${REPO_ROOT}/integration" && cargo test --test integration --no-fail-fast -- --include-ignored --test-threads=1)
+# unit tests. The zero_hop/one_hop correctness gates run; high_volume_downlink is
+# a manual repro (200 MiB, ~15 min) skipped in CI — run it on demand instead.
+(cd "${REPO_ROOT}/integration" && cargo test --test integration --no-fail-fast -- --include-ignored --skip high_volume_downlink --test-threads=1)

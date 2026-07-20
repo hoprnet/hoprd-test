@@ -19,9 +19,10 @@ runners, and **gates the hoprd → first-network deploy**.
 
 ## Framework
 
-Each hop count is its own `#[test]` in `integration/tests/integration.rs`
-(`zero_hop`, `one_hop`), reported independently. Every test owns
-its cluster: bring up → run → tear down. Three source modules:
+Each scenario is its own `#[test]` in `integration/tests/integration.rs` —
+`zero_hop`, `one_hop` (correctness gates), and `high_volume_downlink` (the
+volume-driven SURB return-path stall repro). Reported independently. Every test
+owns its cluster: bring up → run → tear down. Three source modules:
 
 | Module       | Responsibility                                                                                              |
 | ------------ | ----------------------------------------------------------------------------------------------------------- |
@@ -38,9 +39,10 @@ lack them.
 ### Adding a scenario
 
 Add a `#[test_log::test(tokio::test(...))] #[ignore]` fn to
-`tests/integration.rs` that calls `run_hop(hops, name)`. Thresholds
-(`PAYLOAD_BYTES`, `MIN_ARRIVAL_PCT`, `PUMP_TIMEOUT`) are hardcoded constants —
-there is nothing to configure.
+`tests/integration.rs` that calls `run_hop(hops, name)`. Correctness thresholds
+(`PAYLOAD_BYTES`, `MIN_ARRIVAL_PCT`, `PUMP_TIMEOUT`) are hardcoded constants. The
+`high_volume_downlink` repro is the exception — it is env-tunable (see
+[Repro tuning knobs](#repro-tuning-knobs)).
 
 ---
 
@@ -150,10 +152,37 @@ export HOPRD_CLUSTER_DATA_DIR=/tmp/hopr-it
 cd integration && cargo test --test integration -- --include-ignored --test-threads=1
 ```
 
-There are no tuning knobs — payload size, arrival floor, and timeout are
-hardcoded constants in `tests/integration.rs`.
+For `zero_hop`/`one_hop`, payload size, arrival floor, and timeout are hardcoded
+constants in `tests/integration.rs`. The `high_volume_downlink` repro is tunable
+— see below.
 
 Unit tests (cluster status parsing, no external deps): `cargo test --lib`.
+
+### Repro tuning knobs
+
+Only `high_volume_downlink` reads these; all optional, all env-driven (no rebuild).
+Defaults reproduce the stall out of the box. Full analysis + a sweep runner live in
+[`stress-findings/`](stress-findings/).
+
+| Var                     | Default  | Meaning                                                        |
+| ----------------------- | -------- | ------------------------------------------------------------- |
+| `HOPRD_PAYLOAD_BYTES`   | 200 MiB  | payload size; the stall is **volume**-driven, so this is the primary lever |
+| `HOPRD_PUMP_MBPS`       | 0.46     | send-rate cap, MB/s (measured <10%-loss ceiling); `<=0` = unpaced blast |
+| `HOPRD_TARGET_SURB`     | 3000     | SURB balancer exit-buffer target (`9785` = prod scale)        |
+| `HOPRD_READ_IDLE_SECS`  | 30       | return-idle cutoff — how long a gap counts as a stall         |
+| `HOPRD_CLUSTER_LATENCY` | off      | per-node relay latency, e.g. `150ms±50ms`                     |
+
+The repro does **not** gate on arrival — it only fails on corruption of returned
+bytes. Read the outcome from the logged `arrival %` / `high-volume result` line:
+`< 100% with no recovery` ⇒ stall reproduced. On this stack the same 0.46 MB/s that
+returns ~99% at 50 MiB collapses to ~49% at 200 MiB.
+
+Run just the repro:
+
+```bash
+cd integration
+cargo test --test integration high_volume_downlink -- --include-ignored --nocapture
+```
 
 ---
 

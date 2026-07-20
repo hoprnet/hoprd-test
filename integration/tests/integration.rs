@@ -13,7 +13,7 @@
 
 use std::time::Duration;
 
-use hoprd_integration_test::{IntegrationEnv, payload_bytes, pump::pump_loopback};
+use hoprd_integration_test::{IntegrationEnv, PAYLOAD_BYTES, payload_bytes, pump::pump_loopback};
 use rand::RngExt as _;
 
 /// Per-test transfer timeout.
@@ -26,7 +26,7 @@ async fn run_hop(hops: usize, name: &str) -> anyhow::Result<()> {
     let session = env.open_unreliable_session(hops).await?;
 
     // Random bytes → unique packet ciphertexts per run (avoids replay-tag hits).
-    let mut payload = vec![0u8; payload_bytes()];
+    let mut payload = vec![0u8; PAYLOAD_BYTES];
     rand::rng().fill(&mut payload[..]);
 
     let t = pump_loopback(session, &payload, name, PUMP_TIMEOUT).await?;
@@ -59,15 +59,17 @@ async fn one_hop() -> anyhow::Result<()> {
 
 /// High-volume downlink repro for the SURB-balancer stall (findings F2).
 ///
-/// Drives a large payload (`HOPRD_PAYLOAD_BYTES`, e.g. 100 MB) 1-hop to the exit
-/// loopback. Unlike [`run_hop`] this does NOT gate on an arrival floor — the
-/// whole point is to observe whether downstream goes permanently silent partway
-/// through. The pump's `arrival %` + "return idle … stopping at N/total" line in
-/// the logs are the stall signal; only corruption of *returned* bytes fails the
-/// test. Judge baseline-stall vs fixed-pass from the logged arrival %.
+/// Defaults reproduce the stall out of the box (see `stress-findings/`): 200 MiB
+/// 1-hop to the exit loopback at 0.46 MB/s. The collapse is volume-driven — the
+/// return/SURB path runs clean for a while, then cascades — so a large payload,
+/// not a high rate, is what triggers it. Unlike [`run_hop`] this does NOT gate on
+/// an arrival floor; the pump's `arrival %` + "return idle … stopping at N/total"
+/// log line is the stall signal, and only corruption of *returned* bytes fails
+/// the test.
 ///
-/// Levers (all env-driven, no rebuild): `HOPRD_PAYLOAD_BYTES`, `HOPRD_PUMP_MBPS`
-/// (unset = blast), `HOPRD_TARGET_SURB` (3000 default, 9785 = prod scale).
+/// Levers (all env-driven, no rebuild): `HOPRD_PAYLOAD_BYTES` (default 200 MiB),
+/// `HOPRD_PUMP_MBPS` (default 0.46 MB/s, ≤0 = unpaced blast), `HOPRD_TARGET_SURB`
+/// (3000 default, 9785 = prod scale), `HOPRD_READ_IDLE_SECS` (default 30).
 const VOLUME_TIMEOUT: Duration = Duration::from_secs(1800);
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]

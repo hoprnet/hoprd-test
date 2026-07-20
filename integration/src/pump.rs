@@ -29,10 +29,15 @@ impl Transfer {
 const IO_CHUNK: usize = 64 * 1024;
 
 /// Per-chunk delay to cap the send rate at `HOPRD_PUMP_MBPS` MB/s. Blasting a large
-/// payload saturates the node's rayon packet pool on CPU-constrained CI runners
-/// (decode timeouts → heavy loss). Unset or ≤0 = unpaced.
+/// payload saturates the node's rayon packet pool (decode timeouts → heavy loss),
+/// so pacing is on by default. Default 0.46 MB/s is the measured <10%-loss ceiling
+/// (see `stress-findings/`); `HOPRD_PUMP_MBPS<=0` = unpaced blast.
+const DEFAULT_PUMP_MBPS: f64 = 0.46;
 fn send_pace_per_chunk() -> Option<Duration> {
-    let mbps: f64 = std::env::var("HOPRD_PUMP_MBPS").ok()?.parse().ok()?;
+    let mbps: f64 = std::env::var("HOPRD_PUMP_MBPS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(DEFAULT_PUMP_MBPS);
     if mbps <= 0.0 {
         return None;
     }
@@ -42,13 +47,13 @@ fn send_pace_per_chunk() -> Option<Duration> {
 }
 /// If no bytes arrive for this long after the first byte, the return transfer is
 /// considered finished (UDP loopback gives no EOF; lost tail bytes never arrive).
-/// Overridable via `HOPRD_READ_IDLE_SECS` — a lossy/slow downstream can gap longer than
-/// the 10s default, which would otherwise be misreported as a stall.
+/// Overridable via `HOPRD_READ_IDLE_SECS` (default 30) — a lossy/slow downstream can
+/// gap longer than the default, which would otherwise be misreported as a stall.
 fn read_idle_timeout() -> Duration {
     let secs = std::env::var("HOPRD_READ_IDLE_SECS")
         .ok()
         .and_then(|s| s.parse().ok())
-        .unwrap_or(10);
+        .unwrap_or(30);
     Duration::from_secs(secs)
 }
 

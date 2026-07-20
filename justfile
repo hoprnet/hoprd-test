@@ -1,8 +1,8 @@
 # Integration throughput test — convenience recipes.
 #
 # Local quickstart:
-#   just integration            # build binaries, preflight, run all scenarios
-#   just scenario 0-hop         # run a single scenario against a fresh env
+#   just integration            # build, preflight, run correctness gates (skips high_volume repro)
+#   just scenario high_volume_downlink   # run one scenario (incl. the repro) against a fresh env
 #   just unit                   # fast unit tests (no cluster)
 #
 # Fast iteration (one cluster, many runs):
@@ -53,7 +53,10 @@ integration *filter: build preflight
     # Safety-net teardown: remove any chain container left behind (localcluster
     # cleans up on graceful exit; this covers crashes/timeouts).
     trap 'docker ps -aq --filter "ancestor={{chain_image}}" | xargs -r docker rm -f' EXIT
-    nix develop {{hoprnet}} -c cargo test --manifest-path integration/Cargo.toml --test integration --no-fail-fast {{filter}} -- --include-ignored --test-threads=1
+    # No filter = the gate: run the correctness scenarios only, skip the slow
+    # high_volume_downlink repro. An explicit filter (e.g. `just scenario …`) opts in.
+    SKIP=""; [ -z '{{filter}}' ] && SKIP="--skip high_volume_downlink"
+    nix develop {{hoprnet}} -c cargo test --manifest-path integration/Cargo.toml --test integration --no-fail-fast {{filter}} -- --include-ignored $SKIP --test-threads=1
 
 # Run a single test against a fresh env (e.g. `just scenario zero_hop`).
 scenario name:
@@ -79,7 +82,9 @@ attach *filter:
     export RUST_LOG="${RUST_LOG:-info,edgli=debug}"
     export RUST_MIN_STACK="${RUST_MIN_STACK:-33554432}"
     export HOPRD_PUMP_MBPS="${HOPRD_PUMP_MBPS:-0.5}"
-    nix develop {{hoprnet}} -c cargo test --manifest-path integration/Cargo.toml --test integration --no-fail-fast {{filter}} -- --include-ignored --test-threads=1
+    # No filter = correctness scenarios only; explicit filter opts into the repro.
+    SKIP=""; [ -z '{{filter}}' ] && SKIP="--skip high_volume_downlink"
+    nix develop {{hoprnet}} -c cargo test --manifest-path integration/Cargo.toml --test integration --no-fail-fast {{filter}} -- --include-ignored $SKIP --test-threads=1
 
 # Fast unit tests (gate + parse logic; no cluster).
 unit:
