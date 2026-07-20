@@ -269,6 +269,8 @@ async fn spawn_managed() -> anyhow::Result<ClusterHandle> {
         data_dir.to_str().unwrap(),
         "--api-host",
         API_HOST,
+        "--p2p-host",
+        API_HOST,
         "--api-port-base",
         &API_PORT_BASE.to_string(),
         "--p2p-port-base",
@@ -280,6 +282,13 @@ async fn spawn_managed() -> anyhow::Result<ClusterHandle> {
     ]);
     if let Some(runtime) = container_runtime {
         cmd.args(["--container-runtime", &runtime]);
+    }
+    // Optional per-node relay latency (e.g. "150ms±50ms") to induce controlled,
+    // deterministic downstream loss via relay tail-drop / frame-timeout discards.
+    if let Ok(latency) = std::env::var("HOPRD_CLUSTER_LATENCY") {
+        if !latency.is_empty() {
+            cmd.args(["--latency", &latency]);
+        }
     }
     cmd.env("HOPRD_USE_OPENTELEMETRY", "false");
     cmd.stdout(std::process::Stdio::piped())

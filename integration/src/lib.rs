@@ -21,9 +21,26 @@ pub mod cluster;
 pub mod env;
 pub mod pump;
 
-/// Payload size pumped through each session. Also sizes the strategy's expected
-/// packet count for channel funding (see [`env`]).
+/// Default payload size pumped through each session. Also sizes the strategy's
+/// expected packet count for channel funding (see [`env`]).
 pub const PAYLOAD_BYTES: usize = 10 * 1024 * 1024; // 10 MiB
+
+/// Effective payload size: `HOPRD_PAYLOAD_BYTES` if set, else [`PAYLOAD_BYTES`].
+/// Lets the high-volume repro drive 50-150 MB without a rebuild.
+pub fn payload_bytes() -> usize {
+    std::env::var("HOPRD_PAYLOAD_BYTES")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(PAYLOAD_BYTES)
+}
+
+/// Exit-buffer target for the SURB balancer: `HOPRD_TARGET_SURB` if set, else 3000.
+pub fn target_surb_buffer_size() -> u64 {
+    std::env::var("HOPRD_TARGET_SURB")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(3000)
+}
 
 pub use env::IntegrationEnv;
 

@@ -42,7 +42,15 @@ fn send_pace_per_chunk() -> Option<Duration> {
 }
 /// If no bytes arrive for this long after the first byte, the return transfer is
 /// considered finished (UDP loopback gives no EOF; lost tail bytes never arrive).
-const READ_IDLE_TIMEOUT: Duration = Duration::from_secs(10);
+/// Overridable via `HOPRD_READ_IDLE_SECS` — a lossy/slow downstream can gap longer than
+/// the 10s default, which would otherwise be misreported as a stall.
+fn read_idle_timeout() -> Duration {
+    let secs = std::env::var("HOPRD_READ_IDLE_SECS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(10);
+    Duration::from_secs(secs)
+}
 
 pub fn sha256_digest(data: &[u8]) -> Vec<u8> {
     let mut h = Sha256::new();
@@ -91,6 +99,7 @@ pub async fn pump_loopback(
     let mut first_at: Option<std::time::Instant> = None;
     let mut last_at = std::time::Instant::now();
     let overall_deadline = std::time::Instant::now() + timeout;
+    let idle_timeout = read_idle_timeout();
 
     while received.len() < total_bytes {
         if std::time::Instant::now() >= overall_deadline {
@@ -100,7 +109,7 @@ pub async fn pump_loopback(
             );
             break;
         }
-        match tokio::time::timeout(READ_IDLE_TIMEOUT, rx.read(&mut buf)).await {
+        match tokio::time::timeout(idle_timeout, rx.read(&mut buf)).await {
             Ok(Ok(0)) => break, // EOF
             Ok(Ok(just_read)) => {
                 first_at.get_or_insert_with(std::time::Instant::now);
@@ -114,7 +123,7 @@ pub async fn pump_loopback(
             Err(_) => {
                 if !received.is_empty() {
                     tracing::info!(
-                        "{label}: return idle {READ_IDLE_TIMEOUT:?}, stopping at {}/{total_bytes} B",
+                        "{label}: return idle {idle_timeout:?}, stopping at {}/{total_bytes} B",
                         received.len()
                     );
                     break;

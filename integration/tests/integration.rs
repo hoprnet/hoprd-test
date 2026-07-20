@@ -13,7 +13,7 @@
 
 use std::time::Duration;
 
-use hoprd_integration_test::{IntegrationEnv, PAYLOAD_BYTES, pump::pump_loopback};
+use hoprd_integration_test::{IntegrationEnv, payload_bytes, pump::pump_loopback};
 use rand::RngExt as _;
 
 /// Per-test transfer timeout.
@@ -26,7 +26,7 @@ async fn run_hop(hops: usize, name: &str) -> anyhow::Result<()> {
     let session = env.open_unreliable_session(hops).await?;
 
     // Random bytes → unique packet ciphertexts per run (avoids replay-tag hits).
-    let mut payload = vec![0u8; PAYLOAD_BYTES];
+    let mut payload = vec![0u8; payload_bytes()];
     rand::rng().fill(&mut payload[..]);
 
     let t = pump_loopback(session, &payload, name, PUMP_TIMEOUT).await?;
@@ -55,4 +55,44 @@ async fn zero_hop() -> anyhow::Result<()> {
 #[ignore = "requires hoprd/hoprd-localcluster binaries + a bloklid-anvil container"]
 async fn one_hop() -> anyhow::Result<()> {
     run_hop(1, "1-hop").await
+}
+
+/// High-volume downlink repro for the SURB-balancer stall (findings F2).
+///
+/// Drives a large payload (`HOPRD_PAYLOAD_BYTES`, e.g. 100 MB) 1-hop to the exit
+/// loopback. Unlike [`run_hop`] this does NOT gate on an arrival floor — the
+/// whole point is to observe whether downstream goes permanently silent partway
+/// through. The pump's `arrival %` + "return idle … stopping at N/total" line in
+/// the logs are the stall signal; only corruption of *returned* bytes fails the
+/// test. Judge baseline-stall vs fixed-pass from the logged arrival %.
+///
+/// Levers (all env-driven, no rebuild): `HOPRD_PAYLOAD_BYTES`, `HOPRD_PUMP_MBPS`
+/// (unset = blast), `HOPRD_TARGET_SURB` (3000 default, 9785 = prod scale).
+const VOLUME_TIMEOUT: Duration = Duration::from_secs(1800);
+
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+#[ignore = "requires hoprd/hoprd-localcluster binaries + a bloklid-anvil container"]
+async fn high_volume_downlink() -> anyhow::Result<()> {
+    let env = IntegrationEnv::setup().await?;
+    let session = env.open_unreliable_session(1).await?;
+
+    let mut payload = vec![0u8; payload_bytes()];
+    rand::rng().fill(&mut payload[..]);
+
+    let t = pump_loopback(session, &payload, "high-volume", VOLUME_TIMEOUT).await?;
+
+    tracing::warn!(
+        arrival_pct = t.arrival_pct(),
+        sent_bytes = t.sent_bytes,
+        received_bytes = t.received_bytes,
+        mbps = t.mbps,
+        sha_ok = t.sha_ok,
+        "high-volume result (arrival < 100% with no recovery ⇒ stall reproduced)",
+    );
+
+    assert!(
+        t.received_bytes < t.sent_bytes || t.sha_ok,
+        "returned bytes corrupted (SHA-256 mismatch)",
+    );
+    Ok(())
 }
