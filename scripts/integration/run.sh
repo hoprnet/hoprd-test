@@ -38,15 +38,20 @@ blokli) CHAIN_IMAGE="${OVERRIDE_IMAGE:?OVERRIDE_IMAGE required for PROJECT=blokl
 esac
 
 # Resolve edge-client ref → concrete sha (cargo git `rev` needs a commit, not a branch).
-resolve_sha() { # url ref
+resolve_sha() { # owner/repo ref
   local ref="$2"
   if [[ $ref =~ ^[0-9a-f]{7,40}$ ]]; then
     echo "$ref"
     return
   fi
-  git ls-remote "$1" "$ref" | awk 'NR==1{print $1}'
+  # Resolve via `gh api`, not `git ls-remote`: the dev shell's LD_LIBRARY_PATH points
+  # at nix glibc, which the system `git-remote-https` helper loads over its older
+  # system glibc, tripping `GLIBC_ABI_DT_X86_64_PLT not found` and aborting the fetch
+  # on CI. `gh` is a self-contained nix binary already on PATH and authenticated via
+  # the dev shell's GITHUB_TOKEN, and it handles the private edge-client repo.
+  gh api "repos/$1/commits/${ref}" --jq '.sha' 2>/dev/null
 }
-EDGLI_SHA="$(resolve_sha https://github.com/hoprnet/edge-client "${EDGLI_REF}")"
+EDGLI_SHA="$(resolve_sha hoprnet/edge-client "${EDGLI_REF}")"
 [ -n "${EDGLI_SHA}" ] || {
   echo "could not resolve edge-client ref '${EDGLI_REF}'" >&2
   exit 1

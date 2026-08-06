@@ -5,7 +5,7 @@
 use std::time::Duration;
 
 use edgli::{
-    BlockchainConnectorConfig, Edgli, EdgliInitState,
+    BlockchainConnectorConfig, BlokliEndpoint, Edgli, EdgliInitState,
     hopr_lib::{
         HopRouting, HoprKeys, HoprSessionClientConfig, IdentityRetrievalModes,
         api::{
@@ -13,20 +13,20 @@ use edgli::{
             types::internal::channels::{ChannelEntry, ChannelStatus},
         },
         config::{HoprLibConfig, HostConfig, HostType, SafeModule},
-        exports::transport::{HoprSession, SessionCapability, SessionTarget, SurbBalancerConfig},
+        exports::transport::{
+            HoprSession, SESSION_MTU, SURB_SIZE, SessionCapability, SessionTarget,
+            SurbBalancerConfig,
+        },
     },
     strategy::{EdgeStrategyKind, EligibilityConfig, IncentiveConfiguration, default_strategy_cfg},
     traits::EdgeNodeApi,
 };
 
 use crate::{
-    Address, PAYLOAD_BYTES,
+    Address,
     cluster::{self, CLUSTER_SIZE, ClusterHandle, P2P_PORT_BASE},
 };
 
-/// Equal to `hopr_transport_session::SESSION_MTU = 1018`; used only to size the
-/// strategy's expected packet count for funding.
-const SESSION_MTU: usize = 1018;
 /// Edgli's P2P port — one slot beyond the cluster nodes.
 const EDGE_P2P_PORT: u16 = P2P_PORT_BASE + CLUSTER_SIZE as u16;
 
@@ -62,9 +62,10 @@ impl IntegrationEnv {
         let edgli = Edgli::new(
             edgli_config(&extra.safe_address, &extra.module_address),
             hopr_keys,
-            Some(summary.blokli_url.clone()),
-            None,
+            BlokliEndpoint::from_optional_url(Some(summary.blokli_url.as_str()))?,
             Some(connector_cfg()),
+            // Localcluster peers announce loopback/private addresses; probe them or no dial happens.
+            true,
             |s: EdgliInitState| tracing::info!(?s, "edgli init"),
         )
         .await?;
@@ -72,11 +73,7 @@ impl IntegrationEnv {
         tracing::info!("waiting for Edgli to connect to ≥2 peers");
         await_edgli_peers_connected(&edgli, 2).await?;
 
-        // Fund generously: 1000× the expected session packet count (fwd + SURB
-        // return) absorbs probe traffic + probabilistic winning-ticket accrual.
-        let session_packets = (PAYLOAD_BYTES / SESSION_MTU + 1) * 2;
         let sizing = IncentiveConfiguration {
-            desired_message_count: (session_packets as u64) * 1_000,
             min_open_channels: 1,
             target_open_channels: CLUSTER_SIZE,
             ..Default::default()
@@ -124,10 +121,16 @@ impl IntegrationEnv {
                 HoprSessionClientConfig {
                     forward_path: HopRouting::try_from(hops)?,
                     return_path: HopRouting::try_from(hops)?,
-                    capabilities: SessionCapability::Segmentation.into(),
+                    // Mirror gnosis_vpn-client's main (WG) data session — the real
+                    // high-throughput config (gnosis_vpn-lib connection/options.rs +
+                    // up/runner.rs). A too-low SURB mint ceiling starves the exit's
+                    // return path under sustained downlink; provision it like production.
+                    capabilities: SessionCapability::Segmentation | SessionCapability::NoDelay,
+                    always_max_out_surbs: true,
                     surb_management: Some(SurbBalancerConfig {
-                        target_surb_buffer_size: 3000,
-                        max_surbs_per_sec: 500,
+                        // gnosis main: 10 MB response buffer, 16 Mb/s SURB upstream.
+                        target_surb_buffer_size: 10_000_000 / SESSION_MTU as u64,
+                        max_surbs_per_sec: 16_000_000 / (8 * SURB_SIZE as u64),
                         ..SurbBalancerConfig::default()
                     }),
                     ..Default::default()

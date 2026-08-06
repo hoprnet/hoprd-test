@@ -21,6 +21,9 @@ hoprnet := env_var_or_default("HOPRNET_SHELL", "github:hoprnet/hoprnet")
 # Chain image (override: `just chain_image=… integration`, or set BLOKLID_ANVIL_IMAGE).
 chain_image := env_var_or_default("BLOKLID_ANVIL_IMAGE", "europe-west3-docker.pkg.dev/hoprassociation/docker-images/bloklid-anvil:latest-rhine")
 
+# Blokli release for the image-free binary chain (override: `just blokli_ref=… build-chain`).
+blokli_ref := env_var_or_default("BLOKLI_REF", "v0.12.0")
+
 data_dir := "/tmp/hopr-it"
 
 _default:
@@ -54,6 +57,22 @@ integration *filter: build preflight
     # cleans up on graceful exit; this covers crashes/timeouts).
     trap 'docker ps -aq --filter "ancestor={{chain_image}}" | xargs -r docker rm -f' EXIT
     nix develop {{hoprnet}} -c cargo test --manifest-path integration/Cargo.toml --test integration --no-fail-fast {{filter}} -- --include-ignored --test-threads=1
+
+# Build the image-free chain: bloklid + blokli-contract-deployer (blokli release)
+# and anvil (nixpkgs foundry). Replaces the bloklid-anvil docker image.
+build-chain:
+    nix build -L 'github:hoprnet/blokli/{{blokli_ref}}#bloklid' --out-link result-bloklid
+    nix build -L 'nixpkgs#foundry' --out-link result-foundry
+
+# Full local run WITHOUT docker: build hoprd + the binary chain, then run each
+# scenario against a fresh locally-built anvil+bloklid (via --chain-url). Optional
+# args = scenarios (default: `zero_hop one_hop`), e.g. `just integration-binchain zero_hop`.
+integration-binchain *scenarios: build build-chain
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # run-binchain.sh enters the dev shell itself (per scenario), so no outer wrap.
+    [ -n '{{scenarios}}' ] && export SCENARIOS='{{scenarios}}'
+    HOPRNET_SHELL='{{hoprnet}}' bash scripts/integration/run-binchain.sh
 
 # Run a single test against a fresh env (e.g. `just scenario zero_hop`).
 scenario name:

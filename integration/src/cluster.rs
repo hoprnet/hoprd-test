@@ -243,16 +243,23 @@ async fn spawn_managed() -> anyhow::Result<ClusterHandle> {
         .map_err(|_| anyhow::anyhow!("HOPRD_LOCALCLUSTER_BIN is not set"))?;
     let hoprd_bin =
         std::env::var("HOPRD_BIN").map_err(|_| anyhow::anyhow!("HOPRD_BIN is not set"))?;
-    let chain_image = std::env::var("HOPRD_CHAIN_IMAGE")
-        .map_err(|_| anyhow::anyhow!("HOPRD_CHAIN_IMAGE is not set"))?;
+    let chain_url = std::env::var("HOPRD_CHAIN_URL").ok();
+    let chain_image = std::env::var("HOPRD_CHAIN_IMAGE").ok();
     let container_runtime = std::env::var("HOPRD_CONTAINER_RUNTIME").ok();
 
-    reap_stale(
-        &chain_image,
-        container_runtime.as_deref().unwrap_or("docker"),
-        &lc_bin,
-        &hoprd_bin,
-    );
+    // External chain (HOPRD_CHAIN_URL, e.g. a locally-built bloklid) skips the
+    // container; only image mode has a stale container to reap.
+    if chain_url.is_none() {
+        let image = chain_image.as_deref().ok_or_else(|| {
+            anyhow::anyhow!("set HOPRD_CHAIN_URL (external chain) or HOPRD_CHAIN_IMAGE (container)")
+        })?;
+        reap_stale(
+            image,
+            container_runtime.as_deref().unwrap_or("docker"),
+            &lc_bin,
+            &hoprd_bin,
+        );
+    }
 
     let tempdir = tempfile::TempDir::with_prefix("hoprd-it-")?;
     let data_dir = tempdir.path().to_path_buf();
@@ -275,9 +282,12 @@ async fn spawn_managed() -> anyhow::Result<ClusterHandle> {
         &P2P_PORT_BASE.to_string(),
         "--api-token",
         API_TOKEN,
-        "--chain-image",
-        &chain_image,
     ]);
+    if let Some(url) = &chain_url {
+        cmd.args(["--chain-url", url]);
+    } else {
+        cmd.args(["--chain-image", chain_image.as_deref().unwrap()]);
+    }
     if let Some(runtime) = container_runtime {
         cmd.args(["--container-runtime", &runtime]);
     }

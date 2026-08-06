@@ -52,9 +52,14 @@ there is nothing to configure.
 | `arrival_pct()`    | `received / sent` — UDP is unreliable, some loss is normal                |
 | `sha_ok`           | `true` only on a lossless, byte-identical round-trip                      |
 
-Sessions are **UDP** (HOPR `Segmentation`-only unreliable socket, no
-retransmission), with the exit's SURB egress rate control left **on** — so the
-numbers reflect the real rate-controlled path.
+Sessions are **UDP** (HOPR unreliable socket, no retransmission), configured to
+mirror `gnosis_vpn-client`'s main (WG) data session — `Segmentation | NoDelay`,
+`always_max_out_surbs`, and a production-scale SURB budget (10 MB response
+buffer, 16 Mb/s SURB upstream). The exit's SURB egress rate control is left
+**on**, so the numbers reflect the real rate-controlled path. Under-provisioning
+the SURB budget (mint ceiling below the downlink packet rate) starves the exit's
+return path and collapses arrival — the config here matches production so it
+does not.
 
 ### Gates (per test, hardcoded)
 
@@ -79,6 +84,10 @@ just ci                  # CI-equivalent: build from main/latest (or overrides)
 just cluster-up          # terminal 1 (blocks)
 just attach one_hop      # terminal 2
 just clean               # tear down container + temp state
+# image-free chain (no docker): build blokli+anvil from the flake instead of the
+# bloklid-anvil image; each scenario gets a fresh locally-built chain via --chain-url:
+just build-chain             # bloklid + blokli-contract-deployer (blokli release) + anvil
+just integration-binchain    # run both scenarios against the binary chain (default blokli v0.12.0)
 ```
 
 `just --list` shows all recipes. Set `HOPRNET_SHELL=path:../hoprnet` to use a
@@ -96,6 +105,7 @@ The test is `#[ignore]` — it needs external binaries + a container runtime.
 | `HOPRD_CHAIN_IMAGE`       | managed mode  | a `bloklid-anvil` image tag               |
 | `HOPRD_CONTAINER_RUNTIME` | no            | `docker` (default), `container`, `podman` |
 | `HOPRD_CLUSTER_DATA_DIR`  | external mode | data-dir of an already-running cluster    |
+| `HOPRD_CHAIN_URL`         | binary chain  | attach to an external blokli (e.g. `http://localhost:8080`); skips the container, replaces `HOPRD_CHAIN_IMAGE` |
 
 Docker is the only external service: the chain (anvil + blokli + contracts) runs
 as a single `bloklid-anvil` container on the host daemon — `localcluster` launches
