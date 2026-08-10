@@ -58,3 +58,10 @@ tracing-chrome = "0.7"
 [profile.tracer]
 inherits = "release"
 debug-assertions = true
+
+# System-profiler (samply / cargo-flamegraph) build target — see docs/flamegraph.md.
+# Inherits release (optimised; HOPR's async future chains overflow the debug stack) but
+# keeps full debug symbols so the sampler resolves frames instead of showing `??`.
+[profile.flamegraph]
+inherits = "release"
+debug = true

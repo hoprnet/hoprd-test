@@ -62,6 +62,9 @@ does not provide, so they live in their **own** test targets — CI only runs
   [`scripts/profile-executor-yield.sh`](scripts/profile-executor-yield.sh); traces land in
   `$EDGLI_TRACE_DIR` (default `./profiling-results`), load them at <https://ui.perfetto.dev>.
 
+For a whole-process CPU flamegraph of the Rotsee path (samply / cargo-flamegraph), see
+[`docs/flamegraph.md`](docs/flamegraph.md).
+
 ---
 
 ## What it measures
