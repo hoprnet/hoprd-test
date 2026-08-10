@@ -1,0 +1,90 @@
+name: Integration throughput test
+# Runs the 0-hop + 1-hop throughput test (full stack). Triggered by:
+#   * a merge to main of hoprd / edge-client / blokli (repository_dispatch),
+#   * manual workflow_dispatch,
+#   * a hoprd-test PR labelled `run-integration` (to test changes to this repo).
+on:
+  repository_dispatch:
+    types: [integration]
+  workflow_dispatch:
+    inputs:
+      project:
+        description: "Triggering project (hoprd | edge-client | blokli); empty = all at main/latest"
+        required: false
+        default: ""
+      rev:
+        description: "Git rev override (for hoprd or edge-client)"
+        required: false
+        default: ""
+      image:
+        description: "bloklid-anvil image override (for blokli)"
+        required: false
+        default: ""
+  pull_request:
+    types: [labeled, synchronize, reopened]
+# PR events: one group per PR, cancel-in-progress (a new push supersedes the
+# previous run of that PR). Dispatch/manual: a single shared group that never
+# cancels, so those runs stack and execute one after another.
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && format('integration-pr-{0}', github.event.pull_request.number) || 'integration' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+jobs:
+  integration:
+    name: Integration throughput
+    # PR runs only when the `run-integration` label is present; dispatch/manual always run.
+    if: >-
+      github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'run-integration')
+    runs-on: depot-ubuntu-24.04-8
+    timeout-minutes: 90
+    env:
+      PROJECT: ${{ github.event.client_payload.project || github.event.inputs.project }}
+      OVERRIDE_REV: ${{ github.event.client_payload.rev || github.event.inputs.rev }}
+      OVERRIDE_IMAGE: ${{ github.event.client_payload.image || github.event.inputs.image }}
+      # Defaults for the non-triggering projects (empty → main / :latest in run.sh).
+      HOPRD_REF: ${{ vars.HOPRD_REF }}
+      EDGLI_REF: ${{ vars.EDGLI_REF }}
+      BLOKLID_ANVIL_IMAGE: ${{ vars.BLOKLID_ANVIL_IMAGE }}
+      RUST_LOG: info,edgli=debug
+      # run.sh resolves the edge-client ref via `gh api`; authenticate it (works
+      # unauthenticated on the public repo too, but this dodges the 60/hr IP limit).
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          # No step pushes; edge-client/hoprd are public so cargo/gh fetch needs no token.
+          persist-credentials: false
+      - name: Pre-run hygiene
+        run: |
+          rm -rf /tmp/hopr-nodes /tmp/hoprd-it-* || true
+          docker ps -aq --filter "ancestor=${OVERRIDE_IMAGE:-bloklid-anvil}" | xargs -r docker rm -f || true
+          pkill -f hoprd || true
+          pkill -f anvil || true
+          docker system prune -f || true
+      # The bloklid-anvil image lives in a public GCP Artifact Registry repo
+      # (allUsers reader) — no registry login needed to pull it.
+      - name: Setup Nix
+        uses: hoprnet/hopr-workflows/actions/setup-nix@5477bd53d62ac15c4804b31fbd55966b29a43997 # setup-nix-v2
+        with:
+          cachix_cache_name: hoprnet
+          cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
+      - name: Resolve versions, build stack, run test
+        run: nix develop github:hoprnet/hoprnet --command bash scripts/integration/run.sh
+      - name: Notify failure (Zulip)
+        if: failure()
+        uses: zulip/github-actions-zulip/send-message@bd8ec52de371d139ae8313661b7d8318c19266aa # v2.0.1
+        with:
+          api-key: ${{ secrets.ZULIP_API_KEY }}
+          email: ${{ secrets.ZULIP_EMAIL }}
+          organization-url: "https://hopr.zulipchat.com"
+          type: "stream"
+          to: "HOPRd"
+          topic: "integration"
+          content: |
+            Integration throughput test FAILED for ${{ env.PROJECT || 'manual run' }} (rev/image: ${{ env.OVERRIDE_REV }}${{ env.OVERRIDE_IMAGE }}) — [run](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})
+      - name: Post-run hygiene
+        if: always()
+        run: |
+          rm -rf /tmp/hopr-nodes /tmp/hoprd-it-* || true
+          pkill -f hoprd || true
+          pkill -f anvil || true
