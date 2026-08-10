@@ -201,7 +201,8 @@ pub async fn pump_continuous(
 
     match read_result {
         Ok(Ok(_)) => {
-            tracing::info!("{label}: ✓ {n} B in {elapsed:.2?} ({kibs:.0} KiB/s) — continuous");
+            // Confirm the writer finished cleanly and the bytes are intact *before* logging
+            // success, so a writer error or SHA mismatch never rides under a ✓ line.
             writer
                 .await
                 .map_err(|e| anyhow::anyhow!("{label}: writer panicked: {e}"))?
@@ -210,6 +211,7 @@ pub async fn pump_continuous(
                 sha256_digest(&received) == expected,
                 "{label}: SHA-256 mismatch — {n} bytes corrupted in transit"
             );
+            tracing::info!("{label}: ✓ {n} B in {elapsed:.2?} ({kibs:.0} KiB/s) — continuous");
         }
         Ok(Err(e)) => {
             writer.abort();

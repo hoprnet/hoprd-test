@@ -22,6 +22,8 @@
 #   HOPRD_BIN                default: $HOPRD_RELEASE_DIR/hoprd
 #   HOPRD_CHAIN_IMAGE        default: bloklid-anvil:latest from GCR
 #   HOPRD_CONTAINER_RUNTIME  default: container  (macOS Apple native runtime)
+#   HOPRD_PUMP_MBPS          default: 1.0  (paces the paced-baseline pump; the contrast the
+#                            harness measures depends on the baseline being paced)
 #   EDGLI_TRACE_DIR          default: ./profiling-results
 #   RUST_LOG                 default: info,edgli=debug,tokio=trace,runtime=trace
 #
@@ -66,6 +68,9 @@ export HOPRD_CHAIN_IMAGE="${HOPRD_CHAIN_IMAGE:-europe-west3-docker.pkg.dev/hopra
 export HOPRD_CONTAINER_RUNTIME="${HOPRD_CONTAINER_RUNTIME:-container}"
 export EDGLI_TRACE_DIR="${EDGLI_TRACE_DIR:-$REPO_ROOT/profiling-results}"
 export RUST_LOG="${RUST_LOG:-info,edgli=debug,tokio=trace,runtime=trace}"
+# Pace the paced-baseline pump (pump_loopback reads this). Without it the baseline runs at
+# full rate and stops contrasting with the continuous pump — the whole point of the harness.
+export HOPRD_PUMP_MBPS="${HOPRD_PUMP_MBPS:-1.0}"
 # Enable tokio's task instrumentation. hoprd-test ships no `.cargo/config.toml`, so there
 # are no base target rustflags for this to clobber (unlike edge-client) — setting it here
 # is safe. `--check-cfg` keeps the `unexpected cfg` lint quiet.
@@ -73,21 +78,25 @@ export RUSTFLAGS="${RUSTFLAGS:---cfg tokio_unstable --check-cfg cfg(tokio_unstab
 
 CLUSTER_START_TIMEOUT=600 # seconds to wait for cluster to reach "running"
 
-# ── Validate binaries ────────────────────────────────────────────────────────
-missing=()
-[[ -x $HOPRD_LOCALCLUSTER_BIN ]] || missing+=("$HOPRD_LOCALCLUSTER_BIN")
-[[ -x $HOPRD_BIN ]] || missing+=("$HOPRD_BIN")
+# ── Validate binaries (local runs only) ───────────────────────────────────────
+# --rotsee-only starts no cluster and uses the public network, so it needs no local hoprd
+# build. Only require the binaries when a local cluster will actually be started.
+if [[ $RUN_LOCAL == "true" ]]; then
+    missing=()
+    [[ -x $HOPRD_LOCALCLUSTER_BIN ]] || missing+=("$HOPRD_LOCALCLUSTER_BIN")
+    [[ -x $HOPRD_BIN ]] || missing+=("$HOPRD_BIN")
 
-if [[ ${#missing[@]} -gt 0 ]]; then
-    echo "ERROR: missing or non-executable binaries:"
-    for b in "${missing[@]}"; do echo "  $b"; done
-    echo ""
-    echo "Build them with (from hoprnet/hoprd):"
-    echo "  cargo build --release -p hoprd -p hoprd-localcluster"
-    echo ""
-    echo "Or override:"
-    echo "  HOPRD_RELEASE_DIR=/your/path ./scripts/profile-executor-yield.sh"
-    exit 1
+    if [[ ${#missing[@]} -gt 0 ]]; then
+        echo "ERROR: missing or non-executable binaries:"
+        for b in "${missing[@]}"; do echo "  $b"; done
+        echo ""
+        echo "Build them with (from hoprnet/hoprd):"
+        echo "  cargo build --release -p hoprd -p hoprd-localcluster"
+        echo ""
+        echo "Or override:"
+        echo "  HOPRD_RELEASE_DIR=/your/path ./scripts/profile-executor-yield.sh"
+        exit 1
+    fi
 fi
 
 # ── Validate required tools ──────────────────────────────────────────────────
@@ -136,7 +145,8 @@ cleanup() {
         echo "  pkill -f 'hoprd-localcluster|hoprd --'"
     fi
 }
-trap cleanup EXIT
+# INT/TERM as well as EXIT, so a Ctrl-C or kill still tears the cluster down.
+trap cleanup EXIT INT TERM
 
 # ── Prepare output dir ───────────────────────────────────────────────────────
 mkdir -p "$EDGLI_TRACE_DIR"

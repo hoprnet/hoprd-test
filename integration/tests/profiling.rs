@@ -60,14 +60,24 @@ fn init_subscriber(filename: &str) -> tracing_chrome::FlushGuard {
         .include_args(true)
         .build();
 
-    tracing_subscriber::registry()
+    // If a global subscriber is already installed (e.g. all three tests share one process
+    // under `cargo test`), this test's chrome layer is NOT installed and its trace file would
+    // silently stay empty. Report that instead of hiding it — the profiling script sidesteps
+    // it by running one test per process.
+    if tracing_subscriber::registry()
         .with(console_subscriber::spawn())
         .with(chrome_layer)
         .with(tracing_subscriber::EnvFilter::from_default_env())
         .try_init()
-        .ok(); // swallow "already set" when several tests run in one process
-
-    eprintln!("Chrome trace → {path}");
+        .is_err()
+    {
+        eprintln!(
+            "WARNING: a global tracing subscriber is already set — {path} will be EMPTY. Run one \
+             profiling test per process (see scripts/profile-executor-yield.sh)."
+        );
+    } else {
+        eprintln!("Chrome trace → {path}");
+    }
     guard
 }
 

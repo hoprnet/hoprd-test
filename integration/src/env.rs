@@ -38,6 +38,9 @@ const LOCAL_CHANNEL_OPEN_TIMEOUT: Duration = Duration::from_secs(120);
 /// Rotsee needs more headroom: 30 s strategy tick + Gnosis Chain confirmation latency.
 const ROTSEE_CHANNEL_OPEN_TIMEOUT: Duration = Duration::from_secs(300);
 const EXIT_PEER_PROBE_TIMEOUT: Duration = Duration::from_secs(120);
+/// Outgoing channels the strategy aims to open on Rotsee — enough for path-finding to
+/// have options, unrelated to any local cluster size.
+const ROTSEE_TARGET_CHANNELS: usize = 3;
 
 /// Session destinations, which differ by network.
 enum Targets {
@@ -156,7 +159,7 @@ impl IntegrationEnv {
             &rotsee.blokli_url,
             &rotsee.extra,
             &NetTuning::rotsee(),
-            CLUSTER_SIZE,
+            ROTSEE_TARGET_CHANNELS,
         )
         .await?;
 
@@ -320,8 +323,12 @@ async fn boot_edgli(
     }
     let reactor = edgli.run_reactor_from_cfg(strat_cfg)?;
 
-    tracing::info!("waiting for strategy to open ≥1 outgoing channel");
-    await_edgli_channels_open(&edgli, 1, tuning.channel_open_timeout).await?;
+    // Require one channel *beyond* any pre-existing genesis channels, so the gate proves the
+    // strategy opened a fresh channel to a live peer rather than passing on genesis alone
+    // (otherwise a pre-funded Rotsee identity satisfies it immediately and the later
+    // connect_to fails with an opaque session timeout).
+    tracing::info!("waiting for strategy to open ≥1 new outgoing channel");
+    await_edgli_channels_open(&edgli, 1 + genesis_channels, tuning.channel_open_timeout).await?;
 
     Ok((edgli, reactor))
 }
@@ -418,24 +425,25 @@ fn read_rotsee_env() -> anyhow::Result<RotseeConfig> {
 /// Wait until `target` is a connected, probed peer in Edgli's network graph.
 ///
 /// Path-finding scores edges from probe observations (RFC-0010 §6.2); before the exit
-/// is in the graph, session construction to it times out. Resolves the exit's chain
-/// address to its offchain key via the on-chain registry, then polls
-/// `all_network_peers(0.0)` (quality floor 0.0 = connected AND at least one probe) until
-/// the key appears.
+/// is in the graph, session construction to it times out. Polls until the exit's chain
+/// address resolves to an offchain key via the on-chain registry AND that key appears in
+/// `all_network_peers(0.0)` (quality floor 0.0 = connected AND at least one probe). The
+/// chain-key lookup is done inside the loop: right after boot the connector may not have
+/// indexed the exit's account yet, so a one-shot resolve could fail spuriously.
 async fn await_edgli_exit_peer_ready(edgli: &Edgli, target: Address) -> anyhow::Result<()> {
-    let offchain_key = edgli
-        .chain_api()
-        .chain_key_to_packet_key(&target)
-        .map_err(|e| anyhow::anyhow!("{e}"))?
-        .ok_or_else(|| {
-            anyhow::anyhow!("exit peer {target} has no offchain key — not registered on chain")
-        })?;
-
     poll_until(
         EXIT_PEER_PROBE_TIMEOUT,
         Duration::from_secs(5),
         "Rotsee exit peer connected + probed",
         || async {
+            let Some(offchain_key) = edgli
+                .chain_api()
+                .chain_key_to_packet_key(&target)
+                .map_err(|e| anyhow::anyhow!("{e}"))?
+            else {
+                // Not yet indexed on chain — keep waiting.
+                return Ok(false);
+            };
             let peers = edgli
                 .transport()
                 .all_network_peers(0.0)

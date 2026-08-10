@@ -30,12 +30,26 @@ const INTRACLUSTER_CHANNEL_TIMEOUT: Duration = Duration::from_secs(120);
 
 // ── Cluster summary ─────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ExtraInfo {
     pub safe_address: Address,
     pub module_address: Address,
     pub keystore_path: PathBuf,
     pub password: String,
+}
+
+// Manual Debug so a `?extra` / `{:?}` on an ExtraInfo (directly or via ClusterSummary) can
+// never leak the keystore password into logs — the local-cluster password is a known
+// constant, but the Rotsee one is a real secret.
+impl std::fmt::Debug for ExtraInfo {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ExtraInfo")
+            .field("safe_address", &self.safe_address)
+            .field("module_address", &self.module_address)
+            .field("keystore_path", &self.keystore_path)
+            .field("password", &"<redacted>")
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone)]
