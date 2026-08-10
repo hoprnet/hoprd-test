@@ -47,8 +47,8 @@ resolve_sha() { # owner/repo ref
   # Resolve via `gh api`, not `git ls-remote`: the dev shell's LD_LIBRARY_PATH points
   # at nix glibc, which the system `git-remote-https` helper loads over its older
   # system glibc, tripping `GLIBC_ABI_DT_X86_64_PLT not found` and aborting the fetch
-  # on CI. `gh` is a self-contained nix binary already on PATH and authenticated via
-  # the dev shell's GITHUB_TOKEN, and it handles the private edge-client repo.
+  # on CI. `gh` is a self-contained nix binary on PATH (auth via GH_TOKEN in CI; the
+  # repo is public, so this also works unauthenticated locally).
   gh api "repos/$1/commits/${ref}" --jq '.sha' 2>/dev/null
 }
 EDGLI_SHA="$(resolve_sha hoprnet/edge-client "${EDGLI_REF}")"

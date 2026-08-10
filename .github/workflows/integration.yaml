@@ -45,6 +45,9 @@ jobs:
       EDGLI_REF: ${{ vars.EDGLI_REF }}
       BLOKLID_ANVIL_IMAGE: ${{ vars.BLOKLID_ANVIL_IMAGE }}
       RUST_LOG: info,edgli=debug
+      # run.sh resolves the edge-client ref via `gh api`; authenticate it (works
+      # unauthenticated on the public repo too, but this dodges the 60/hr IP limit).
+      GH_TOKEN: ${{ github.token }}
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
