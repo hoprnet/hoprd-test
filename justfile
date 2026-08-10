@@ -104,6 +104,22 @@ attach *filter:
 unit:
     nix develop {{hoprnet}} -c cargo test --manifest-path integration/Cargo.toml --lib
 
+# Rotsee testnet integration test (manual; NOT run in CI). Needs a pre-funded Gnosis
+# identity + reachable exit node via EDGLI_ROTSEE_* (see integration/tests/rotsee.rs).
+# Optional args = test-name filters (e.g. `just rotsee rotsee_one_hop`).
+rotsee *filter:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    export RUST_LOG="${RUST_LOG:-info,edgli=debug}"
+    export RUST_MIN_STACK="${RUST_MIN_STACK:-33554432}"
+    nix develop {{hoprnet}} -c cargo test --manifest-path integration/Cargo.toml --test rotsee --release --no-fail-fast {{filter}} -- --ignored --test-threads=1
+
+# Executor-starvation profiling: build with the tracer profile + `prof`, run the
+# profiling tests, and collect Perfetto traces (manual; NOT run in CI). Pass
+# `--rotsee-only`/`--all` through to the script; see scripts/profile-executor-yield.sh.
+profile *args:
+    nix develop {{hoprnet}} -c bash scripts/profile-executor-yield.sh {{args}}
+
 # Format + compile-check the crate.
 check:
     nix develop {{hoprnet}} -c cargo fmt --manifest-path integration/Cargo.toml

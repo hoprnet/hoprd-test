@@ -6,6 +6,11 @@ use edgli::hopr_lib::exports::transport::HoprSession;
 use sha2::{Digest, Sha256};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+/// Received throughput in KiB/s over `elapsed`.
+fn throughput_kibs(bytes: usize, elapsed: Duration) -> f64 {
+    (bytes as f64 / 1024.0) / elapsed.as_secs_f64().max(1e-9)
+}
+
 /// Result of one loopback round-trip.
 #[derive(Debug, Clone)]
 pub struct Transfer {
@@ -158,4 +163,71 @@ pub async fn pump_loopback(
         mbps,
         sha_ok,
     })
+}
+
+/// Pump `payload` with a **single `write_all`** — no batching, no inter-batch
+/// sleep, no cooperative yield. The write task submits every packet to the session
+/// sink without ever returning `Poll::Pending`, monopolising one tokio worker thread.
+/// This is the production anti-pattern (`transfer_session` / `copy_duplex` over a fast
+/// source) the executor-starvation profiling harness makes visible: with the SURB
+/// balancer starved, the return path stalls and goodput collapses. See
+/// `tests/profiling.rs`.
+///
+/// A read timeout is logged rather than returned as an error, so the profiling run
+/// still completes and writes its trace even when the payload stalls mid-flight.
+pub async fn pump_continuous(
+    session: HoprSession,
+    payload: &[u8],
+    label: &str,
+    timeout: Duration,
+) -> anyhow::Result<()> {
+    let (mut r, mut w) = tokio::io::split(session);
+    let payload_bytes = payload.to_vec();
+    let expected = sha256_digest(payload);
+    let n = payload.len();
+    let start = std::time::Instant::now();
+
+    let writer = tokio::spawn(async move {
+        w.write_all(&payload_bytes).await?;
+        w.flush().await?;
+        Ok::<_, std::io::Error>(())
+    });
+
+    let mut received = vec![0u8; n];
+    let read_result = tokio::time::timeout(timeout, r.read_exact(&mut received)).await;
+
+    let elapsed = start.elapsed();
+    let kibs = throughput_kibs(n, elapsed);
+
+    match read_result {
+        Ok(Ok(_)) => {
+            tracing::info!("{label}: ✓ {n} B in {elapsed:.2?} ({kibs:.0} KiB/s) — continuous");
+            writer
+                .await
+                .map_err(|e| anyhow::anyhow!("{label}: writer panicked: {e}"))?
+                .map_err(|e| anyhow::anyhow!("{label}: write error: {e}"))?;
+            anyhow::ensure!(
+                sha256_digest(&received) == expected,
+                "{label}: SHA-256 mismatch — {n} bytes corrupted in transit"
+            );
+        }
+        Ok(Err(e)) => {
+            writer.abort();
+            let _ = writer.await;
+            anyhow::bail!("{label}: read error: {e}");
+        }
+        Err(_timeout) => {
+            writer.abort();
+            let _ = writer.await;
+            // Not a hard error — the stall is the observation. `read_exact` reports no
+            // partial count on timeout, so no fabricated throughput figure is logged.
+            tracing::warn!(
+                "{label}: read timeout ({timeout:?}) after {elapsed:.2?} — the {n} B payload did \
+                 not fully arrive. Expected under executor starvation: the single write_all held a \
+                 tokio worker thread without yielding, starving the SURB balancer."
+            );
+        }
+    }
+
+    Ok(())
 }
