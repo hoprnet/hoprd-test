@@ -44,6 +44,15 @@ pub struct IntegrationEnv {
     _cluster: ClusterHandle,
 }
 
+impl Drop for IntegrationEnv {
+    fn drop(&mut self) {
+        // `futures::AbortHandle`'s own Drop does not abort the reactor — stop it
+        // explicitly. The struct's fields then drop in declaration order (edgli
+        // cancels its tasks, then the cluster tears down).
+        self._reactor.abort();
+    }
+}
+
 impl IntegrationEnv {
     /// Bring up the cluster, boot Edgli on the pre-funded extra identity, start the
     /// channel strategy, and wait until at least one outgoing channel is open.

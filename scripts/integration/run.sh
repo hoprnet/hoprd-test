@@ -76,9 +76,12 @@ python3 - "$CRATE_CARGO" "$EDGLI_SHA" <<'PY'
 import re, sys
 path, rev = sys.argv[1], sys.argv[2]
 src = open(path).read()
-src = re.sub(r'(edgli\s*=\s*\{[^}]*?\brev\s*=\s*")[0-9a-f]{7,40}(")',
-             rf'\g<1>{rev}\g<2>', src, count=1)
-open(path, 'w').write(src)
+new, n = re.subn(r'(edgli\s*=\s*\{[^}]*?\brev\s*=\s*")[0-9a-f]{7,40}(")',
+                 rf'\g<1>{rev}\g<2>', src, count=1)
+if n == 0:
+    sys.exit(f"run.sh: no edgli rev entry matched in {path} — the dependency "
+             "stanza changed shape; refusing to run against a stale pin")
+open(path, 'w').write(new)
 PY
 (cd "${REPO_ROOT}/integration" && cargo update -p edgli)
 

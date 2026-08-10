@@ -165,7 +165,16 @@ impl Drop for ClusterHandle {
                     std::thread::sleep(Duration::from_millis(500));
                 }
                 _ => {
+                    // Deadline hit or try_wait errored: SIGKILL, then reap — start_kill
+                    // only signals, so without a wait the process lingers as a zombie.
                     let _ = child.start_kill();
+                    let reap_deadline = std::time::Instant::now() + Duration::from_secs(5);
+                    while std::time::Instant::now() < reap_deadline {
+                        if matches!(child.try_wait(), Ok(Some(_))) {
+                            break;
+                        }
+                        std::thread::sleep(Duration::from_millis(100));
+                    }
                     break;
                 }
             }

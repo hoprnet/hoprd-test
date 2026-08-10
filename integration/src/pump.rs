@@ -123,11 +123,17 @@ pub async fn pump_loopback(
         }
     }
 
+    let sender_abort = sender.abort_handle();
     match tokio::time::timeout(Duration::from_secs(10), sender).await {
         Ok(Ok(Ok(()))) => {}
         Ok(Ok(Err(e))) => tracing::warn!("{label}: sender error: {e}"),
         Ok(Err(e)) => tracing::warn!("{label}: sender panicked: {e}"),
-        Err(_) => tracing::warn!("{label}: sender did not finish within 10s"),
+        Err(_) => {
+            // Dropping the timed-out JoinHandle only detaches the task; abort it so
+            // the writer can't keep running into the next scenario.
+            sender_abort.abort();
+            tracing::warn!("{label}: sender did not finish within 10s; aborted");
+        }
     }
 
     let first_at = first_at.unwrap_or(last_at);

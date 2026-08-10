@@ -48,6 +48,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          # No step pushes; edge-client/hoprd are public so cargo/gh fetch needs no token.
+          persist-credentials: false
       - name: Pre-run hygiene
         run: |
           rm -rf /tmp/hopr-nodes /tmp/hoprd-it-* || true
