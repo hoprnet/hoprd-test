@@ -6,9 +6,10 @@ channels) plus a pre-funded edge identity, boots an `edgli` edge client, and
 pumps a payload through **0-hop and 1-hop UDP sessions** to the exit node's
 built-in loopback — measuring goodput and datagram loss.
 
-It runs on every merge to `main` of `hoprd`, `edge-client`, and `blokli` (and on
-hoprd-test PRs labelled `run-integration`), on hosted `depot-ubuntu-24.04-8`
-runners, and **gates the hoprd → first-network deploy**.
+It runs on every merge to `main` of `hoprd` and `edge-client` (and on hoprd-test
+PRs labelled `run-integration`), on hosted `depot-ubuntu-24.04-8` runners, and
+**gates the hoprd → first-network deploy**. The chain is always the latest
+`blokli` release, built from its flake per run.
 
 - Test crate: [`integration/`](integration/)
 - CI workflow: [`.github/workflows/integration.yaml`](.github/workflows/integration.yaml)
@@ -29,11 +30,11 @@ its cluster: bring up → run → tear down. Three source modules:
 | `env.rs`     | `IntegrationEnv`: cluster + booted `edgli` + open channels; `open_unreliable_session(hops)` session factory |
 | `pump.rs`    | reusable goodput/loss pump; returns a `Transfer` result                                                     |
 
-**Contracts:** the `bloklid-anvil` image deploys the full HOPR contract set on
-startup (entrypoint: anvil → `blokli-contract-deployer` → addresses baked into
-the bloklid config). The framework never deploys contracts; using the image
-gives them for free. Only an external `HOPRD_CHAIN_URL` to a foreign chain would
-lack them.
+**Contracts:** the chain deploys the full HOPR contract set on startup (anvil →
+`blokli-contract-deployer` → addresses baked into the bloklid config), whether it
+comes from the flake-built binary chain (recommended, see below) or the
+`bloklid-anvil` docker image (CI). The framework never deploys contracts. Only an
+external `HOPRD_CHAIN_URL` pointed at a foreign chain would lack them.
 
 ### Adding a scenario
 
@@ -72,25 +73,41 @@ Goodput (`mbps`) is logged but not gated.
 
 ## Running the test
 
+The chain can come from two places:
+
+- **Binary chain (recommended, no docker):** anvil + bloklid built from the
+  **blokli flake at its latest release** (`github:hoprnet/blokli/<tag>#bloklid`,
+  currently `v0.12.0`), attached via `--chain-url`. Every scenario gets a fresh
+  locally-built chain. This is the reliable local path — it pins a concrete
+  blokli release instead of a floating docker tag.
+- **Docker image (CI):** the `bloklid-anvil` image. CI pulls a **floating** tag
+  (`:latest` / `:latest-rhine`) which can drift ahead of the pinned `hoprd`/`edgli`
+  and break local runs with schema skew. Prefer the binary chain locally.
+
 ### Quickstart (`just`)
 
 ```bash
-just integration         # build binaries, preflight, run both tests
-just scenario zero_hop   # one test, fresh env
+# recommended: binary chain (blokli from flake latest release, no docker)
+just build-chain             # bloklid + blokli-contract-deployer + anvil, from the blokli flake release
+just integration-binchain    # build hoprd, run both scenarios against a fresh flake chain per scenario
+just integration-binchain zero_hop   # one scenario
+
 just unit                # fast unit tests (no cluster)
+
+# docker-image path (what CI uses; floating :latest tag may drift):
+just integration         # build binaries, preflight (pull image), run both tests
+just scenario zero_hop   # one test, fresh env
 just preflight           # docker + nix + chain-image doctor
 just ci                  # CI-equivalent: build from main/latest (or overrides)
-# fast iteration — one cluster, many runs:
+# fast iteration — one cluster, many runs (docker path):
 just cluster-up          # terminal 1 (blocks)
 just attach one_hop      # terminal 2
 just clean               # tear down container + temp state
-# image-free chain (no docker): build blokli+anvil from the flake instead of the
-# bloklid-anvil image; each scenario gets a fresh locally-built chain via --chain-url:
-just build-chain             # bloklid + blokli-contract-deployer (blokli release) + anvil
-just integration-binchain    # run both scenarios against the binary chain (default blokli v0.12.0)
 ```
 
-`just --list` shows all recipes. Set `HOPRNET_SHELL=path:../hoprnet` to use a
+`just --list` shows all recipes. The blokli release is the `blokli_ref` var in the
+justfile — keep it at the latest blokli release (override: `just blokli_ref=<tag>
+build-chain`, or `BLOKLI_REF=<tag>`). Set `HOPRNET_SHELL=path:../hoprnet` to use a
 local checkout for the dev shell instead of the flake. The rest of this section
 documents the underlying env contract the recipes set up.
 
@@ -118,14 +135,26 @@ checks both and pulls the image (idempotent — also a local "doctor"):
 scripts/integration/preflight.sh <bloklid-anvil-image-ref>
 ```
 
-Build the binaries from the [`hoprnet/hoprd`](https://github.com/hoprnet/hoprd) repo:
+Build the binaries from the [`hoprnet/hoprd`](https://github.com/hoprnet/hoprd) repo
+(pass a ref to test a branch/PR, e.g. `github:hoprnet/hoprd/<sha>#…`):
 
 ```bash
 nix build -L github:hoprnet/hoprd#binary-hoprd-x86_64-linux              --out-link result-hoprd
 nix build -L github:hoprnet/hoprd#binary-hoprd-localcluster-x86_64-linux --out-link result-localcluster
 # on macOS use the bare names: .#binary-hoprd and .#binary-hoprd-localcluster
-docker pull europe-west3-docker.pkg.dev/hoprassociation/docker-images/bloklid-anvil:latest
 ```
+
+For the chain, prefer the flake binary chain over the docker image — build blokli
+(anvil + bloklid) from its **latest release** (Cachix-cached):
+
+```bash
+nix build -L 'github:hoprnet/blokli/v0.12.0#bloklid' --out-link result-bloklid   # latest blokli release
+nix build -L 'nixpkgs#foundry'                       --out-link result-foundry   # anvil
+```
+
+Only if you must use the docker path instead: `docker pull
+europe-west3-docker.pkg.dev/hoprassociation/docker-images/bloklid-anvil:latest`
+(floating tag — may drift ahead of the pinned binaries).
 
 ### Managed mode (test owns the cluster lifetime)
 
@@ -141,6 +170,22 @@ cargo test --test integration -- --include-ignored --test-threads=1   # both tes
 ```
 
 The cluster + chain container are torn down automatically on exit.
+
+### Binary-chain mode (recommended — flake blokli, no docker)
+
+Set `HOPRD_CHAIN_URL` instead of `HOPRD_CHAIN_IMAGE`; localcluster then attaches to
+an already-running blokli rather than starting a container.
+[`scripts/integration/run-binchain.sh`](scripts/integration/run-binchain.sh) wires
+this up — it starts a fresh flake-built chain per scenario and tears it down:
+
+```bash
+export HOPRD_BIN=$PWD/result-hoprd/bin/hoprd                     # from a PR? build that ref
+export HOPRD_LOCALCLUSTER_BIN=$PWD/result-localcluster/bin/hoprd-localcluster
+SCENARIOS="zero_hop one_hop" bash scripts/integration/run-binchain.sh
+```
+
+`result-bloklid` / `result-foundry` must exist (`just build-chain`, or the two
+`nix build` commands above). This is the path `just integration-binchain` drives.
 
 ### External mode (attach to a running cluster — faster iteration)
 
@@ -175,28 +220,29 @@ and `cargo test --lib` (fast unit tests; the `#[ignore]` e2e is **not**
 run here). It builds in the hoprnet dev shell on a hosted `depot` runner. Locally:
 `just lint` + `just unit`.
 
-`integration.yaml` runs on `repository_dispatch[integration]` (fired by the three
-source repos on merge), on manual `workflow_dispatch`, and on a hoprd-test PR
+`integration.yaml` runs on `repository_dispatch[integration]` (fired by `hoprd` /
+`edge-client` on merge), on manual `workflow_dispatch`, and on a hoprd-test PR
 labelled **`run-integration`** (to test changes to this repo against the live
 stack). Concurrency: a new push to a PR **cancels** that PR's in-progress run;
 dispatch/manual runs **stack** (shared group, never cancelled) and execute one
-after another. **No version state is stored:** the
-triggering project supplies its rev/image via the dispatch; the
-other two default to their `main` HEAD / `:latest` image. So every run tests one
-project's change against the current tip of the other two. The workflow builds
-`hoprd` + `hoprd-localcluster` from the hoprd ref, pulls the chain image, pins
-`edgli` to the resolved edge-client sha, runs the tests, and notifies Zulip on
-red. Nothing is committed back.
+after another. **No version state is stored:** the triggering project supplies its
+rev via the dispatch; the other defaults to its `main` HEAD; **blokli is always
+the latest release**, resolved per run (`gh api …/releases/latest`) and built from
+its flake. So every run tests one project's change against the current tip of the
+other and the latest blokli release. `run.sh` builds `hoprd` + `hoprd-localcluster`
+from the hoprd ref, builds the blokli chain from the release, pins `edgli` to the
+resolved edge-client sha, runs the tests against a fresh flake chain per scenario
+(`run-binchain.sh`), and notifies Zulip on red. Nothing is committed back.
 
-Defaults are overridable via repo variables `HOPRD_REF`, `EDGLI_REF`,
-`BLOKLID_ANVIL_IMAGE` (unset → main/latest).
+Defaults are overridable via repo variables `HOPRD_REF`, `EDGLI_REF`, `BLOKLI_REF`
+(unset → main / main / latest release).
 
 Manual run:
 
 ```bash
 gh workflow run integration.yaml -R hoprnet/hoprd-test \
-  -f project=hoprd -f rev=<sha>          # or -f project=blokli -f image=<ref>
-# empty inputs → all three at main/latest
+  -f project=hoprd -f rev=<sha>          # or project=edge-client
+# empty inputs → hoprd/edge-client at main, blokli at latest release
 ```
 
 Runs on hosted `depot-ubuntu-24.04-8` runners (nix installed per run via the

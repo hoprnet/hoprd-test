@@ -1,11 +1,15 @@
 # Integration throughput test — convenience recipes.
 #
-# Local quickstart:
-#   just integration            # build binaries, preflight, run all scenarios
-#   just scenario 0-hop         # run a single scenario against a fresh env
+# Local quickstart (recommended — binary chain, blokli from flake latest release, no docker):
+#   just build-chain            # build blokli(anvil+bloklid) from the flake release
+#   just integration-binchain   # build hoprd, run all scenarios against a fresh flake chain
 #   just unit                   # fast unit tests (no cluster)
 #
-# Fast iteration (one cluster, many runs):
+# Docker path (what CI uses; floating :latest tag may drift ahead of the binaries):
+#   just integration            # build binaries, preflight (pull image), run all scenarios
+#   just scenario 0-hop         # run a single scenario against a fresh env
+#
+# Fast iteration (one cluster, many runs — docker path):
 #   just cluster-up             # terminal 1: bring up a persistent cluster
 #   just attach                 # terminal 2: run scenarios against it
 #
@@ -18,10 +22,13 @@ set shell := ["bash", "-uc"]
 #   HOPRNET_SHELL=path:../hoprnet just integration
 hoprnet := env_var_or_default("HOPRNET_SHELL", "github:hoprnet/hoprnet")
 
-# Chain image (override: `just chain_image=… integration`, or set BLOKLID_ANVIL_IMAGE).
+# Chain image for the DOCKER path only (override: `just chain_image=… integration`,
+# or set BLOKLID_ANVIL_IMAGE). Floating tag — can drift ahead of the pinned
+# binaries; prefer the binary chain (build-chain / integration-binchain) locally.
 chain_image := env_var_or_default("BLOKLID_ANVIL_IMAGE", "europe-west3-docker.pkg.dev/hoprassociation/docker-images/bloklid-anvil:latest-rhine")
 
-# Blokli release for the image-free binary chain (override: `just blokli_ref=… build-chain`).
+# Blokli release for the image-free binary chain — keep at the LATEST blokli release
+# (override: `just blokli_ref=… build-chain`, or set BLOKLI_REF).
 blokli_ref := env_var_or_default("BLOKLI_REF", "v0.12.0")
 
 data_dir := "/tmp/hopr-it"
