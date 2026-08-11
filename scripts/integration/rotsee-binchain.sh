@@ -49,15 +49,25 @@ trap cleanup EXIT INT TERM
 echo "── starting flake chain ──"
 bash "${REPO_ROOT}/scripts/integration/chain-up.sh" &
 CHAIN_PID=$!
+chain_ready=false
 for _ in $(seq 1 60); do
   curl -sf -X POST "http://localhost:${BLOKLI_API_PORT}/graphql" \
-    -H 'content-type: application/json' --data '{"query":"{__typename}"}' >/dev/null 2>&1 && break
+    -H 'content-type: application/json' --data '{"query":"{__typename}"}' >/dev/null 2>&1 && {
+    chain_ready=true
+    break
+  }
   kill -0 "${CHAIN_PID}" 2>/dev/null || {
     echo "chain died during startup" >&2
     exit 1
   }
   sleep 2
 done
+# Fail here rather than starting the cluster against a chain that never came up — the
+# later cluster failure would not point at the unavailable chain.
+[ "${chain_ready}" = true ] || {
+  echo "chain did not become ready on port ${BLOKLI_API_PORT} within 120s" >&2
+  exit 1
+}
 
 echo "── starting standalone localcluster (binchain) ──"
 HOPRD_CHAIN_URL="http://localhost:${BLOKLI_API_PORT}" "${LC}" \

@@ -5,7 +5,7 @@
 #   just integration-binchain   # build hoprd, run all scenarios against a fresh flake chain
 #   just unit                   # fast unit tests (no cluster)
 #
-# Docker path (what CI uses; floating :latest tag may drift ahead of the binaries):
+# Docker path (LOCAL alternative — CI uses the binary chain; floating :latest tag may drift):
 #   just integration            # build binaries, preflight (pull image), run all scenarios
 #   just scenario 0-hop         # run a single scenario against a fresh env
 #

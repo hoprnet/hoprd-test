@@ -71,10 +71,11 @@ export RUST_LOG="${RUST_LOG:-info,edgli=debug,tokio=trace,runtime=trace}"
 # Pace the paced-baseline pump (pump_loopback reads this). Without it the baseline runs at
 # full rate and stops contrasting with the continuous pump — the whole point of the harness.
 export HOPRD_PUMP_MBPS="${HOPRD_PUMP_MBPS:-1.0}"
-# Enable tokio's task instrumentation. hoprd-test ships no `.cargo/config.toml`, so there
-# are no base target rustflags for this to clobber (unlike edge-client) — setting it here
-# is safe. `--check-cfg` keeps the `unexpected cfg` lint quiet.
-export RUSTFLAGS="${RUSTFLAGS:---cfg tokio_unstable --check-cfg cfg(tokio_unstable)}"
+# Enable tokio's task instrumentation. Append to any caller-provided RUSTFLAGS rather than
+# defaulting only when unset — otherwise a caller that already exports RUSTFLAGS silently
+# drops these flags and tokio-console sees nothing. `--check-cfg` keeps the `unexpected cfg`
+# lint quiet.
+export RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }--cfg tokio_unstable --check-cfg cfg(tokio_unstable)"
 
 CLUSTER_START_TIMEOUT=600 # seconds to wait for cluster to reach "running"
 
