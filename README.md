@@ -32,9 +32,10 @@ its cluster: bring up → run → tear down. Three source modules:
 
 **Contracts:** the chain deploys the full HOPR contract set on startup (anvil →
 `blokli-contract-deployer` → addresses baked into the bloklid config), whether it
-comes from the flake-built binary chain (recommended, see below) or the
-`bloklid-anvil` docker image (CI). The framework never deploys contracts. Only an
-external `HOPRD_CHAIN_URL` pointed at a foreign chain would lack them.
+comes from the flake-built binary chain (what CI uses — `run.sh` → `run-binchain.sh`
+with the latest `blokli` release — and recommended locally) or the `bloklid-anvil`
+docker image (a local-only alternative). The framework never deploys contracts. Only
+an external `HOPRD_CHAIN_URL` pointed at a foreign chain would lack them.
 
 ### Adding a scenario
 
@@ -42,6 +43,29 @@ Add a `#[test_log::test(tokio::test(...))] #[ignore]` fn to
 `tests/integration.rs` that calls `run_hop(hops, name)`. Thresholds
 (`PAYLOAD_BYTES`, `MIN_ARRIVAL_PCT`, `PUMP_TIMEOUT`) are hardcoded constants —
 there is nothing to configure.
+
+### Manual test binaries (not run in CI)
+
+Two extra test binaries reuse the same `IntegrationEnv` harness but need resources CI
+does not provide, so they live in their **own** test targets — CI only runs
+`--test integration`, so these never run automatically:
+
+| Binary                    | What it needs                                    | Run with     |
+| ------------------------- | ------------------------------------------------ | ------------ |
+| `tests/rotsee.rs`         | a funded Gnosis identity + exit node (`EDGLI_ROTSEE_*`) | `just rotsee` |
+| `tests/profiling.rs`      | `--features prof` + `--profile tracer` + `tokio_unstable` | `just profile` |
+
+- **Rotsee** (`IntegrationEnv::setup_rotsee`) boots `edgli` on a pre-funded, on-chain
+  identity read from `EDGLI_ROTSEE_*` — no cluster is started — and pumps 0-hop/1-hop
+  loopback sessions to a configured exit node. See the header of `tests/rotsee.rs` for the
+  env-var contract.
+- **Profiling** captures tokio-console + Perfetto traces contrasting a healthy paced pump
+  with an executor-starving continuous pump (`pump::pump_continuous`). Driven by
+  [`scripts/profile-executor-yield.sh`](scripts/profile-executor-yield.sh); traces land in
+  `$EDGLI_TRACE_DIR` (default `./profiling-results`), load them at <https://ui.perfetto.dev>.
+
+For a whole-process CPU flamegraph of the Rotsee path (samply / cargo-flamegraph), see
+[`docs/flamegraph.md`](docs/flamegraph.md).
 
 ---
 
@@ -80,9 +104,10 @@ The chain can come from two places:
   currently `v0.12.0`), attached via `--chain-url`. Every scenario gets a fresh
   locally-built chain. This is the reliable local path — it pins a concrete
   blokli release instead of a floating docker tag.
-- **Docker image (CI):** the `bloklid-anvil` image. CI pulls a **floating** tag
-  (`:latest` / `:latest-rhine`) which can drift ahead of the pinned `hoprd`/`edgli`
-  and break local runs with schema skew. Prefer the binary chain locally.
+- **Docker image (local alternative):** the `bloklid-anvil` image, pulled at a
+  **floating** tag (`:latest` / `:latest-rhine`) which can drift ahead of the pinned
+  `hoprd`/`edgli` and break local runs with schema skew. Prefer the binary chain
+  locally; CI does not use this path.
 
 ### Quickstart (`just`)
 
@@ -94,7 +119,7 @@ just integration-binchain zero_hop   # one scenario
 
 just unit                # fast unit tests (no cluster)
 
-# docker-image path (what CI uses; floating :latest tag may drift):
+# docker-image path (LOCAL alternative — CI uses the binary chain; floating :latest tag may drift):
 just integration         # build binaries, preflight (pull image), run both tests
 just scenario zero_hop   # one test, fresh env
 just preflight           # docker + nix + chain-image doctor
@@ -148,7 +173,7 @@ For the chain, prefer the flake binary chain over the docker image — build blo
 (anvil + bloklid) from its **latest release** (Cachix-cached):
 
 ```bash
-nix build -L 'github:hoprnet/blokli/v0.12.0#bloklid' --out-link result-bloklid   # latest blokli release
+nix build -L 'github:hoprnet/blokli/v0.12.0#bloklid' --out-link result-bloklid   # a blokli release (CI resolves the latest per run)
 nix build -L 'nixpkgs#foundry'                       --out-link result-foundry   # anvil
 ```
 

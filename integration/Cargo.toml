@@ -33,6 +33,35 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+# Only pulled in by the `prof` feature (executor-starvation profiling); see
+# tests/profiling.rs. Must be built with `--cfg tokio_unstable`.
+console-subscriber = { version = "0.5", optional = true }
+
+[features]
+# Executor-starvation profiling: enables the tokio-console layer used by
+# tests/profiling.rs. Build with `--profile tracer` and
+# `RUSTFLAGS="--cfg tokio_unstable --check-cfg cfg(tokio_unstable)"`.
+prof = ["dep:console-subscriber"]
 
 [dev-dependencies]
 test-log = { version = "0.2", features = ["trace"] }
+# Perfetto/Chrome trace layer for tests/profiling.rs (only referenced under `prof`).
+tracing-chrome = "0.7"
+
+# tokio-console build target for the `prof` profiling tests. hopr-lib forces
+# `tracing/release_max_level_debug`, compiling out TRACE callsites (incl. tokio's task
+# instrumentation) in release. That cap only fires under `cfg(not(debug_assertions))`, so
+# re-enabling debug-asserts makes it inert and STATIC_MAX_LEVEL falls through to TRACE —
+# tokio-console then sees the task spans. Optimizations stay on so timings are realistic:
+#   RUSTFLAGS="--cfg tokio_unstable --check-cfg cfg(tokio_unstable)" \
+#     cargo test --test profiling --profile tracer --features prof -- --ignored
+[profile.tracer]
+inherits = "release"
+debug-assertions = true
+
+# System-profiler (samply / cargo-flamegraph) build target — see docs/flamegraph.md.
+# Inherits release (optimised; HOPR's async future chains overflow the debug stack) but
+# keeps full debug symbols so the sampler resolves frames instead of showing `??`.
+[profile.flamegraph]
+inherits = "release"
+debug = true

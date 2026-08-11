@@ -4,12 +4,14 @@
 
 use std::time::Duration;
 
+use anyhow::Context as _;
 use edgli::{
-    BlockchainConnectorConfig, BlokliEndpoint, Edgli, EdgliInitState,
+    BlockchainConnectorConfig, BlokliEndpoint, Edgli, EdgliInitState, PathPlannerConfig,
     hopr_lib::{
         HopRouting, HoprKeys, HoprSessionClientConfig, IdentityRetrievalModes,
         api::{
-            node::HoprSessionClientOperations,
+            chain::ChainKeyOperations as _,
+            node::{HasChainApi as _, HasTransportApi as _, HoprSessionClientOperations},
             types::internal::channels::{ChannelEntry, ChannelStatus},
         },
         config::{HoprLibConfig, HostConfig, HostType, SafeModule},
@@ -24,24 +26,69 @@ use edgli::{
 
 use crate::{
     Address,
-    cluster::{self, CLUSTER_SIZE, ClusterHandle, P2P_PORT_BASE},
+    cluster::{self, CLUSTER_SIZE, ClusterHandle, ExtraInfo, P2P_PORT_BASE},
 };
 
 /// Edgli's P2P port — one slot beyond the cluster nodes.
 const EDGE_P2P_PORT: u16 = P2P_PORT_BASE + CLUSTER_SIZE as u16;
 
 const PEER_DISCOVERY_TIMEOUT: Duration = Duration::from_secs(120);
-const CHANNEL_OPEN_TIMEOUT: Duration = Duration::from_secs(120);
+const LOCAL_CHANNEL_OPEN_TIMEOUT: Duration = Duration::from_secs(120);
+const EXIT_PEER_PROBE_TIMEOUT: Duration = Duration::from_secs(120);
+/// Outgoing channels the strategy aims to open for the Rotsee-style path — enough for
+/// path-finding to have options, unrelated to any local cluster size.
+const ROTSEE_TARGET_CHANNELS: usize = 3;
+
+/// Session destinations, which differ by network.
+enum Targets {
+    /// Local cluster: 0-hop and 1-hop go to two distinct full-mesh peers.
+    Local {
+        dest_zero_hop: Address,
+        dest_one_hop: Address,
+    },
+    /// Rotsee: both hop counts target the one configured exit node — only it runs
+    /// the loopback exit service; path-finding fills the relay for the 1-hop case.
+    Rotsee { exit: Address },
+}
+
+/// Edgli network tuning. Peers speak over loopback and probe successfully, so the node
+/// announces local addresses and always probes them (both the local integration test and
+/// the Rotsee-style test run against a local cluster).
+struct NetTuning {
+    connector: BlockchainConnectorConfig,
+    announce_local: bool,
+    prefer_local: bool,
+    probe_local: bool,
+    path_planner: PathPlannerConfig,
+    strategy_tick: Duration,
+    channel_open_timeout: Duration,
+}
+
+impl NetTuning {
+    fn local() -> Self {
+        Self {
+            connector: connector_cfg(),
+            announce_local: true,
+            prefer_local: true,
+            // Localcluster peers announce loopback/private addresses; probe them or no dial happens.
+            probe_local: true,
+            path_planner: PathPlannerConfig {
+                min_ack_rate: 0.1, // local cluster probes succeed
+                ..Default::default()
+            },
+            strategy_tick: Duration::from_secs(10),
+            channel_open_timeout: LOCAL_CHANNEL_OPEN_TIMEOUT,
+        }
+    }
+}
 
 pub struct IntegrationEnv {
     // Field order matters for drop: edgli first (cancels tasks), then cluster.
     edgli: Edgli,
     _reactor: futures::future::AbortHandle,
-    /// 0-hop destination: a peer Edgli has a direct open channel to.
-    dest_zero_hop: Address,
-    /// 1-hop destination: a different connected peer (the 0-hop peer relays).
-    dest_one_hop: Address,
-    _cluster: ClusterHandle,
+    targets: Targets,
+    /// `Some` for a local cluster we own; `None` for Rotsee (no local process).
+    _cluster: Option<ClusterHandle>,
 }
 
 impl Drop for IntegrationEnv {
@@ -54,62 +101,78 @@ impl Drop for IntegrationEnv {
 }
 
 impl IntegrationEnv {
-    /// Bring up the cluster, boot Edgli on the pre-funded extra identity, start the
-    /// channel strategy, and wait until at least one outgoing channel is open.
+    /// Bring up the local cluster, boot Edgli on the pre-funded extra identity, start
+    /// the channel strategy, and wait until at least one outgoing channel is open.
     pub async fn setup() -> anyhow::Result<Self> {
         let cluster = cluster::bring_up().await?;
         let summary = cluster.summary.clone();
         let extra = summary.extras[0].clone();
 
-        let hopr_keys: HoprKeys = IdentityRetrievalModes::FromFile {
-            password: &extra.password,
-            id_path: extra.keystore_path.to_str().unwrap(),
-        }
-        .try_into()?;
-
-        tracing::info!(safe = %extra.safe_address, "booting Edgli");
-        let edgli = Edgli::new(
-            edgli_config(&extra.safe_address, &extra.module_address),
-            hopr_keys,
-            BlokliEndpoint::from_optional_url(Some(summary.blokli_url.as_str()))?,
-            Some(connector_cfg()),
-            // Localcluster peers announce loopback/private addresses; probe them or no dial happens.
-            true,
-            |s: EdgliInitState| tracing::info!(?s, "edgli init"),
+        let (edgli, reactor) = boot_edgli(
+            &summary.blokli_url,
+            &extra,
+            &NetTuning::local(),
+            CLUSTER_SIZE,
         )
         .await?;
-
-        tracing::info!("waiting for Edgli to connect to ≥2 peers");
-        await_edgli_peers_connected(&edgli, 2).await?;
-
-        let sizing = IncentiveConfiguration {
-            min_open_channels: 1,
-            target_open_channels: CLUSTER_SIZE,
-            ..Default::default()
-        };
-        let mut strat_cfg = default_strategy_cfg(&edgli, &sizing).await?;
-        for kind in &mut strat_cfg.strategies {
-            let EdgeStrategyKind::ChannelLifecycle(lc) = kind;
-            lc.eligibility = EligibilityConfig {
-                min_peer_quality_score: 0.0,
-                require_observed_since_start: false,
-                ..Default::default()
-            };
-            lc.tick_interval = Duration::from_secs(10);
-        }
-        let reactor = edgli.run_reactor_from_cfg(strat_cfg)?;
-
-        tracing::info!("waiting for strategy to open ≥1 outgoing channel");
-        await_edgli_channels_open(&edgli, 1, CHANNEL_OPEN_TIMEOUT).await?;
 
         let (dest_zero_hop, dest_one_hop) = select_session_targets(&edgli).await?;
 
         Ok(Self {
             edgli,
             _reactor: reactor,
-            dest_zero_hop,
-            dest_one_hop,
-            _cluster: cluster,
+            targets: Targets::Local {
+                dest_zero_hop,
+                dest_one_hop,
+            },
+            _cluster: Some(cluster),
+        })
+    }
+
+    /// Boot Edgli on a pre-funded identity read from `EDGLI_ROTSEE_*` env vars (see
+    /// [`read_rotsee_env`]) and drive loopback sessions to a single configured exit node.
+    /// No cluster is brought up — identity, Safe/module, blokli endpoint, and exit node all
+    /// come from the environment (point them at a running local cluster via its
+    /// `hoprd-localcluster status`; see `scripts/integration/rotsee-binchain.sh`). Uses
+    /// local network tuning: loopback peers must be probed and the fast-chain connector is
+    /// required (a public default connector times out against anvil).
+    pub async fn setup_rotsee() -> anyhow::Result<Self> {
+        let rotsee = read_rotsee_env()?;
+
+        let (edgli, reactor) = boot_edgli(
+            &rotsee.blokli_url,
+            &rotsee.extra,
+            &NetTuning::local(),
+            ROTSEE_TARGET_CHANNELS,
+        )
+        .await?;
+
+        // Rotsee relay nodes do not run the loopback exit service, so the exit must be a
+        // node that does — supplied out of band via EDGLI_ROTSEE_EXIT_NODE.
+        let exit = rotsee.exit_node.ok_or_else(|| {
+            anyhow::anyhow!(
+                "EDGLI_ROTSEE_EXIT_NODE is required: Rotsee relays do not run the loopback exit service"
+            )
+        })?;
+
+        tracing::info!(%exit, "waiting for Rotsee exit node to be connected and probed");
+        await_edgli_exit_peer_ready(&edgli, exit).await?;
+
+        Ok(Self {
+            edgli,
+            _reactor: reactor,
+            targets: Targets::Rotsee { exit },
+            _cluster: None,
+        })
+    }
+
+    /// Session destination for a given hop count, resolved against the network.
+    fn dest_for(&self, hops: usize) -> anyhow::Result<Address> {
+        Ok(match (&self.targets, hops) {
+            (Targets::Local { dest_zero_hop, .. }, 0) => *dest_zero_hop,
+            (Targets::Local { dest_one_hop, .. }, 1) => *dest_one_hop,
+            (Targets::Rotsee { exit }, 0 | 1) => *exit,
+            (_, n) => anyhow::bail!("unsupported hop count {n} (only 0 and 1 are supported)"),
         })
     }
 
@@ -117,11 +180,7 @@ impl IntegrationEnv {
     /// `hops` relays to the exit node's built-in loopback service. Rate control
     /// is left ON.
     pub async fn open_unreliable_session(&self, hops: usize) -> anyhow::Result<HoprSession> {
-        let dest = match hops {
-            0 => self.dest_zero_hop,
-            1 => self.dest_one_hop,
-            n => anyhow::bail!("unsupported hop count {n} (cluster supports 0 and 1)"),
-        };
+        let dest = self.dest_for(hops)?;
         let (session, _) = self
             .edgli
             .connect_to(
@@ -148,6 +207,114 @@ impl IntegrationEnv {
             .await?;
         Ok(session)
     }
+
+    /// Session tuned to expose tokio executor starvation for the profiling harness:
+    /// rate control OFF and a small SURB pool, so a non-yielding writer that holds a
+    /// worker thread visibly starves the SURB balancer (throughput collapses). See
+    /// `tests/profiling.rs`.
+    pub async fn open_profiling_session(&self, hops: usize) -> anyhow::Result<HoprSession> {
+        let dest = self.dest_for(hops)?;
+        let (session, _) = self
+            .edgli
+            .connect_to(
+                dest,
+                SessionTarget::ExitNode(0),
+                HoprSessionClientConfig {
+                    forward_path: HopRouting::try_from(hops)?,
+                    return_path: HopRouting::try_from(hops)?,
+                    capabilities: SessionCapability::Segmentation
+                        | SessionCapability::NoRateControl,
+                    surb_management: Some(SurbBalancerConfig {
+                        target_surb_buffer_size: 600,
+                        max_surbs_per_sec: 300,
+                        ..SurbBalancerConfig::default()
+                    }),
+                    ..Default::default()
+                },
+            )
+            .await?;
+        Ok(session)
+    }
+}
+
+/// Boot Edgli on `extra`, connect to peers, start the channel-lifecycle strategy, and
+/// wait until at least one outgoing channel is open. Shared by the local and Rotsee
+/// setups. `target_channels` is how many outgoing channels the strategy aims to open to
+/// discovered peers; any pre-existing "genesis" Open channels to non-peer accounts (a
+/// pre-funded identity may hold some) are added on top so the target still reaches live
+/// peers.
+async fn boot_edgli(
+    blokli_url: &str,
+    extra: &ExtraInfo,
+    tuning: &NetTuning,
+    target_channels: usize,
+) -> anyhow::Result<(Edgli, futures::future::AbortHandle)> {
+    let hopr_keys: HoprKeys = IdentityRetrievalModes::FromFile {
+        password: &extra.password,
+        id_path: extra.keystore_path.to_str().unwrap(),
+    }
+    .try_into()?;
+
+    tracing::info!(safe = %extra.safe_address, "booting Edgli");
+    let edgli = Edgli::new(
+        edgli_config(&extra.safe_address, &extra.module_address, tuning),
+        hopr_keys,
+        BlokliEndpoint::from_optional_url(Some(blokli_url))?,
+        Some(tuning.connector),
+        tuning.probe_local,
+        |s: EdgliInitState| tracing::info!(?s, "edgli init"),
+    )
+    .await?;
+
+    tracing::info!("waiting for Edgli to connect to ≥2 peers");
+    await_edgli_peers_connected(&edgli, 2).await?;
+
+    // A pre-funded identity (especially on Rotsee) may already hold Open channels to
+    // accounts that are not currently connected peers. The strategy counts all Open
+    // channels, so add those to the target to still open `target_channels` to live peers.
+    let peers: std::collections::HashSet<Address> = edgli
+        .connected_peer_addresses()
+        .await?
+        .into_iter()
+        .collect();
+    let genesis_channels = edgli
+        .my_outgoing_channels()
+        .await?
+        .into_iter()
+        .filter(|c| c.status == ChannelStatus::Open && !peers.contains(&c.destination))
+        .count();
+    if genesis_channels > 0 {
+        tracing::info!(
+            genesis_channels,
+            "compensating for pre-existing channels in target"
+        );
+    }
+
+    let sizing = IncentiveConfiguration {
+        min_open_channels: 1,
+        target_open_channels: target_channels + genesis_channels,
+        ..Default::default()
+    };
+    let mut strat_cfg = default_strategy_cfg(&edgli, &sizing).await?;
+    for kind in &mut strat_cfg.strategies {
+        let EdgeStrategyKind::ChannelLifecycle(lc) = kind;
+        lc.eligibility = EligibilityConfig {
+            min_peer_quality_score: 0.0,
+            require_observed_since_start: false,
+            ..Default::default()
+        };
+        lc.tick_interval = tuning.strategy_tick;
+    }
+    let reactor = edgli.run_reactor_from_cfg(strat_cfg)?;
+
+    // Require one channel *beyond* any pre-existing genesis channels, so the gate proves the
+    // strategy opened a fresh channel to a live peer rather than passing on genesis alone
+    // (otherwise a pre-funded Rotsee identity satisfies it immediately and the later
+    // connect_to fails with an opaque session timeout).
+    tracing::info!("waiting for strategy to open ≥1 new outgoing channel");
+    await_edgli_channels_open(&edgli, 1 + genesis_channels, tuning.channel_open_timeout).await?;
+
+    Ok((edgli, reactor))
 }
 
 fn connector_cfg() -> BlockchainConnectorConfig {
@@ -158,9 +325,12 @@ fn connector_cfg() -> BlockchainConnectorConfig {
     }
 }
 
-fn edgli_config(safe_address: &Address, module_address: &Address) -> HoprLibConfig {
+fn edgli_config(
+    safe_address: &Address,
+    module_address: &Address,
+    tuning: &NetTuning,
+) -> HoprLibConfig {
     use edgli::hopr_lib::config::{HoprProtocolConfig, MixerConfig, TransportConfig};
-    use edgli::hopr_lib::exports::transport::path::PathPlannerConfig;
     HoprLibConfig {
         host: HostConfig {
             address: HostType::IPv4("0.0.0.0".to_string()),
@@ -169,13 +339,10 @@ fn edgli_config(safe_address: &Address, module_address: &Address) -> HoprLibConf
         publish: true,
         protocol: HoprProtocolConfig {
             transport: TransportConfig {
-                announce_local_addresses: true,
-                prefer_local_addresses: true,
+                announce_local_addresses: tuning.announce_local,
+                prefer_local_addresses: tuning.prefer_local,
             },
-            path_planner: PathPlannerConfig {
-                min_ack_rate: 0.1, // local cluster probes succeed
-                ..Default::default()
-            },
+            path_planner: tuning.path_planner,
             mixer: MixerConfig {
                 min_delay: Duration::ZERO,
                 delay_range: Duration::from_millis(1),
@@ -189,6 +356,87 @@ fn edgli_config(safe_address: &Address, module_address: &Address) -> HoprLibConf
         },
         ..Default::default()
     }
+}
+
+/// Rotsee configuration read from the environment.
+struct RotseeConfig {
+    blokli_url: String,
+    extra: ExtraInfo,
+    exit_node: Option<Address>,
+}
+
+/// Read the Rotsee identity + network config from `EDGLI_ROTSEE_*` env vars.
+fn read_rotsee_env() -> anyhow::Result<RotseeConfig> {
+    fn required(var: &str) -> anyhow::Result<String> {
+        std::env::var(var).map_err(|_| {
+            anyhow::anyhow!(
+                "{var} is not set. The Rotsee test needs a pre-funded, on-chain-registered \
+                 Gnosis identity supplied via: EDGLI_ROTSEE_BLOKLI_URL, EDGLI_ROTSEE_IDENTITY_FILE, \
+                 EDGLI_ROTSEE_IDENTITY_PASSWORD, EDGLI_ROTSEE_SAFE_ADDRESS, EDGLI_ROTSEE_MODULE_ADDRESS \
+                 (plus EDGLI_ROTSEE_EXIT_NODE for the loopback exit)."
+            )
+        })
+    }
+
+    let blokli_url = required("EDGLI_ROTSEE_BLOKLI_URL")?;
+    let keystore_path = std::path::PathBuf::from(required("EDGLI_ROTSEE_IDENTITY_FILE")?);
+    let password = required("EDGLI_ROTSEE_IDENTITY_PASSWORD")?;
+    let safe_address = required("EDGLI_ROTSEE_SAFE_ADDRESS")?
+        .parse::<Address>()
+        .context("EDGLI_ROTSEE_SAFE_ADDRESS: invalid address")?;
+    let module_address = required("EDGLI_ROTSEE_MODULE_ADDRESS")?
+        .parse::<Address>()
+        .context("EDGLI_ROTSEE_MODULE_ADDRESS: invalid address")?;
+    let exit_node = std::env::var("EDGLI_ROTSEE_EXIT_NODE")
+        .ok()
+        .map(|s| s.parse::<Address>())
+        .transpose()
+        .context("EDGLI_ROTSEE_EXIT_NODE: invalid address")?;
+
+    tracing::info!(%blokli_url, %safe_address, %module_address, ?exit_node, "Rotsee config from env");
+    Ok(RotseeConfig {
+        blokli_url,
+        extra: ExtraInfo {
+            safe_address,
+            module_address,
+            keystore_path,
+            password,
+        },
+        exit_node,
+    })
+}
+
+/// Wait until `target` is a connected, probed peer in Edgli's network graph.
+///
+/// Path-finding scores edges from probe observations (RFC-0010 §6.2); before the exit
+/// is in the graph, session construction to it times out. Polls until the exit's chain
+/// address resolves to an offchain key via the on-chain registry AND that key appears in
+/// `all_network_peers(0.0)` (quality floor 0.0 = connected AND at least one probe). The
+/// chain-key lookup is done inside the loop: right after boot the connector may not have
+/// indexed the exit's account yet, so a one-shot resolve could fail spuriously.
+async fn await_edgli_exit_peer_ready(edgli: &Edgli, target: Address) -> anyhow::Result<()> {
+    poll_until(
+        EXIT_PEER_PROBE_TIMEOUT,
+        Duration::from_secs(5),
+        "Rotsee exit peer connected + probed",
+        || async {
+            let Some(offchain_key) = edgli
+                .chain_api()
+                .chain_key_to_packet_key(&target)
+                .map_err(|e| anyhow::anyhow!("{e}"))?
+            else {
+                // Not yet indexed on chain — keep waiting.
+                return Ok(false);
+            };
+            let peers = edgli
+                .transport()
+                .all_network_peers(0.0)
+                .await
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
+            Ok(peers.iter().any(|(k, _)| k == &offchain_key))
+        },
+    )
+    .await
 }
 
 async fn await_edgli_peers_connected(edgli: &Edgli, min_peers: usize) -> anyhow::Result<()> {
