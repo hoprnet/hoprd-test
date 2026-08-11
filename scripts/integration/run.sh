@@ -1,19 +1,22 @@
 #!/usr/bin/env bash
-# Resolve versions, build hoprd + hoprd-localcluster, link edgli, pull the chain
-# image, and run the integration throughput test.
+# Resolve versions, build hoprd + hoprd-localcluster + the blokli binary chain,
+# link edgli, and run the integration throughput test against a fresh flake-built
+# chain per scenario (no docker image).
 #
 # Version model — no stored state, no commits:
-#   * the triggering project (PROJECT) uses the rev/image from the dispatch;
-#   * the other two default to their main HEAD / :latest image.
-# So a merge to any project is tested against the current tip of the other two.
+#   * the triggering project (PROJECT) uses the rev from the dispatch;
+#   * hoprd/edge-client otherwise default to their main HEAD;
+#   * blokli is ALWAYS the latest GitHub release (resolved per run), built from
+#     its flake — no floating docker tag, no unreleased-merge testing.
+# So a hoprd/edge-client merge is tested against the current tip of the other and
+# the latest blokli release.
 #
 # Inputs (env):
-#   PROJECT          hoprd | edge-client | blokli | "" (manual = all defaults)
+#   PROJECT          hoprd | edge-client | "" (manual = all defaults)
 #   OVERRIDE_REV     git rev for PROJECT when it is hoprd or edge-client
-#   OVERRIDE_IMAGE   image ref for PROJECT when it is blokli
-#   HOPRD_REF        default hoprd ref      (default: main)
+#   HOPRD_REF        default hoprd ref       (default: main)
 #   EDGLI_REF        default edge-client ref (default: main)
-#   BLOKLID_ANVIL_IMAGE  default chain image (default: …/bloklid-anvil:latest-rhine)
+#   BLOKLI_REF       blokli release override (default: latest release tag)
 #   NIX_SYSTEM_SUFFIX    nix output arch suffix (default: x86_64-linux)
 set -euo pipefail
 
@@ -23,14 +26,13 @@ ARCH="${NIX_SYSTEM_SUFFIX:-x86_64-linux}"
 
 HOPRD_REF="${HOPRD_REF:-main}"
 EDGLI_REF="${EDGLI_REF:-main}"
-CHAIN_IMAGE="${BLOKLID_ANVIL_IMAGE:-europe-west3-docker.pkg.dev/hoprassociation/docker-images/bloklid-anvil:latest-rhine}"
 
-# The triggering project overrides its own ref/image; others keep the defaults.
+# The triggering project overrides its own rev; the other defaults to main.
 case "${PROJECT:-}" in
 hoprd) HOPRD_REF="${OVERRIDE_REV:?OVERRIDE_REV required for PROJECT=hoprd}" ;;
 edge-client) EDGLI_REF="${OVERRIDE_REV:?OVERRIDE_REV required for PROJECT=edge-client}" ;;
-blokli) CHAIN_IMAGE="${OVERRIDE_IMAGE:?OVERRIDE_IMAGE required for PROJECT=blokli}" ;;
-"" | manual) echo "no PROJECT override — all three at default (main / latest)" ;;
+blokli) echo "PROJECT=blokli: merge-testing dropped — running hoprd/edge-client main against latest blokli release" ;;
+"" | manual) echo "no PROJECT override — hoprd/edge-client at main, blokli at latest release" ;;
 *)
   echo "unknown PROJECT '${PROJECT}'" >&2
   exit 2
@@ -57,18 +59,28 @@ EDGLI_SHA="$(resolve_sha hoprnet/edge-client "${EDGLI_REF}")"
   exit 1
 }
 
+# Resolve blokli → latest release tag (override with BLOKLI_REF). Same `gh api`
+# rationale as edgli above: self-contained nix binary, dodges the glibc trip.
+BLOKLI_REF="${BLOKLI_REF:-$(gh api repos/hoprnet/blokli/releases/latest --jq '.tag_name' 2>/dev/null)}"
+[ -n "${BLOKLI_REF}" ] || {
+  echo "could not resolve latest blokli release" >&2
+  exit 1
+}
+
 echo "resolved versions:"
 echo "  hoprd        = ${HOPRD_REF}"
 echo "  edge-client  = ${EDGLI_REF} (${EDGLI_SHA})"
-echo "  bloklid-anvil= ${CHAIN_IMAGE}"
-
-# ── Preflight: docker daemon up, nix present, chain image pulled ──
-bash "$(dirname "${BASH_SOURCE[0]}")/preflight.sh" "${CHAIN_IMAGE}"
+echo "  blokli       = ${BLOKLI_REF} (latest release)"
 
 # ── Build hoprd + hoprd-localcluster from the hoprd ref (Cachix-cached) ──
 echo "building hoprd binaries from ref ${HOPRD_REF} ..."
 nix build -L "github:hoprnet/hoprd/${HOPRD_REF}#binary-hoprd-${ARCH}" --out-link "${REPO_ROOT}/result-hoprd"
 nix build -L "github:hoprnet/hoprd/${HOPRD_REF}#binary-hoprd-localcluster-${ARCH}" --out-link "${REPO_ROOT}/result-localcluster"
+
+# ── Build the blokli binary chain from the release (bloklid + deployer + anvil) ──
+echo "building blokli chain from release ${BLOKLI_REF} ..."
+nix build -L "github:hoprnet/blokli/${BLOKLI_REF}#bloklid" --out-link "${REPO_ROOT}/result-bloklid"
+nix build -L "nixpkgs#foundry" --out-link "${REPO_ROOT}/result-foundry"
 
 # ── Pin edgli to the resolved sha and refresh the lockfile ──
 echo "pinning edgli to ${EDGLI_SHA} ..."
@@ -85,15 +97,8 @@ open(path, 'w').write(new)
 PY
 (cd "${REPO_ROOT}/integration" && cargo update -p edgli)
 
-# ── Run the test ──
-export HOPRD_BIN="${REPO_ROOT}/result-hoprd/bin/hoprd"
-export HOPRD_LOCALCLUSTER_BIN="${REPO_ROOT}/result-localcluster/bin/hoprd-localcluster"
-export HOPRD_CHAIN_IMAGE="${CHAIN_IMAGE}"
-# Debug-build async setup overflows the default thread stack on x86_64 CI.
-export RUST_MIN_STACK="${RUST_MIN_STACK:-33554432}"
-# Cap send rate so the CPU-constrained runner's packet pool doesn't saturate.
-export HOPRD_PUMP_MBPS="${HOPRD_PUMP_MBPS:-0.5}"
-echo "running integration tests ..."
-# Only the integration tests (the `integration` test target) — not the crate's
-# unit tests. Both hop counts (zero_hop, one_hop) run as separate tests.
-(cd "${REPO_ROOT}/integration" && cargo test --test integration --no-fail-fast -- --include-ignored --test-threads=1)
+# ── Run the test against a fresh flake-built chain per scenario ──
+# run-binchain.sh starts/stops bloklid+anvil per scenario (HOPRD_CHAIN_URL) and
+# runs both hop counts (zero_hop, one_hop) as separate tests.
+echo "running integration tests (binary chain) ..."
+exec bash "$(dirname "${BASH_SOURCE[0]}")/run-binchain.sh"

@@ -20,7 +20,6 @@ use edgli::{
             SurbBalancerConfig,
         },
     },
-    latency_path_planner_config,
     strategy::{EdgeStrategyKind, EligibilityConfig, IncentiveConfiguration, default_strategy_cfg},
     traits::EdgeNodeApi,
 };
@@ -35,11 +34,9 @@ const EDGE_P2P_PORT: u16 = P2P_PORT_BASE + CLUSTER_SIZE as u16;
 
 const PEER_DISCOVERY_TIMEOUT: Duration = Duration::from_secs(120);
 const LOCAL_CHANNEL_OPEN_TIMEOUT: Duration = Duration::from_secs(120);
-/// Rotsee needs more headroom: 30 s strategy tick + Gnosis Chain confirmation latency.
-const ROTSEE_CHANNEL_OPEN_TIMEOUT: Duration = Duration::from_secs(300);
 const EXIT_PEER_PROBE_TIMEOUT: Duration = Duration::from_secs(120);
-/// Outgoing channels the strategy aims to open on Rotsee — enough for path-finding to
-/// have options, unrelated to any local cluster size.
+/// Outgoing channels the strategy aims to open for the Rotsee-style path — enough for
+/// path-finding to have options, unrelated to any local cluster size.
 const ROTSEE_TARGET_CHANNELS: usize = 3;
 
 /// Session destinations, which differ by network.
@@ -54,9 +51,9 @@ enum Targets {
     Rotsee { exit: Address },
 }
 
-/// Per-network edgli tuning. Local cluster peers speak over loopback and probe
-/// successfully; Rotsee runs behind NAT on a public chain, so it announces no
-/// local addresses, skips local probing, and routes on channel topology alone.
+/// Edgli network tuning. Peers speak over loopback and probe successfully, so the node
+/// announces local addresses and always probes them (both the local integration test and
+/// the Rotsee-style test run against a local cluster).
 struct NetTuning {
     connector: BlockchainConnectorConfig,
     announce_local: bool,
@@ -81,22 +78,6 @@ impl NetTuning {
             },
             strategy_tick: Duration::from_secs(10),
             channel_open_timeout: LOCAL_CHANNEL_OPEN_TIMEOUT,
-        }
-    }
-
-    fn rotsee() -> Self {
-        Self {
-            connector: BlockchainConnectorConfig::default(),
-            announce_local: false,
-            prefer_local: false,
-            probe_local: false,
-            // Behind NAT, neighbour probes never ack (relays cannot dial back over a
-            // 0-hop return path), so ack_rate stays 0 and min_ack_rate=0.1 would block
-            // all 1-hop path selection. 0.0 falls back to routing over the channels
-            // indexed from SSE — which is all we have on Rotsee.
-            path_planner: latency_path_planner_config(0.0),
-            strategy_tick: Duration::from_secs(30),
-            channel_open_timeout: ROTSEE_CHANNEL_OPEN_TIMEOUT,
         }
     }
 }
@@ -148,17 +129,20 @@ impl IntegrationEnv {
         })
     }
 
-    /// Boot Edgli against the public Rotsee testnet using a pre-funded identity read
-    /// from `EDGLI_ROTSEE_*` env vars (see [`read_rotsee_env`]). There is no cluster to
-    /// bring up; the identity, Safe/module, blokli endpoint, and exit node all come from
-    /// the environment.
+    /// Boot Edgli on a pre-funded identity read from `EDGLI_ROTSEE_*` env vars (see
+    /// [`read_rotsee_env`]) and drive loopback sessions to a single configured exit node.
+    /// No cluster is brought up — identity, Safe/module, blokli endpoint, and exit node all
+    /// come from the environment (point them at a running local cluster via its
+    /// `hoprd-localcluster status`; see `scripts/integration/rotsee-binchain.sh`). Uses
+    /// local network tuning: loopback peers must be probed and the fast-chain connector is
+    /// required (a public default connector times out against anvil).
     pub async fn setup_rotsee() -> anyhow::Result<Self> {
         let rotsee = read_rotsee_env()?;
 
         let (edgli, reactor) = boot_edgli(
             &rotsee.blokli_url,
             &rotsee.extra,
-            &NetTuning::rotsee(),
+            &NetTuning::local(),
             ROTSEE_TARGET_CHANNELS,
         )
         .await?;
