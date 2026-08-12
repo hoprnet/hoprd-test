@@ -9,6 +9,10 @@
 #
 # Env:
 #   SCENARIOS   space-separated test names (default: "zero_hop one_hop")
+#   TEST_TARGET test binary to run them from (default: "integration"; "return_path" for
+#               the return-path resilience scenarios)
+#   TEST_ARGS   extra libtest args, e.g. "--nocapture" to see a passing scenario's own
+#               measurements (libtest swallows them otherwise)
 #   others      forwarded to the test (RUST_LOG, HOPRD_PUMP_MBPS, ...) with defaults below
 set -euo pipefail
 
@@ -23,6 +27,8 @@ export RUST_MIN_STACK="${RUST_MIN_STACK:-33554432}"
 export HOPRD_PUMP_MBPS="${HOPRD_PUMP_MBPS:-0.5}"
 
 SCENARIOS="${SCENARIOS:-zero_hop one_hop}"
+TEST_TARGET="${TEST_TARGET:-integration}"
+TEST_ARGS="${TEST_ARGS:-}"
 BLOKLI_API_PORT="${BLOKLI_API_PORT:-8080}"
 
 CHAIN_PID=""
@@ -68,8 +74,8 @@ for scenario in ${SCENARIOS}; do
   echo "═══ ${scenario}: fresh chain ═══"
   start_chain
   if ! nix develop "${HOPRNET_SHELL:-github:hoprnet/hoprnet}" -c \
-    cargo test --manifest-path integration/Cargo.toml --test integration "${scenario}" \
-    --no-fail-fast -- --include-ignored --test-threads=1; then
+    cargo test --manifest-path integration/Cargo.toml --test "${TEST_TARGET}" "${scenario}" \
+    --no-fail-fast -- --include-ignored --test-threads=1 ${TEST_ARGS}; then
     rc=1
   fi
   stop_chain

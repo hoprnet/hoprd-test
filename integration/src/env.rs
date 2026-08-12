@@ -26,11 +26,15 @@ use edgli::{
 
 use crate::{
     Address,
-    cluster::{self, CLUSTER_SIZE, ClusterHandle, ExtraInfo, P2P_PORT_BASE},
+    cluster::{
+        self, ClusterHandle, ClusterSummary, ExtraInfo, NodeInfo, P2P_PORT_BASE, cluster_size,
+    },
 };
 
 /// Edgli's P2P port — one slot beyond the cluster nodes.
-const EDGE_P2P_PORT: u16 = P2P_PORT_BASE + CLUSTER_SIZE as u16;
+fn edge_p2p_port() -> u16 {
+    P2P_PORT_BASE + cluster_size() as u16
+}
 
 const PEER_DISCOVERY_TIMEOUT: Duration = Duration::from_secs(120);
 const LOCAL_CHANNEL_OPEN_TIMEOUT: Duration = Duration::from_secs(120);
@@ -112,7 +116,7 @@ impl IntegrationEnv {
             &summary.blokli_url,
             &extra,
             &NetTuning::local(),
-            CLUSTER_SIZE,
+            cluster_size(),
         )
         .await?;
 
@@ -176,19 +180,55 @@ impl IntegrationEnv {
         })
     }
 
+    /// The cluster this env owns; an error for a Rotsee env, which has none.
+    pub fn cluster(&self) -> anyhow::Result<&ClusterSummary> {
+        self._cluster
+            .as_ref()
+            .map(|c| &c.summary)
+            .ok_or_else(|| anyhow::anyhow!("no local cluster (Rotsee env)"))
+    }
+
+    /// Cluster nodes that can carry a return path for a session exiting at `exit` — every
+    /// node but the exit itself. The cluster is a full mesh, so each of them has an open
+    /// channel from the exit and is a legitimate first hop back towards Edgli.
+    pub fn return_relayer_candidates(&self, exit: Address) -> anyhow::Result<Vec<NodeInfo>> {
+        Ok(self
+            .cluster()?
+            .nodes
+            .iter()
+            .filter(|n| n.address != exit)
+            .cloned()
+            .collect())
+    }
+
     /// Open an unreliable (`Segmentation`-only, no retransmission) session over
     /// `hops` relays to the exit node's built-in loopback service. Rate control
     /// is left ON.
     pub async fn open_unreliable_session(&self, hops: usize) -> anyhow::Result<HoprSession> {
-        let dest = self.dest_for(hops)?;
+        Ok(self.open_unreliable_session_paths(hops, hops).await?.0)
+    }
+
+    /// As [`Self::open_unreliable_session`], but with the forward and return hop counts
+    /// chosen independently; also returns the exit address.
+    ///
+    /// A 0-hop forward paired with a 1-hop return isolates the return direction: the only
+    /// packets any cluster node then forwards are replies travelling `exit → relayer →
+    /// edgli`, so per-node forwarding counters read directly as a return-relayer
+    /// histogram. The exit is selected by the forward hop count.
+    pub async fn open_unreliable_session_paths(
+        &self,
+        forward_hops: usize,
+        return_hops: usize,
+    ) -> anyhow::Result<(HoprSession, Address)> {
+        let dest = self.dest_for(forward_hops)?;
         let (session, _) = self
             .edgli
             .connect_to(
                 dest,
                 SessionTarget::ExitNode(0), // built-in loopback service
                 HoprSessionClientConfig {
-                    forward_path: HopRouting::try_from(hops)?,
-                    return_path: HopRouting::try_from(hops)?,
+                    forward_path: HopRouting::try_from(forward_hops)?,
+                    return_path: HopRouting::try_from(return_hops)?,
                     // Mirror gnosis_vpn-client's main (WG) data session — the real
                     // high-throughput config (gnosis_vpn-lib connection/options.rs +
                     // up/runner.rs). A too-low SURB mint ceiling starves the exit's
@@ -205,7 +245,7 @@ impl IntegrationEnv {
                 },
             )
             .await?;
-        Ok(session)
+        Ok((session, dest))
     }
 
     /// Session tuned to expose tokio executor starvation for the profiling harness:
@@ -334,7 +374,7 @@ fn edgli_config(
     HoprLibConfig {
         host: HostConfig {
             address: HostType::IPv4("0.0.0.0".to_string()),
-            port: EDGE_P2P_PORT,
+            port: edge_p2p_port(),
         },
         publish: true,
         protocol: HoprProtocolConfig {

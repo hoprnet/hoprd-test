@@ -46,15 +46,24 @@ there is nothing to configure.
 
 ### Manual test binaries (not run in CI)
 
-Two extra test binaries reuse the same `IntegrationEnv` harness but need resources CI
+Three extra test binaries reuse the same `IntegrationEnv` harness but need resources CI
 does not provide, so they live in their **own** test targets — CI only runs
 `--test integration`, so these never run automatically:
 
 | Binary                    | What it needs                                    | Run with     |
 | ------------------------- | ------------------------------------------------ | ------------ |
+| `tests/return_path.rs`    | a 5-node cluster (more CPU than the throughput tests) | `just return-path` |
 | `tests/rotsee.rs`         | a funded Gnosis identity + exit node (`EDGLI_ROTSEE_*`) | `just rotsee` |
 | `tests/profiling.rs`      | `--features prof` + `--profile tracer` + `tokio_unstable` | `just profile` |
 
+- **Return path** reproduces the 2026-08-11 return-path break. Sessions are opened with a
+  **0-hop forward and 1-hop return** path, so the only packets a cluster node forwards are
+  replies — `hopr_packets_count{type="forwarded"}` per node then reads directly as a
+  histogram of return-path first relayers (`src/relayers.rs`). One scenario asserts that
+  histogram is spread rather than a spike; the other SIGKILLs the busiest return relayer
+  and requires the stream to keep flowing. Needs more relayer candidates than the
+  throughput tests, so it asks for a 5-node cluster via `cluster::request_cluster_size`
+  (`HOPRD_CLUSTER_SIZE` sets the default elsewhere; `hoprd-localcluster` caps at 5).
 - **Rotsee** (`IntegrationEnv::setup_rotsee`) boots `edgli` on a pre-funded, on-chain
   identity read from `EDGLI_ROTSEE_*` — no cluster is started — and pumps 0-hop/1-hop
   loopback sessions to a configured exit node. See the header of `tests/rotsee.rs` for the
