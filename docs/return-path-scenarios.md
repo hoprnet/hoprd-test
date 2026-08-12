@@ -171,7 +171,7 @@ is meaningless.
 because with 4 candidates `K = min(min_return_path_diversity, buckets) = 4` should select
 every bucket and then cycle.
 
-The suspected mechanism is the call site (`transport/hopr/src/path/planner.rs`):
+**The mechanism, confirmed.** At the call site (`transport/hopr/src/path/planner.rs`):
 
 ```rust
 let num_possible_surbs = HoprPacket::max_surbs_with_message(size_hint).min(max_surbs);
@@ -179,12 +179,29 @@ self.resolve_diverse_return_paths(*destination, return_options, num_possible_sur
 // …and inside: let wanted = self.min_return_path_diversity.min(count);
 ```
 
-`count` is *how many SURBs fit in one packet*, so diversity is bounded per **packet**, not
-across the SURB stream. Each call re-picks buckets by weighted sampling, independently of
-previous calls, so however even the rotation is within one packet, the long-run
-distribution across packets converges back to weight-proportional — the pre-fix behaviour.
-Needs confirming against the planner's own unit tests; the integration measurement is
-consistent with it and inconsistent with the intended effect.
+`count` is how many SURBs fit in **one packet**. Measured from `hopr-crypto-packet`:
+
+```text
+PAYLOAD_SIZE = 1038 B   HoprSurb::SIZE = 395 B
+MAX_SURBS_IN_PACKET = 2         max_surbs_with_message(1400) = 0
+```
+
+So `wanted = min(min_return_path_diversity, 2) = 2`, always. Every SURB-carrying packet
+selects **2 of the available relayers** via `pick_distinct_buckets` — weighted, and freshly
+re-drawn on every call, because `resolve_diverse_return_paths` keeps no state between
+calls. The round-robin only rotates within that pair, so the marginal distribution over
+relayers stays weight-proportional. Measured imbalance 2.97 with four candidates, against
+a design target of 1.0.
+
+Two consequences:
+
+- **`min_return_path_diversity` cannot exceed 2 in practice.** Its default of 6 is
+  unreachable — the ceiling is packet geometry (`PAYLOAD_SIZE / HoprSurb::SIZE`), not
+  configuration. A validator on the config cannot express this; only the call site can.
+- **The "a dead relay owns ~1/K" property degrades to K = 2**, i.e. up to ~50% of the
+  return stream, and more when the dead relayer was the better-scored member of the pair.
+  The argument for closing hoprnet#8332 assumed K ≥ 6 keeping loss near 17%, below the
+  ~20% a reliable session tolerates. That premise does not hold at any configured value.
 
 **Cache expiry is the wrong recovery trigger.** The path cache is 60 s TTL / 30 s
 background refresh (§6.3) with no invalidation on timeout or loss. After a relayer dies the
