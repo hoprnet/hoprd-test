@@ -256,6 +256,20 @@ async fn session_should_survive_return_relayer_loss() -> anyhow::Result<()> {
     );
     victim.kill()?;
 
+    // How long the network is given to notice, before the replacement session mints its SURBs.
+    // Parameterised because recovery appears to race path re-scoring: probing runs every 5s and the
+    // path cache is 60s TTL / 30s refresh, so a session established too soon after the kill builds
+    // its return paths from candidates that still include the dead relayer.
+    let settle = std::env::var("HOPRD_KILL_SETTLE_SECS")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .map(Duration::from_secs)
+        .unwrap_or(Duration::ZERO);
+    if !settle.is_zero() {
+        tracing::info!(?settle, "waiting before opening the replacement session");
+        tokio::time::sleep(settle).await;
+    }
+
     // Same session, same everything — only the relay is gone. Nothing here waits for
     // probing to notice: the point is that the stream survives the detection gap.
     let session = env.open_unreliable_session_paths(0, 1).await?.0;

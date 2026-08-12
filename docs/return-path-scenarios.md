@@ -64,15 +64,19 @@ busiest ÷ least-busy — which is ≈1.0 for a rotation and tracks the score ra
 
 ### S1 — Selection spread under skewed scores · **implemented**
 
-*Isolates:* #8331 — bucket by first relayer, sample K distinct buckets without
-replacement, round-robin between them, versus an independent weighted draw per SURB.
+*Isolates:* #8331 — weight tempering (`w^γ`, γ default 0.5) versus a raw weighted draw.
+
+Note the PR was reworked after these measurements: it originally spread a batch over K
+distinct first relayers, which the results below showed could not work (K is capped at 2 by
+`PAYLOAD_SIZE / HoprSurb::SIZE`). The scenario is unchanged — only what it is measuring is.
 
 *Setup:* 5 nodes, latency profile one node per score step, 0-hop forward / 1-hop return,
 4 MiB pump. Vary the **edgli** pin.
 
-*Signal:* `imbalance`. Round-robin over all 4 buckets is uniform *by construction*
-(K = min(6, 4) = 4, so every bucket is chosen then cycled) → ≈1.0. A weighted draw tracks
-the score ratio → >2.
+*Signal:* `imbalance`. A raw weighted draw tracks the edge-score ratio (measured 2.28–4.63
+under skew); tempering at γ=0.5 should roughly halve the exponent on that ratio. Note the
+threshold in the test still encodes the *rotation* target of ≈1.0 and so is stricter than
+tempering can achieve — it needs re-deriving against a tempered baseline.
 
 *Test:* `return_paths_should_spread_across_distinct_relayers`.
 
@@ -151,6 +155,8 @@ Measured on this laptop, 5-node binary chain, 4 MiB pump. "pre-fix" = `hoprd` 4.
 | pre-fix, skewed¹   | 36/32/16/16    | 2.28      | —                  |
 | pre-fix, skewed¹   | 49/24/17/11    | 4.63      | 54.81%             |
 | **fixed, skewed¹** | **34/28/26/12**| **2.97**  | —                  |
+| fixed, skewed¹, debug logging | 33/26/21/20 | 1.63 | **100.00%** |
+| fixed, skewed¹, 0.25 MB/s | 34/30/24/12 | 2.85 | 36.59% |
 
 ¹ with the first latency profile (5/50/100/150/200 ms), which collides two pairs of nodes
 into the same score step; the current profile separates all four. All five rows are
@@ -158,13 +164,29 @@ directly comparable — same profile, same cluster shape, same 4 MiB pump.
 
 ### What the numbers say
 
-**The ~55% after-kill arrival is pre-existing** — identical on both stacks, and invariant
-whether the killed relayer carried 25% or 49%. The PR stack introduces no regression, and
-S2 attributes nothing.
+**The after-kill collapse is pre-existing and not attributable to the stack.** Identical on
+both stacks, and invariant whether the killed relayer carried 25% or 49%. S2 attributes
+nothing to any of the four PRs.
 
-**An unshaped cluster is blind to selection strategy.** Equal scores make weighted-random
-and round-robin the same distribution. Any spread result taken without a latency profile
-is meaningless.
+**What the collapse is *not*.** Three hypotheses were formed and each was refuted by a
+subsequent run — recorded here so they are not re-proposed:
+
+| Hypothesis | Refuted by |
+| ---------- | ---------- |
+| A gap the PR stack leaves open | pre-fix stack collapses identically (54.16%) |
+| SURB-balancer counting sent rather than usable SURBs | plausible, but the instrumented run passed at 100%, so unconfirmed |
+| Load dependence — offered rate exceeds post-kill return capacity | 0.24 MB/s gave **both** 100% and 36.6% |
+
+**Current hypothesis: recovery latency.** The one variable that tracks the outcome is how
+long elapses between the kill and the replacement session minting its SURBs — ≈24s when it
+survived, ≈11s when it collapsed. Probing runs every 5s and the path cache is 60s TTL / 30s
+refresh (§6.2, §6.3), which brackets that window: a session established too soon builds its
+return paths from candidates that still include the dead relayer, and each SURB so minted is
+single-use and burned (§2.4). Packet counts corroborate — 6567 forwarded for a clean 4 MiB
+when it survived, 28–31k for a partial transfer when it did not, i.e. heavy retransmission.
+
+`HOPRD_KILL_SETTLE_SECS` parameterises that delay so it is a controlled variable rather than
+an accident of test timing.
 
 **Under skew, the fixed stack does not spread as designed.** Its imbalance (2.97) falls
 *between* the two pre-fix runs (2.28, 4.63) — no separation. The design predicts ≈1.0,
