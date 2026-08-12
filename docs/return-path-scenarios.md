@@ -177,7 +177,24 @@ subsequent run — recorded here so they are not re-proposed:
 | SURB-balancer counting sent rather than usable SURBs | plausible, but the instrumented run passed at 100%, so unconfirmed |
 | Load dependence — offered rate exceeds post-kill return capacity | 0.24 MB/s gave **both** 100% and 36.6% |
 
-**Current hypothesis: recovery latency.** The one variable that tracks the outcome is how
+**Confirmed: recovery latency.** With a 60s settle between the kill and the replacement
+session — every other condition identical to the runs that collapsed — arrival is **100%**
+at full speed (4 MiB in 9.02s, 0.47 MB/s), with the dead relayer's share fully redistributed
+to the survivors. The controlled series:
+
+| settle | logging | offered | after-kill arrival |
+| ------ | ------- | ------- | ------------------ |
+| 0s | normal | 0.48 MB/s | 54.2 – 55.1% (×4) |
+| 0s | normal | 0.24 MB/s | 36.59% |
+| ~24s (incidental) | debug | 0.24 MB/s | 100% |
+| **60s** | **normal** | **0.47 MB/s** | **100%** |
+
+A session does not collapse from losing a return relayer. It collapses from being
+*established inside the recovery window*, when the planner still offers the dead relayer as
+a candidate and every SURB minted through it is single-use and burned (§2.4). 60s clears the
+60s cache TTL / 30s refresh plus the 5s probe interval; ~11s does not.
+
+**Original hypothesis, now superseded:** The one variable that tracks the outcome is how
 long elapses between the kill and the replacement session minting its SURBs — ≈24s when it
 survived, ≈11s when it collapsed. Probing runs every 5s and the path cache is 60s TTL / 30s
 refresh (§6.2, §6.3), which brackets that window: a session established too soon builds its
