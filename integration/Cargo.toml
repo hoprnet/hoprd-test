@@ -13,7 +13,7 @@ publish = false
 # rewrites it to the resolved edge-client ref (EDGLI_REF, default main HEAD, or the
 # rev from a merge dispatch) and runs `cargo update -p edgli`. Keep it recent so
 # local `just` builds match what CI tests.
-edgli = { git = "https://github.com/hoprnet/edge-client", rev = "06ab8d1f1a598d76cb34033b7a0866bf1f67a7ed", default-features = false, features = [
+edgli = { path = "/Users/teebor/Fun/hoprnet.org/edge-client/.claude/kauki/chore/deps/hopr-lib-return-path-resilience", default-features = false, features = [
   "runtime-tokio",
   "blokli",
 ] }
@@ -65,3 +65,10 @@ debug-assertions = true
 [profile.flamegraph]
 inherits = "release"
 debug = true
+
+# Temporary: the local edge-client worktree pulls unreleased upstreams via hopr-lib.
+# Remove once hopr-api 1.21.0, hopr-utilities 0.7.0 and hopr-network-graph 0.3.3 are published.
+[patch.crates-io]
+hopr-api = { git = "https://github.com/hoprnet/hopr-api", rev = "4a53ed13634a5080a63760b9ca84bd9fe7710114" }
+hopr-utilities = { git = "https://github.com/hoprnet/hopr-utilities", rev = "e17451a8db2fd72cecde273ac8ef87de96c8bac0" }
+hopr-network-graph = { git = "https://github.com/hoprnet/hopr-impls", rev = "d9dc437108b59776b8b9673664c88d9b177d7769" }

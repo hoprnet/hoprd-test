@@ -239,6 +239,10 @@ impl IntegrationEnv {
                         // gnosis main: 10 MB response buffer, 16 Mb/s SURB upstream.
                         target_surb_buffer_size: 10_000_000 / SESSION_MTU as u64,
                         max_surbs_per_sec: 16_000_000 / (8 * SURB_SIZE as u64),
+                        // A lost return relayer otherwise reads as a well-stocked exit, because
+                        // consumption is only observed when a reply gets home. Without this the
+                        // exit is starved of SURBs at the exact moment it needs them to answer.
+                        sustain_on_return_path_loss: true,
                         ..SurbBalancerConfig::default()
                     }),
                     ..Default::default()
@@ -370,7 +374,13 @@ fn edgli_config(
     module_address: &Address,
     tuning: &NetTuning,
 ) -> HoprLibConfig {
-    use edgli::hopr_lib::config::{HoprProtocolConfig, MixerConfig, TransportConfig};
+    use edgli::hopr_lib::{
+        config::{HoprPacketPipelineConfig, MixerConfig, TransportConfig},
+        exports::transport::{
+            HoprProtocolConfig,
+            config::{SurbPopOrder, SurbStoreConfig},
+        },
+    };
     HoprLibConfig {
         host: HostConfig {
             address: HostType::IPv4("0.0.0.0".to_string()),
@@ -383,6 +393,17 @@ fn edgli_config(
                 prefer_local_addresses: tuning.prefer_local,
             },
             path_planner: tuning.path_planner,
+            packet: HoprPacketPipelineConfig {
+                // Stated rather than defaulted: the library default is FIFO, which replies with the
+                // oldest SURBs first and so keeps using a return path for as long as its backlog
+                // lasts. hoprd already pins LIFO, and a cluster where the two ends disagree
+                // measures neither one.
+                surb_store: SurbStoreConfig {
+                    pop_order: SurbPopOrder::Lifo,
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
             mixer: MixerConfig {
                 min_delay: Duration::ZERO,
                 delay_range: Duration::from_millis(1),

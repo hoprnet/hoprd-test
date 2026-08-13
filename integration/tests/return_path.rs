@@ -135,13 +135,24 @@ const MAX_RELAYER_IMBALANCE: f64 = 2.1;
 /// 4 relayers — and stays lost until probing drops the dead node from the candidate set.
 /// Anything above this floor means the session degraded proportionally instead of
 /// collapsing; concentration puts this number near zero.
-const MIN_ARRIVAL_AFTER_KILL_PCT: f64 = 60.0;
+/// Fraction of pre-kill throughput the stream must get back to.
+///
+/// Losing a relayer costs real capacity, so the bar is not "as before" -- it is that the stream
+/// settles at a usable rate instead of trickling or dying.
+const RECOVERY_FRACTION: f64 = 0.5;
+
+/// How long after the kill that rate must be reached.
+const RECOVERY_DEADLINE: Duration = Duration::from_secs(15);
 
 /// How long recovered throughput must hold before it counts as recovered.
 ///
 /// Long enough that a single lucky burst does not read as recovery, short enough to resolve a
 /// target measured in seconds.
-const RECOVERY_SUSTAIN_WINDOW: Duration = Duration::from_secs(2);
+/// How long the recovered rate has to hold before it counts as recovered rather than a burst.
+///
+/// Two seconds was too short: a transfer that ended after 1.6s satisfied it from its opening burst
+/// alone and reported a recovery that never happened.
+const RECOVERY_SUSTAIN_WINDOW: Duration = Duration::from_secs(3);
 
 fn random_payload() -> Vec<u8> {
     let mut payload = vec![0u8; PAYLOAD_BYTES];
@@ -304,22 +315,44 @@ async fn session_should_survive_return_relayer_loss() -> anyhow::Result<()> {
     // Aggregate arrival cannot express it: it folds recovery latency, steady-state rate and
     // timeout behaviour into one number whose run-to-run spread (measured: 19-45% on identical
     // builds) is wider than the effects worth detecting.
-    let recovery_target_mbps = before_kill.mbps / 2.0;
-    match after_kill.time_to_sustain(recovery_target_mbps, RECOVERY_SUSTAIN_WINDOW) {
+    let recovery_target_mbps = before_kill.mbps * RECOVERY_FRACTION;
+    let recovered_after = after_kill.time_to_sustain(recovery_target_mbps, RECOVERY_SUSTAIN_WINDOW);
+
+    // A sustain measurement over a pump shorter than the window is meaningless -- the opening
+    // burst satisfies it on its own. Fail loudly rather than report a recovery that cannot have
+    // been observed.
+    anyhow::ensure!(
+        after_kill.seconds > RECOVERY_SUSTAIN_WINDOW.as_secs_f64(),
+        "after-kill pump ran only {:.2}s, shorter than the {RECOVERY_SUSTAIN_WINDOW:?} sustain \
+         window, so recovery cannot be measured at all ({:.1}% arrived)",
+        after_kill.seconds,
+        after_kill.arrival_pct(),
+    );
+
+    match recovered_after {
         Some(secs) => tracing::info!(
-            "after-kill: recovered to {recovery_target_mbps:.2} MB/s (half of pre-kill) after \
-             {secs:.1}s, sustained over {RECOVERY_SUSTAIN_WINDOW:?}"
+            "after-kill: recovered to {recovery_target_mbps:.2} MB/s ({:.0}% of pre-kill) after \
+             {secs:.1}s, sustained over {RECOVERY_SUSTAIN_WINDOW:?}",
+            RECOVERY_FRACTION * 100.0
         ),
         None => tracing::info!(
-            "after-kill: never sustained {recovery_target_mbps:.2} MB/s (half of pre-kill) over \
+            "after-kill: never sustained {recovery_target_mbps:.2} MB/s over \
              {RECOVERY_SUSTAIN_WINDOW:?} within the pump window"
         ),
     }
 
+    // Recovery *time*, not aggregate arrival. Losing a relayer is supposed to cost throughput; what
+    // it must not cost is a stream that never settles. Aggregate arrival cannot express that --
+    // it folds recovery latency, steady-state rate and transfer length into one number whose
+    // run-to-run spread (measured: 19-45% on identical builds) is wider than the effect.
     anyhow::ensure!(
-        after_kill.arrival_pct() >= MIN_ARRIVAL_AFTER_KILL_PCT,
-        "return path collapsed after losing one relayer: {:.1}% arrived, need \
-         ≥{MIN_ARRIVAL_AFTER_KILL_PCT:.0}% (it had carried {:.0}% of replies) — {}",
+        recovered_after.is_some_and(|secs| secs <= RECOVERY_DEADLINE.as_secs_f64()),
+        "return path did not recover in time: {} (target {recovery_target_mbps:.2} MB/s = {:.0}% \
+         of pre-kill {:.2} MB/s, deadline {RECOVERY_DEADLINE:?}); {:.1}% arrived overall, the lost \
+         relayer had carried {:.0}% of replies — {}",
+        recovered_after.map_or("never reached".to_string(), |s| format!("took {s:.1}s")),
+        RECOVERY_FRACTION * 100.0,
+        before_kill.mbps,
         after_kill.arrival_pct(),
         spread.max_share() * 100.0,
         spread_after.summary(),
