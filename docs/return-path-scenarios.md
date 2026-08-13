@@ -58,7 +58,15 @@ network larger than the local cluster.
 **Use the right statistic.** With only 4 candidates, an even rotation gives 25% each and a
 weight-proportional draw still only reaches ~36–49% for the best one, so a cap on maximum
 share cannot separate them (and flips sign run to run). Use `RelayerSpread::imbalance` —
-busiest ÷ least-busy — which is ≈1.0 for a rotation and tracks the score ratio otherwise.
+busiest ÷ least-busy — which tracks the raw score ratio for an untempered draw and its
+compressed form once tempering is applied.
+
+**But be honest about its power.** Tempering does not aim at 1.0 — it compresses the ratio
+without reordering, so the target is a *smaller* ratio, not a flat one. Against pre-fix runs
+of 2.28 and 4.63 that leaves only a narrow band, and with `wanted = 2` the marginal
+distribution is flattened further by the draw itself. A measured value near 2.2 would be
+ambiguous rather than conclusive. Separating tempered from untempered selection cleanly
+needs more candidates than this cluster has.
 
 ## Scenarios
 
@@ -74,9 +82,17 @@ distinct first relayers, which the results below showed could not work (K is cap
 4 MiB pump. Vary the **edgli** pin.
 
 *Signal:* `imbalance`. A raw weighted draw tracks the edge-score ratio (measured 2.28–4.63
-under skew); tempering at γ=0.5 should roughly halve the exponent on that ratio. Note the
-threshold in the test still encodes the *rotation* target of ≈1.0 and so is stricter than
-tempering can achieve — it needs re-deriving against a tempered baseline.
+under skew); tempering at γ=0.5 halves the exponent on that ratio.
+
+*Threshold, re-derived for tempering* (was 1.5, the rotation target, which tempering cannot
+reach by design). RFC-0014 scores this profile 1.0 / 0.7 / 0.3 / 0.15, giving raw shares of
+46/33/14/7 — a ratio of 6.67. Tempered: 36/30/20/14, a ratio of 2.58. Calibrating the
+two-per-packet flattening from the pre-fix run (ideal 6.67 measured 4.63, ×0.69) predicts
+**≈1.79**, so the test now allows **2.1**.
+
+⚠️ **Predicted, not measured.** No tempered run has been recorded yet, and 2.1 sits only ~8%
+below the lowest pre-fix measurement. Re-derive from a measured tempered baseline before
+treating a pass as evidence.
 
 *Test:* `return_paths_should_spread_across_distinct_relayers`.
 

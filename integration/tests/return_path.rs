@@ -11,9 +11,14 @@
 //!
 //! 1. **Concentration.** Each return path was drawn with an independent weighted pick
 //!    from one cached candidate list, so the highest-scored relayers won nearly every
-//!    draw. The fix buckets candidates by first relayer, samples K distinct buckets
-//!    without replacement, and round-robins between them, capping any one relayer's
-//!    share at ~1/K (hoprnet#8331).
+//!    draw. The fix tempers the weights (`w' = w^0.5`) before sampling, which compresses
+//!    the ratio between candidates without reordering them, so a good relayer still wins
+//!    more often but a single one no longer owns the return stream (hoprnet#8331).
+//!
+//!    An earlier attempt bucketed candidates and rotated between K of them. That could
+//!    never work: `MAX_SURBS_IN_PACKET` is `PAYLOAD_SIZE / HoprSurb::SIZE` = 2, so K was
+//!    pinned at 2 whatever the config said, and the rotation measured 2.97 imbalance --
+//!    between the two pre-fix runs rather than below them.
 //! 2. **Staleness.** The exit drained its SURB buffer oldest-first, so a return path
 //!    that had already changed kept being used until a multi-megabyte backlog was
 //!    consumed (hoprnet#8328), and SURBs whose first hop was no longer payable were
@@ -59,8 +64,9 @@ const NODES: usize = 5;
 ///
 /// This is load-bearing, not flavour. On an unshaped local cluster every relayer probes at
 /// essentially the same latency, every path weight is equal, and a weighted-random draw is
-/// indistinguishable from a round-robin over enough samples — measured: the pre-fix stack
-/// produced the same 25/25/25/25 histogram as the fixed one. Concentration only appears
+/// indistinguishable from any other strategy over enough samples — measured: the pre-fix
+/// stack produced the same 25/25/25/25 histogram as the fixed one. Tempering is monotone,
+/// so with equal weights it is the identity. Concentration only appears
 /// when edge scores differ, which is also the condition that produced it in the incident.
 ///
 /// The values are chosen against RFC-0014's **step-function** latency score (summary
@@ -74,8 +80,9 @@ const NODES: usize = 5;
 /// | ≤200 ms | 0.30  |
 /// | >200 ms | 0.15  |
 ///
-/// One node per step gives a 6.7× spread between best and worst, so a weighted draw has
-/// something decisive to concentrate on while a round-robin ignores it. Node 0 is the
+/// One node per step gives a 6.7× spread between best and worst, which is what tempering
+/// has to compress: `6.7^0.5` is 2.58 before the two-per-packet draw flattens it further.
+/// Without a spread there is nothing to compress and nothing to measure. Node 0 is the
 /// fastest so that whichever node becomes the exit, the remaining relayers still span
 /// several steps.
 const LATENCY_PROFILE: &str = r#"
@@ -94,22 +101,33 @@ const PAYLOAD_BYTES: usize = 4 * 1024 * 1024;
 const PUMP_TIMEOUT: Duration = Duration::from_secs(600);
 
 /// Ignore relayers below this share of the stream: a stray packet from a probe or a
-/// single re-plan does not make a node part of the rotation.
+/// single re-plan does not make a node a genuine participant in the return stream.
 const ACTIVE_RELAYER_FLOOR: f64 = 0.05;
 
 /// Maximum ratio between the busiest and least-busy relayer.
 ///
-/// Round-robin over K buckets is uniform *by construction*, so the design target is 1.0;
-/// measured on an unshaped cluster it is 1.03. The allowance here covers sampling jitter
-/// and the odd re-plan.
+/// Selection is weighted-random with the weights tempered (`w' = w^0.5`). Tempering is
+/// monotone, so it never reorders candidates — it only compresses the ratio between them.
+/// The target is therefore *not* 1.0: a good relayer is still supposed to carry more than a
+/// bad one, just not by the raw score ratio.
 ///
-/// Derived from measurement, not from what makes the test green — see
-/// `docs/return-path-scenarios.md`. Under skewed edge scores the pre-fix stack measures
-/// 2.28 and 4.63, so this threshold separates the intended behaviour from the old one with
-/// room on both sides. Deliberately **not** a cap on the maximum *share*: with only four
-/// candidates a rotation gives 25% and a weighted draw still only reaches 36–49%, so a
-/// share cap cannot separate them and flips sign between runs.
-const MAX_RELAYER_IMBALANCE: f64 = 1.5;
+/// Derived for this profile rather than from what makes the test green. RFC-0014 scores the
+/// per-node latencies below as 1.0 / 0.7 / 0.3 / 0.15, which as raw weights would give
+/// shares of 46/33/14/7 — a ratio of 6.67. Tempered they become 36/30/20/14, a ratio of
+/// 2.58. Drawing two distinct relayers per packet flattens the marginal distribution
+/// further; calibrating that from the pre-fix run (ideal 6.67 measured 4.63, so ×0.69)
+/// predicts **≈1.79**. The threshold allows jitter above that while staying under the
+/// lowest pre-fix measurement.
+///
+/// **The margin is thin and the value is predicted, not yet measured.** Pre-fix runs
+/// measured 2.28 and 4.63 (`docs/return-path-scenarios.md`), so the separation from the old
+/// behaviour is only ~8% at the low end. With four candidates and `wanted = 2` this ratio
+/// is a weak discriminator, and a run that lands near 2.2 would be ambiguous rather than
+/// conclusive. Re-derive from a measured tempered run before trusting a pass.
+///
+/// Deliberately **not** a cap on the maximum *share*: with only four candidates the shares
+/// overlap between designs, so a share cap cannot separate them and flips sign between runs.
+const MAX_RELAYER_IMBALANCE: f64 = 2.1;
 
 /// Arrival floor once one of the return relayers is dead.
 ///
@@ -210,11 +228,11 @@ async fn return_paths_should_spread_across_distinct_relayers() -> anyhow::Result
     let imbalance = spread.imbalance(ACTIVE_RELAYER_FLOOR);
     anyhow::ensure!(
         imbalance <= MAX_RELAYER_IMBALANCE,
-        "return paths track edge score instead of rotating: busiest relayer carried \
-         {imbalance:.2}× the least-busy one (max {MAX_RELAYER_IMBALANCE:.2}). A round-robin \
-         over {} buckets is uniform by construction, so anything much above 1.0 means \
-         selection is still weight-proportional and a dead relay owns more than its 1/K \
-         share — {}",
+        "return paths track the raw edge score instead of the tempered one: busiest relayer \
+         carried {imbalance:.2}× the least-busy one (max {MAX_RELAYER_IMBALANCE:.2}) across \
+         {} candidates. Tempering compresses the score ratio without reordering, so a value \
+         up near the untempered ratio means the compression is not being applied and a \
+         single relay owns more of the return traffic than intended — {}",
         candidates.len(),
         spread.summary(),
     );
