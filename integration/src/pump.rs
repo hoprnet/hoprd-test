@@ -22,12 +22,44 @@ pub struct Transfer {
     pub mbps: f64,
     /// True only when the full payload returned intact (received == sent and bytes match).
     pub sha_ok: bool,
+    /// `(seconds since the transfer started, cumulative bytes received)`, one per read.
+    ///
+    /// Aggregate arrival cannot express *when* a transfer recovered — it folds recovery latency,
+    /// steady-state rate and timeout behaviour into a single number whose run-to-run spread is
+    /// wider than the effects worth measuring. The series keeps the shape so recovery can be read
+    /// off it directly.
+    pub progress: Vec<(f64, usize)>,
 }
 
 impl Transfer {
     /// Percent of sent bytes that returned.
     pub fn arrival_pct(&self) -> f64 {
         (self.received_bytes as f64) / (self.sent_bytes.max(1) as f64) * 100.0
+    }
+
+    /// Seconds until throughput first sustains `target_mbps` over a `window`.
+    ///
+    /// This is the statistic a recovery target is actually about: how long the transfer stayed
+    /// degraded, not how much arrived in total. `None` means it never got there.
+    pub fn time_to_sustain(&self, target_mbps: f64, window: Duration) -> Option<f64> {
+        let window_s = window.as_secs_f64();
+        let need = target_mbps * 1_000_000.0 * window_s;
+
+        // For each sample, look back one window; the first point where enough arrived within it is
+        // when the transfer was last still degraded.
+        let mut earliest = 0usize;
+        for (i, &(at, bytes)) in self.progress.iter().enumerate() {
+            while self.progress[earliest].0 < at - window_s {
+                earliest += 1;
+            }
+            if earliest == i {
+                continue;
+            }
+            if (bytes - self.progress[earliest].1) as f64 >= need {
+                return Some(at);
+            }
+        }
+        None
     }
 }
 
@@ -93,6 +125,7 @@ pub async fn pump_loopback(
 
     let mut received: Vec<u8> = Vec::with_capacity(total_bytes);
     let mut buf = vec![0u8; IO_CHUNK];
+    let mut progress: Vec<(f64, usize)> = Vec::new();
     let mut first_at: Option<std::time::Instant> = None;
     let mut last_at = std::time::Instant::now();
     let overall_deadline = std::time::Instant::now() + timeout;
@@ -108,9 +141,13 @@ pub async fn pump_loopback(
         match tokio::time::timeout(READ_IDLE_TIMEOUT, rx.read(&mut buf)).await {
             Ok(Ok(0)) => break, // EOF
             Ok(Ok(just_read)) => {
-                first_at.get_or_insert_with(std::time::Instant::now);
+                let started = *first_at.get_or_insert_with(std::time::Instant::now);
                 last_at = std::time::Instant::now();
                 received.extend_from_slice(&buf[..just_read]);
+                progress.push((
+                    last_at.saturating_duration_since(started).as_secs_f64(),
+                    received.len(),
+                ));
             }
             Ok(Err(e)) => {
                 sender.abort();
@@ -162,6 +199,7 @@ pub async fn pump_loopback(
         seconds,
         mbps,
         sha_ok,
+        progress,
     })
 }
 

@@ -137,6 +137,12 @@ const MAX_RELAYER_IMBALANCE: f64 = 2.1;
 /// collapsing; concentration puts this number near zero.
 const MIN_ARRIVAL_AFTER_KILL_PCT: f64 = 60.0;
 
+/// How long recovered throughput must hold before it counts as recovered.
+///
+/// Long enough that a single lucky burst does not read as recovery, short enough to resolve a
+/// target measured in seconds.
+const RECOVERY_SUSTAIN_WINDOW: Duration = Duration::from_secs(2);
+
 fn random_payload() -> Vec<u8> {
     let mut payload = vec![0u8; PAYLOAD_BYTES];
     rand::rng().fill(&mut payload[..]);
@@ -293,6 +299,22 @@ async fn session_should_survive_return_relayer_loss() -> anyhow::Result<()> {
     let session = env.open_unreliable_session_paths(0, 1).await?.0;
     let (after_kill, spread_after) =
         pump_and_measure(session, &candidates, &payload, "after-kill").await?;
+
+    // How long the stream stayed degraded, which is what a recovery target is actually about.
+    // Aggregate arrival cannot express it: it folds recovery latency, steady-state rate and
+    // timeout behaviour into one number whose run-to-run spread (measured: 19-45% on identical
+    // builds) is wider than the effects worth detecting.
+    let recovery_target_mbps = before_kill.mbps / 2.0;
+    match after_kill.time_to_sustain(recovery_target_mbps, RECOVERY_SUSTAIN_WINDOW) {
+        Some(secs) => tracing::info!(
+            "after-kill: recovered to {recovery_target_mbps:.2} MB/s (half of pre-kill) after \
+             {secs:.1}s, sustained over {RECOVERY_SUSTAIN_WINDOW:?}"
+        ),
+        None => tracing::info!(
+            "after-kill: never sustained {recovery_target_mbps:.2} MB/s (half of pre-kill) over \
+             {RECOVERY_SUSTAIN_WINDOW:?} within the pump window"
+        ),
+    }
 
     anyhow::ensure!(
         after_kill.arrival_pct() >= MIN_ARRIVAL_AFTER_KILL_PCT,
