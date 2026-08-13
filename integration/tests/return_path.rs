@@ -50,7 +50,7 @@ use std::time::Duration;
 use hoprd_integration_test::{
     HoprSession, IntegrationEnv,
     cluster::{NodeInfo, request_cluster_size, request_latency_profile},
-    pump::{Transfer, pump_loopback},
+    pump::{Transfer, pump_halves},
     relayers::{self, RelayerSpread},
 };
 use rand::RngExt as _;
@@ -187,14 +187,17 @@ async fn setup_return_path_env() -> anyhow::Result<(IntegrationEnv, HoprSession,
 }
 
 /// Pump `payload` while sampling the forwarded-packet counters either side of it.
+///
+/// Takes the session halves by reference so a scenario can pump the *same* session more than once.
 async fn pump_and_measure(
-    session: HoprSession,
+    rx: &mut tokio::io::ReadHalf<HoprSession>,
+    tx: &mut tokio::io::WriteHalf<HoprSession>,
     candidates: &[NodeInfo],
     payload: &[u8],
     label: &str,
 ) -> anyhow::Result<(Transfer, RelayerSpread)> {
     let before = relayers::sample(candidates).await;
-    let transfer = pump_loopback(session, payload, label, PUMP_TIMEOUT).await?;
+    let transfer = pump_halves(rx, tx, payload, label, PUMP_TIMEOUT).await?;
     let after = relayers::sample(candidates).await;
     let spread = relayers::spread(&before, &after);
     tracing::info!(
@@ -220,7 +223,8 @@ async fn return_paths_should_spread_across_distinct_relayers() -> anyhow::Result
     let (_env, session, candidates) = setup_return_path_env().await?;
     let payload = random_payload();
 
-    let (transfer, spread) = pump_and_measure(session, &candidates, &payload, "spread").await?;
+    let (mut rx, mut tx) = tokio::io::split(session);
+    let (transfer, spread) = pump_and_measure(&mut rx, &mut tx, &candidates, &payload, "spread").await?;
 
     anyhow::ensure!(
         spread.total > 0,
@@ -264,12 +268,19 @@ async fn return_paths_should_spread_across_distinct_relayers() -> anyhow::Result
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 #[ignore = "requires hoprd/hoprd-localcluster binaries + a chain"]
 async fn session_should_survive_return_relayer_loss() -> anyhow::Result<()> {
-    let (env, session, candidates) = setup_return_path_env().await?;
+    // Held for the cluster lifetime; the scenario itself never opens a second session.
+    let (_env, session, candidates) = setup_return_path_env().await?;
     let payload = random_payload();
+
+    // Split once and keep the halves: both pumps run over this one session, so what is measured
+    // is the *established* stream surviving. A replacement session opened after the kill would
+    // instead measure cold-start path selection -- an easier problem, since a fresh session never
+    // minted a SURB through the dead relayer.
+    let (mut rx, mut tx) = tokio::io::split(session);
 
     // First pump establishes who is actually carrying replies.
     let (before_kill, spread) =
-        pump_and_measure(session, &candidates, &payload, "before-kill").await?;
+        pump_and_measure(&mut rx, &mut tx, &candidates, &payload, "before-kill").await?;
     anyhow::ensure!(
         before_kill.arrival_pct() > 50.0,
         "baseline pump only returned {:.1}% — the path was already broken before the \
@@ -291,25 +302,22 @@ async fn session_should_survive_return_relayer_loss() -> anyhow::Result<()> {
     );
     victim.kill()?;
 
-    // How long the network is given to notice, before the replacement session mints its SURBs.
-    // Parameterised because recovery appears to race path re-scoring: probing runs every 5s and the
-    // path cache is 60s TTL / 30s refresh, so a session established too soon after the kill builds
-    // its return paths from candidates that still include the dead relayer.
+    // How long the network is given to notice before the second pump starts. Parameterised because
+    // recovery races path re-scoring: probing runs every 5s and the path cache is 60s TTL / 30s
+    // refresh. Zero is the case that matters -- the session must ride through the detection gap.
     let settle = std::env::var("HOPRD_KILL_SETTLE_SECS")
         .ok()
         .and_then(|s| s.parse::<u64>().ok())
         .map(Duration::from_secs)
         .unwrap_or(Duration::ZERO);
     if !settle.is_zero() {
-        tracing::info!(?settle, "waiting before opening the replacement session");
+        tracing::info!(?settle, "waiting before the second pump");
         tokio::time::sleep(settle).await;
     }
 
-    // Same session, same everything — only the relay is gone. Nothing here waits for
-    // probing to notice: the point is that the stream survives the detection gap.
-    let session = env.open_unreliable_session_paths(0, 1).await?.0;
+    // Same session, same halves, same everything — only the relay is gone.
     let (after_kill, spread_after) =
-        pump_and_measure(session, &candidates, &payload, "after-kill").await?;
+        pump_and_measure(&mut rx, &mut tx, &candidates, &payload, "after-kill").await?;
 
     // How long the stream stayed degraded, which is what a recovery target is actually about.
     // Aggregate arrival cannot express it: it folds recovery latency, steady-state rate and

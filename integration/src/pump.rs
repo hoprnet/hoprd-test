@@ -90,13 +90,8 @@ pub fn sha256_digest(data: &[u8]) -> Vec<u8> {
 /// Pump `payload` through `session` to the exit-node loopback and measure return
 /// goodput + loss.
 ///
-/// The writer pushes the payload as the session sink accepts it (bounded-buffer
-/// backpressure + the session's SURB egress cap pace it). The reader accumulates
-/// returned bytes until it has the full payload back or the return stream goes idle
-/// (UDP loss means the tail may never arrive). Goodput = received_bytes /
-/// (first→last byte). `sha_ok` is only asserted on a lossless round-trip.
-///
-/// Does NOT `shutdown()` the write half: HOPR sessions have no TCP half-close.
+/// Consumes the session. Use [`pump_halves`] when the same session has to survive more than one
+/// pump.
 pub async fn pump_loopback(
     session: HoprSession,
     payload: &[u8],
@@ -104,16 +99,44 @@ pub async fn pump_loopback(
     timeout: Duration,
 ) -> anyhow::Result<Transfer> {
     let (mut rx, mut tx) = tokio::io::split(session);
-    let to_send = payload.to_vec();
+    pump_halves(&mut rx, &mut tx, payload, label, timeout).await
+}
+
+/// Pump `payload` to the exit-node loopback over *borrowed* session halves and measure return
+/// goodput + loss.
+///
+/// The writer pushes the payload as the session sink accepts it (bounded-buffer
+/// backpressure + the session's SURB egress cap pace it). The reader accumulates
+/// returned bytes until it has the full payload back or the return stream goes idle
+/// (UDP loss means the tail may never arrive). Goodput = received_bytes /
+/// (first→last byte). `sha_ok` is only asserted on a lossless round-trip.
+///
+/// Does NOT `shutdown()` the write half: HOPR sessions have no TCP half-close.
+///
+/// Borrowing rather than consuming is what lets a scenario measure the *same* session before and
+/// after a fault. Opening a replacement session instead measures cold-start path selection, which
+/// is a different question and — for a return relayer that has just died — a much easier one: the
+/// new session never minted a SURB through the dead node.
+///
+/// The writer runs concurrently with the reader instead of on a spawned task, because a spawned
+/// task owns its half and an aborted one drops it, so `unsplit` could not reliably recover the
+/// session afterwards.
+pub async fn pump_halves(
+    rx: &mut tokio::io::ReadHalf<HoprSession>,
+    tx: &mut tokio::io::WriteHalf<HoprSession>,
+    payload: &[u8],
+    label: &str,
+    timeout: Duration,
+) -> anyhow::Result<Transfer> {
     let expected = sha256_digest(payload);
     let total_bytes = payload.len();
-
     let pace = send_pace_per_chunk();
-    let sender = tokio::spawn(async move {
+
+    let send = async {
         let mut offset = 0;
-        while offset < to_send.len() {
-            let end = (offset + IO_CHUNK).min(to_send.len());
-            tx.write_all(&to_send[offset..end]).await?;
+        while offset < payload.len() {
+            let end = (offset + IO_CHUNK).min(payload.len());
+            tx.write_all(&payload[offset..end]).await?;
             if let Some(d) = pace {
                 tokio::time::sleep(d).await;
             }
@@ -121,7 +144,7 @@ pub async fn pump_loopback(
         }
         tx.flush().await?;
         Ok::<_, std::io::Error>(())
-    });
+    };
 
     let mut received: Vec<u8> = Vec::with_capacity(total_bytes);
     let mut buf = vec![0u8; IO_CHUNK];
@@ -130,52 +153,49 @@ pub async fn pump_loopback(
     let mut last_at = std::time::Instant::now();
     let overall_deadline = std::time::Instant::now() + timeout;
 
-    while received.len() < total_bytes {
-        if std::time::Instant::now() >= overall_deadline {
-            tracing::warn!(
-                "{label}: overall timeout, received {}/{total_bytes} B",
-                received.len()
-            );
-            break;
-        }
-        match tokio::time::timeout(READ_IDLE_TIMEOUT, rx.read(&mut buf)).await {
-            Ok(Ok(0)) => break, // EOF
-            Ok(Ok(just_read)) => {
-                let started = *first_at.get_or_insert_with(std::time::Instant::now);
-                last_at = std::time::Instant::now();
-                received.extend_from_slice(&buf[..just_read]);
-                progress.push((
-                    last_at.saturating_duration_since(started).as_secs_f64(),
-                    received.len(),
-                ));
+    let recv = async {
+        while received.len() < total_bytes {
+            if std::time::Instant::now() >= overall_deadline {
+                tracing::warn!(
+                    "{label}: overall timeout, received {}/{total_bytes} B",
+                    received.len()
+                );
+                break;
             }
-            Ok(Err(e)) => {
-                sender.abort();
-                return Err(anyhow::anyhow!("{label}: read error: {e}"));
-            }
-            Err(_) => {
-                if !received.is_empty() {
-                    tracing::info!(
-                        "{label}: return idle {READ_IDLE_TIMEOUT:?}, stopping at {}/{total_bytes} B",
-                        received.len()
-                    );
-                    break;
+            match tokio::time::timeout(READ_IDLE_TIMEOUT, rx.read(&mut buf)).await {
+                Ok(Ok(0)) => break, // EOF
+                Ok(Ok(just_read)) => {
+                    let started = *first_at.get_or_insert_with(std::time::Instant::now);
+                    last_at = std::time::Instant::now();
+                    received.extend_from_slice(&buf[..just_read]);
+                    progress.push((
+                        last_at.saturating_duration_since(started).as_secs_f64(),
+                        received.len(),
+                    ));
+                }
+                Ok(Err(e)) => return Err(anyhow::anyhow!("{label}: read error: {e}")),
+                Err(_) => {
+                    if !received.is_empty() {
+                        tracing::info!(
+                            "{label}: return idle {READ_IDLE_TIMEOUT:?}, stopping at {}/{total_bytes} B",
+                            received.len()
+                        );
+                        break;
+                    }
                 }
             }
         }
-    }
+        Ok(())
+    };
 
-    let sender_abort = sender.abort_handle();
-    match tokio::time::timeout(Duration::from_secs(10), sender).await {
-        Ok(Ok(Ok(()))) => {}
-        Ok(Ok(Err(e))) => tracing::warn!("{label}: sender error: {e}"),
-        Ok(Err(e)) => tracing::warn!("{label}: sender panicked: {e}"),
-        Err(_) => {
-            // Dropping the timed-out JoinHandle only detaches the task; abort it so
-            // the writer can't keep running into the next scenario.
-            sender_abort.abort();
-            tracing::warn!("{label}: sender did not finish within 10s; aborted");
-        }
+    // The reader owns the stopping condition; the writer is bounded only so a wedged sink cannot
+    // outlive the scenario. Both borrow, so neither can be aborted out from under the session.
+    let (sent, read_outcome) = tokio::join!(tokio::time::timeout(timeout, send), recv);
+    read_outcome?;
+    match sent {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => tracing::warn!("{label}: sender error: {e}"),
+        Err(_) => tracing::warn!("{label}: sender did not finish within {timeout:?}"),
     }
 
     let first_at = first_at.unwrap_or(last_at);
