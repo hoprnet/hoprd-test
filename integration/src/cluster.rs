@@ -460,10 +460,22 @@ async fn spawn_managed() -> anyhow::Result<ClusterHandle> {
     };
 
     tracing::info!(blokli_url = %summary.blokli_url, "cluster up");
+
+    // Node logs live inside the temp dir, which is removed when the handle drops -- so by the time
+    // a failure is worth investigating, the only per-node evidence is already gone. Leaking the
+    // handle keeps the whole cluster directory for post-mortem.
+    let tempdir = if std::env::var_os("HOPRD_KEEP_ARTIFACTS").is_some() {
+        tracing::info!(path = %tempdir.path().display(), "keeping cluster artifacts");
+        std::mem::forget(tempdir);
+        None
+    } else {
+        Some(tempdir)
+    };
+
     Ok(ClusterHandle {
         child: Some(child),
         summary,
-        _tempdir: Some(tempdir),
+        _tempdir: tempdir,
     })
 }
 
