@@ -180,7 +180,7 @@ killed and relaunched in two minutes rather than at the fifteen-minute mark.
 
 ## What the survival scenario measures
 
-**warm up (2 MB, phase tag 1) → drain to quiet → kill → settle 4 s → offer phase tag 2 at half the
+**warm up (2 MB, phase tag 1) → drain to quiet → kill → settle 4 s → offer phase tag 2 at the
 measured baseline for 60 s.**
 
 Each element is load-bearing, and each replaced something that made an earlier run unmeasurable:
@@ -193,12 +193,19 @@ Each element is load-bearing, and each replaced something that made an earlier r
 | paced load for 60 s | the payload being fully committed before recovery can happen |
 
 The session is **unreliable** — there is no retransmission — so bytes lost during the outage never
-arrive and 100 % arrival is unreachable by construction. The headline is therefore *when the
-delivered rate returns*, never total arrival.
+arrive and 100 % arrival is unreachable by construction.
 
 ## Acceptance criterion
 
-The survival phase reaches 50 % of the measured baseline rate and **holds it to the end of the
-pump**, having never gone quiet for longer than the deadline. Boundary **20 s**, design aim **15 s**,
-both timed **from the kill** and therefore inclusive of the 4 s settle — so the mechanism has
-roughly 16 s of offered load in which to demonstrate recovery.
+**At least 90 % of the payload offered after the fault must arrive** (`MIN_SURVIVAL_ARRIVAL_PCT`),
+counting attributed bytes only, and the leftover from earlier phases must stay under
+`MAX_LEFTOVER_BYTES` — above it the drain failed and the phases are mixed, so the run says nothing.
+
+Everything else the run prints is a **diagnostic, not a gate**: `time_to_sustain` against the 20 s
+boundary and 15 s aim, steady-state throughput, longest stall and the inter-arrival quantiles are
+computed and logged, and none of them fails the test. Judging a run against a sustained-throughput
+bar — as an earlier version of this document did — reports valid runs as failures and vice versa.
+
+The survival phase offers at the measured baseline (`SURVIVAL_LOAD_FRACTION` = 1.0) while recovery
+is measured against half of it (`RECOVERY_FRACTION` = 0.5), so the target is reachable rather than
+equal to the offer.

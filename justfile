@@ -90,7 +90,7 @@ return-path *scenarios: build build-chain
     # Named explicitly rather than left to the default filter: run-binchain.sh gives each
     # scenario a fresh chain, and the kill scenario leaves a dead node behind it.
     SCENARIOS='{{scenarios}}'
-    [ -n "${SCENARIOS}" ] || SCENARIOS='return_paths_should_spread_across_distinct_relayers session_should_survive_return_relayer_loss'
+    [ -n "${SCENARIOS}" ] || SCENARIOS='return_paths_should_spread_across_distinct_relayers session_should_survive_return_relayer_loss a_symmetric_session_should_survive_relayer_loss'
     export SCENARIOS TEST_TARGET=return_path
     HOPRNET_SHELL='{{hoprnet}}' bash scripts/integration/run-binchain.sh
 

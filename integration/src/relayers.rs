@@ -137,17 +137,28 @@ pub async fn sample(nodes: &[NodeInfo]) -> ForwardedSample {
 /// A node missing from `after` (killed mid-run) contributes whatever it had already
 /// forwarded at its last successful read — its share up to that point is real traffic
 /// and must not be silently dropped.
+///
+/// A node missing from `before` is a different matter and is excluded. `sample` omits a node
+/// whose scrape failed, so an address that appears only in `after` has no start value —
+/// counting it would treat the node's *lifetime* counter as traffic from this pump alone. That
+/// inflates the histogram and, because the victim is chosen as the busiest relayer, can name a
+/// node that carried almost nothing.
 pub fn spread(before: &ForwardedSample, after: &ForwardedSample) -> RelayerSpread {
+    for addr in after.0.keys() {
+        if !before.0.contains_key(addr) {
+            tracing::warn!(
+                node = %addr,
+                "absent from the baseline scrape; excluded from the relayer spread"
+            );
+        }
+    }
+
     let mut per_relayer: Vec<(Address, u64)> = before
         .0
-        .keys()
-        .chain(after.0.keys())
-        .collect::<std::collections::HashSet<_>>()
-        .into_iter()
-        .map(|addr| {
-            let start = before.0.get(addr).copied().unwrap_or(0);
-            let end = after.0.get(addr).copied().unwrap_or(start);
-            (*addr, end.saturating_sub(start))
+        .iter()
+        .map(|(addr, start)| {
+            let end = after.0.get(addr).copied().unwrap_or(*start);
+            (*addr, end.saturating_sub(*start))
         })
         .filter(|(_, delta)| *delta > 0)
         .collect();
@@ -210,6 +221,24 @@ hopr_packets_forwarded_bytes 99999
 
     fn sample_of(entries: &[(Address, u64)]) -> ForwardedSample {
         ForwardedSample(entries.iter().copied().collect())
+    }
+
+    /// Regression: a node whose baseline scrape failed appears only in `after`, and its
+    /// lifetime counter was being read as traffic from this pump — enough to make it look like
+    /// the busiest relayer and get it chosen as the kill victim.
+    #[test]
+    fn spread_should_exclude_a_node_absent_from_the_baseline() {
+        let before = sample_of(&[(addr(1), 100), (addr(2), 100)]);
+        let after = sample_of(&[(addr(1), 150), (addr(2), 120), (addr(3), 9_000_000)]);
+
+        let spread = spread(&before, &after);
+
+        assert_eq!(
+            vec![(addr(1), 50), (addr(2), 20)],
+            spread.per_relayer,
+            "addr(3) has no baseline, so its lifetime counter is not this pump's traffic"
+        );
+        assert_eq!(70, spread.total);
     }
 
     #[test]

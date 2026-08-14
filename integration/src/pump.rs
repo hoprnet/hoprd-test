@@ -344,6 +344,13 @@ pub fn pace_for_rate(mbps: f64) -> Option<Duration> {
 /// Between two measured phases on one session this is what stops the first phase's tail being
 /// counted as the second phase's arrival. The returned byte count is itself a finding: a large
 /// number means the previous phase had not actually finished when it was declared complete.
+/// Upper bound on a single drain, however busy the stream stays.
+///
+/// Without it the loop only ends on quiet or end-of-stream, so a return stream that keeps
+/// delivering holds the caller indefinitely -- and the scenario has no other guard before its
+/// next phase, so the run would hang rather than fail.
+const DRAIN_MAX_TOTAL: Duration = Duration::from_secs(60);
+
 pub async fn drain_until_quiet(
     rx: &mut tokio::io::ReadHalf<HoprSession>,
     quiet_for: Duration,
@@ -351,15 +358,30 @@ pub async fn drain_until_quiet(
 ) -> usize {
     let mut buf = vec![0u8; IO_CHUNK];
     let mut discarded = 0usize;
+    let deadline = tokio::time::Instant::now() + DRAIN_MAX_TOTAL;
+    let mut capped = false;
+
     while let Ok(Ok(read)) = tokio::time::timeout(quiet_for, rx.read(&mut buf)).await {
         if read == 0 {
             break;
         }
         discarded += read;
+        if tokio::time::Instant::now() >= deadline {
+            capped = true;
+            break;
+        }
     }
-    tracing::info!(
-        "{label}: drained {discarded} B of leftover return traffic before the next phase"
-    );
+
+    if capped {
+        tracing::warn!(
+            "{label}: drain hit the {DRAIN_MAX_TOTAL:?} cap after {discarded} B; the stream never \
+             went quiet, so the next phase may still see earlier-phase traffic"
+        );
+    } else {
+        tracing::info!(
+            "{label}: drained {discarded} B of leftover return traffic before the next phase"
+        );
+    }
     discarded
 }
 

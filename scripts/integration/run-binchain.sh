@@ -28,7 +28,9 @@ export HOPRD_PUMP_MBPS="${HOPRD_PUMP_MBPS:-0.5}"
 
 SCENARIOS="${SCENARIOS:-zero_hop one_hop}"
 TEST_TARGET="${TEST_TARGET:-integration}"
-TEST_ARGS="${TEST_ARGS:-}"
+# Split once into an array. An unquoted ${TEST_ARGS} would be pathname-expanded, so a value
+# containing `*` would reach libtest as a list of repository filenames.
+read -r -a TEST_ARGS_ARR <<< "${TEST_ARGS:-}"
 BLOKLI_API_PORT="${BLOKLI_API_PORT:-8080}"
 
 CHAIN_PID=""
@@ -75,7 +77,7 @@ for scenario in ${SCENARIOS}; do
   start_chain
   if ! nix develop "${HOPRNET_SHELL:-github:hoprnet/hoprnet}" -c \
     cargo test --manifest-path integration/Cargo.toml --test "${TEST_TARGET}" "${scenario}" \
-    --no-fail-fast -- --include-ignored --test-threads=1 ${TEST_ARGS}; then
+    --no-fail-fast -- --include-ignored --test-threads=1 "${TEST_ARGS_ARR[@]}"; then
     rc=1
   fi
   stop_chain

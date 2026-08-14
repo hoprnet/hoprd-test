@@ -23,6 +23,12 @@ use crate::Address;
 pub const DEFAULT_CLUSTER_SIZE: usize = 3;
 /// `hoprd-localcluster` only carries this many baked-in node secrets.
 pub const MAX_CLUSTER_SIZE: usize = 5;
+/// Smallest cluster `IntegrationEnv` can actually bring up.
+///
+/// `boot_edgli` waits for at least two connected peers, so a one-node cluster is accepted by
+/// the size knob and then times out during setup -- a configuration that looks supported and
+/// is not. Two is the smallest that reaches readiness.
+pub const MIN_CLUSTER_SIZE: usize = 2;
 
 static REQUESTED_SIZE: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
 
@@ -33,7 +39,7 @@ static REQUESTED_SIZE: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
 /// read from several places during bring-up and readiness polling, and must not change
 /// underneath them. Returns the size actually in effect.
 pub fn request_cluster_size(n: usize) -> usize {
-    let clamped = n.clamp(1, MAX_CLUSTER_SIZE);
+    let clamped = n.clamp(MIN_CLUSTER_SIZE, MAX_CLUSTER_SIZE);
     let effective = *REQUESTED_SIZE.get_or_init(|| clamped);
     if effective != clamped {
         tracing::warn!(
@@ -46,14 +52,15 @@ pub fn request_cluster_size(n: usize) -> usize {
 }
 
 /// Number of `hoprd` nodes to run: [`request_cluster_size`] if called, else
-/// `HOPRD_CLUSTER_SIZE`, else [`DEFAULT_CLUSTER_SIZE`] — clamped to `1..=MAX_CLUSTER_SIZE`.
+/// `HOPRD_CLUSTER_SIZE`, else [`DEFAULT_CLUSTER_SIZE`] — clamped to
+/// `MIN_CLUSTER_SIZE..=MAX_CLUSTER_SIZE`.
 pub fn cluster_size() -> usize {
     REQUESTED_SIZE.get().copied().unwrap_or_else(|| {
         std::env::var("HOPRD_CLUSTER_SIZE")
             .ok()
             .and_then(|s| s.parse::<usize>().ok())
             .unwrap_or(DEFAULT_CLUSTER_SIZE)
-            .clamp(1, MAX_CLUSTER_SIZE)
+            .clamp(MIN_CLUSTER_SIZE, MAX_CLUSTER_SIZE)
     })
 }
 
@@ -570,6 +577,14 @@ fn auth_header() -> String {
     format!("Bearer {API_TOKEN}")
 }
 
+/// Authorization header for one node, or `None` when it runs unauthenticated.
+///
+/// `NodeInfo.api_token` is optional and need not match the cluster-wide token, so a request
+/// built from [`auth_header`] can be rejected by a node that has its own -- or that has none.
+fn node_auth_header(node: &NodeInfo) -> Option<String> {
+    node.api_token.as_ref().map(|t| format!("Bearer {t}"))
+}
+
 async fn poll_cluster_until<Fut>(
     timeout: Duration,
     sleep: Duration,
@@ -694,16 +709,14 @@ pub async fn log_channel_stakes(summary: &ClusterSummary) {
     let client = node_http_client();
     for (id, node) in summary.nodes.iter().enumerate() {
         let stakes = async {
-            let body: serde_json::Value = client
-                .get(format!(
-                    "{}/api/v4/channels?includingClosed=false",
-                    node.api_url
-                ))
-                .header("Authorization", auth_header())
-                .send()
-                .await?
-                .json()
-                .await?;
+            let mut req = client.get(format!(
+                "{}/api/v4/channels?includingClosed=false",
+                node.api_url
+            ));
+            if let Some(h) = node_auth_header(node) {
+                req = req.header("Authorization", h);
+            }
+            let body: serde_json::Value = req.send().await?.json().await?;
             anyhow::Ok(
                 body["outgoing"]
                     .as_array()
