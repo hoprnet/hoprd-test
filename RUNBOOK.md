@@ -53,6 +53,18 @@ git commit -am "chore(deps): bump hopr-lib to $TIP" && git push
 `nix develop github:hoprnet/hoprnet -c` for **every** build: it is the only shell that exports
 `tokio_unstable`. The edge-client and hoprd-test shells do not.
 
+**It also overwrites that repo's git hooks with hoprnet's.** Entering the hoprnet shell inside the
+edge-client, hoprd or hoprd-test worktree reinstalls hoprnet's `.pre-commit-config.yaml` into
+`<repo>/.git/hooks`, and the next commit there fails on a hoprnet-only hook (`METRICS.md must stay
+in sync with code` looks for a script that does not exist outside hoprnet). Re-enter the worktree's
+own directory so its `direnv` reinstalls the right hooks before committing:
+
+```sh
+cd <that-worktree> && direnv exec . true && git commit ...
+```
+
+Do not reach for `--no-verify`: the hooks that belong to that repo have not run either.
+
 ### 4. Point the harness at both
 
 ```sh
