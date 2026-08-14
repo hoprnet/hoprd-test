@@ -243,7 +243,39 @@ pub async fn pump_loopback(
     timeout: Duration,
 ) -> anyhow::Result<Transfer> {
     let (mut rx, mut tx) = tokio::io::split(session);
-    pump_halves(&mut rx, &mut tx, payload, label, timeout).await
+    pump_halves(&mut rx, &mut tx, payload, label, timeout, None).await
+}
+
+/// Per-chunk delay that offers `payload_bytes` at `mbps` MB/s.
+///
+/// Used to make a phase's offered load *last*. A payload handed to the session as fast as it will
+/// take it is fully committed within seconds, so anything measured afterwards is a buffer draining
+/// rather than a session working — and a recovery that takes longer than that has nothing left to
+/// demonstrate itself on.
+pub fn pace_for_rate(mbps: f64) -> Option<Duration> {
+    (mbps > 0.0).then(|| Duration::from_secs_f64(IO_CHUNK as f64 / (mbps * 1_000_000.0)))
+}
+
+/// Reads and discards whatever is still arriving until the stream is quiet for `quiet_for`.
+///
+/// Between two measured phases on one session this is what stops the first phase's tail being
+/// counted as the second phase's arrival. The returned byte count is itself a finding: a large
+/// number means the previous phase had not actually finished when it was declared complete.
+pub async fn drain_until_quiet(
+    rx: &mut tokio::io::ReadHalf<HoprSession>,
+    quiet_for: Duration,
+    label: &str,
+) -> usize {
+    let mut buf = vec![0u8; IO_CHUNK];
+    let mut discarded = 0usize;
+    while let Ok(Ok(read)) = tokio::time::timeout(quiet_for, rx.read(&mut buf)).await {
+        if read == 0 {
+            break;
+        }
+        discarded += read;
+    }
+    tracing::info!("{label}: drained {discarded} B of leftover return traffic before the next phase");
+    discarded
 }
 
 /// Pump `payload` to the exit-node loopback over *borrowed* session halves and measure return
@@ -271,10 +303,11 @@ pub async fn pump_halves(
     payload: &[u8],
     label: &str,
     timeout: Duration,
+    pace: Option<Duration>,
 ) -> anyhow::Result<Transfer> {
     let expected = sha256_digest(payload);
     let total_bytes = payload.len();
-    let pace = send_pace_per_chunk();
+    let pace = pace.or_else(send_pace_per_chunk);
 
     let send = async {
         let mut offset = 0;

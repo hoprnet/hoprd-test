@@ -50,7 +50,7 @@ use std::time::Duration;
 use hoprd_integration_test::{
     HoprSession, IntegrationEnv,
     cluster::{NodeInfo, request_cluster_size, request_latency_profile},
-    pump::{Transfer, pump_halves},
+    pump::{Transfer, drain_until_quiet, pace_for_rate, pump_halves},
     relayers::{self, RelayerSpread},
 };
 use rand::RngExt as _;
@@ -94,9 +94,58 @@ per_node:
   4: "260ms"
 "#;
 
-/// Payload per pump. Smaller than the throughput tests' 10 MiB — two pumps run per
-/// scenario, and a few thousand packets already make the histogram unambiguous.
-const PAYLOAD_BYTES: usize = 4 * 1024 * 1024;
+/// Warm-up payload: enough packets to make the relayer histogram unambiguous, no more.
+///
+/// Its only jobs are to establish the baseline rate and to show who is carrying replies. Keeping it
+/// small also keeps the session quiet sooner, so the kill lands on an idle session rather than on
+/// one still draining.
+const WARMUP_BYTES: usize = 2 * 1024 * 1024;
+
+/// How long the survival phase must keep *offering* data after the kill.
+///
+/// This is the defect that made an earlier version of this test unmeasurable. The session is
+/// unreliable -- there is no retransmission -- so bytes lost during the outage never arrive, and a
+/// payload handed to the session as fast as it will take it is fully committed within seconds. The
+/// entire result was therefore decided inside the pre-detection window, and everything after it was
+/// a buffer draining. Recovery can only be observed if load is still being offered when it happens,
+/// so the survival phase is paced to span several times the deadline.
+const SURVIVAL_LOAD_DURATION: Duration = Duration::from_secs(60);
+
+/// Fraction of the measured baseline rate at which the survival phase offers data.
+///
+/// Below the recovery target, so reaching the target is a statement about the session rather than
+/// about how hard the test is pushing.
+const SURVIVAL_LOAD_FRACTION: f64 = 0.5;
+
+/// How long to wait after the kill before offering any new data.
+///
+/// Not zero, deliberately. At zero the survival phase's opening seconds race packets that were
+/// already in flight when the relayer died, so an early arrival cannot be attributed to a recovered
+/// session rather than to one that had not yet noticed. A few seconds of quiet means every byte
+/// measured afterwards was offered to a network that has already lost the relayer.
+///
+/// Recovery is timed from the first byte *offered*, not from the kill: with no load in flight there
+/// is nothing for the session to recover on, so charging the mechanism for this window would
+/// measure the test's own pause. The settle is reported alongside the result so the two can always
+/// be added back together.
+const KILL_SETTLE: Duration = Duration::from_secs(4);
+
+/// [`KILL_SETTLE`], overridable for a one-off experiment via `HOPRD_KILL_SETTLE_SECS`.
+fn kill_settle() -> Duration {
+    std::env::var("HOPRD_KILL_SETTLE_SECS")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .map_or(KILL_SETTLE, Duration::from_secs)
+}
+
+/// How long the return stream must be silent before the warm-up counts as finished.
+const DRAIN_QUIET: Duration = Duration::from_secs(3);
+
+/// Leftover warm-up bytes above which the phases cannot be told apart.
+///
+/// Anything still arriving from the warm-up would be counted as survival-phase arrival, which is
+/// exactly the contamination that makes a dead stream look like a recovering one.
+const MAX_LEFTOVER_BYTES: usize = 64 * 1024;
 
 const PUMP_TIMEOUT: Duration = Duration::from_secs(600);
 
@@ -166,8 +215,12 @@ const RECOVERY_AIM: Duration = Duration::from_secs(15);
 /// alone and reported a recovery that never happened.
 const RECOVERY_SUSTAIN_WINDOW: Duration = Duration::from_secs(3);
 
-fn random_payload() -> Vec<u8> {
-    let mut payload = vec![0u8; PAYLOAD_BYTES];
+/// A fresh random payload of `bytes`.
+///
+/// Each phase gets its own: sharing one payload across a kill makes it impossible to argue that
+/// what came back in the second phase was not still echoing from the first.
+fn random_payload(bytes: usize) -> Vec<u8> {
+    let mut payload = vec![0u8; bytes];
     rand::rng().fill(&mut payload[..]);
     payload
 }
@@ -223,9 +276,10 @@ async fn pump_and_measure(
     candidates: &[NodeInfo],
     payload: &[u8],
     label: &str,
+    pace: Option<Duration>,
 ) -> anyhow::Result<(Transfer, RelayerSpread)> {
     let before = relayers::sample(candidates).await;
-    let transfer = pump_halves(rx, tx, payload, label, PUMP_TIMEOUT).await?;
+    let transfer = pump_halves(rx, tx, payload, label, PUMP_TIMEOUT, pace).await?;
     let after = relayers::sample(candidates).await;
     let spread = relayers::spread(&before, &after);
     tracing::info!(
@@ -249,10 +303,11 @@ async fn pump_and_measure(
 #[ignore = "requires hoprd/hoprd-localcluster binaries + a chain"]
 async fn return_paths_should_spread_across_distinct_relayers() -> anyhow::Result<()> {
     let (_env, session, candidates) = setup_return_path_env().await?;
-    let payload = random_payload();
+    let payload = random_payload(WARMUP_BYTES);
 
     let (mut rx, mut tx) = tokio::io::split(session);
-    let (transfer, spread) = pump_and_measure(&mut rx, &mut tx, &candidates, &payload, "spread").await?;
+    let (transfer, spread) =
+        pump_and_measure(&mut rx, &mut tx, &candidates, &payload, "spread", None).await?;
 
     anyhow::ensure!(
         spread.total > 0,
@@ -298,22 +353,32 @@ async fn return_paths_should_spread_across_distinct_relayers() -> anyhow::Result
 async fn session_should_survive_return_relayer_loss() -> anyhow::Result<()> {
     // Held for the cluster lifetime; the scenario itself never opens a second session.
     let (_env, session, candidates) = setup_return_path_env().await?;
-    let payload = random_payload();
 
-    // Split once and keep the halves: both pumps run over this one session, so what is measured
+    // Split once and keep the halves: both phases run over this one session, so what is measured
     // is the *established* stream surviving. A replacement session opened after the kill would
     // instead measure cold-start path selection -- an easier problem, since a fresh session never
     // minted a SURB through the dead relayer.
     let (mut rx, mut tx) = tokio::io::split(session);
 
-    // First pump establishes who is actually carrying replies.
+    // Phase 1 -- warm up: establish the baseline rate and who is actually carrying replies.
+    let warmup_payload = random_payload(WARMUP_BYTES);
     let (before_kill, spread) =
-        pump_and_measure(&mut rx, &mut tx, &candidates, &payload, "before-kill").await?;
+        pump_and_measure(&mut rx, &mut tx, &candidates, &warmup_payload, "before-kill", None).await?;
     anyhow::ensure!(
         before_kill.arrival_pct() > 50.0,
         "baseline pump only returned {:.1}% — the path was already broken before the \
          kill, so the result would say nothing about resilience",
         before_kill.arrival_pct(),
+    );
+
+    // Phase 2 -- quiesce: everything still in flight from the warm-up has to land before the kill,
+    // or it is counted as survival-phase arrival and a dead stream reads as a recovering one.
+    let leftover = drain_until_quiet(&mut rx, DRAIN_QUIET, "warm-up").await;
+    anyhow::ensure!(
+        leftover <= MAX_LEFTOVER_BYTES,
+        "{leftover} B of warm-up traffic was still arriving after the warm-up was declared \
+         complete (limit {MAX_LEFTOVER_BYTES} B); the two phases cannot be told apart, so no \
+         survival measurement taken here would mean anything",
     );
 
     let busiest = spread
@@ -330,22 +395,38 @@ async fn session_should_survive_return_relayer_loss() -> anyhow::Result<()> {
     );
     victim.kill()?;
 
-    // How long the network is given to notice before the second pump starts. Parameterised because
-    // recovery races path re-scoring: probing runs every 5s and the path cache is 60s TTL / 30s
-    // refresh. Zero is the case that matters -- the session must ride through the detection gap.
-    let settle = std::env::var("HOPRD_KILL_SETTLE_SECS")
-        .ok()
-        .and_then(|s| s.parse::<u64>().ok())
-        .map(Duration::from_secs)
-        .unwrap_or(Duration::ZERO);
-    if !settle.is_zero() {
-        tracing::info!(?settle, "waiting before the second pump");
-        tokio::time::sleep(settle).await;
-    }
+    // Phase 3 -- settle: let the kill land before any new data is offered.
+    //
+    // Starting the survival phase at the instant of the kill measures something else entirely: its
+    // first seconds race packets that were already in flight when the relayer died, so a byte that
+    // arrives cannot be attributed to a session that recovered rather than to one that had not yet
+    // noticed. Waiting a few seconds means every byte of the survival phase is offered to a network
+    // that has *already* lost the relayer, which is the question being asked.
+    let settle = kill_settle();
+    tracing::info!(?settle, "letting the kill land before offering new data");
+    tokio::time::sleep(settle).await;
 
-    // Same session, same halves, same everything — only the relay is gone.
-    let (after_kill, spread_after) =
-        pump_and_measure(&mut rx, &mut tx, &candidates, &payload, "after-kill").await?;
+    // Phase 4 -- survive: fresh bytes, offered at a steady rate for several times the deadline so
+    // that load is still arriving when recovery happens. Sized from the measured baseline rather
+    // than fixed, so the offered rate stays a constant fraction of what this cluster can do.
+    let offered_mbps = before_kill.mbps * SURVIVAL_LOAD_FRACTION;
+    let survival_bytes = (offered_mbps * 1_000_000.0 * SURVIVAL_LOAD_DURATION.as_secs_f64()) as usize;
+    tracing::info!(
+        "survival phase: offering {:.2} MB at {offered_mbps:.2} MB/s for {SURVIVAL_LOAD_DURATION:?} \
+         (baseline {:.2} MB/s)",
+        survival_bytes as f64 / 1_000_000.0,
+        before_kill.mbps,
+    );
+    let survival_payload = random_payload(survival_bytes);
+    let (after_kill, spread_after) = pump_and_measure(
+        &mut rx,
+        &mut tx,
+        &candidates,
+        &survival_payload,
+        "after-kill",
+        pace_for_rate(offered_mbps),
+    )
+    .await?;
 
     assert_recovered(&before_kill, &after_kill, &spread, &spread_after)
 }
@@ -421,6 +502,11 @@ fn assert_recovered(
         after_kill.sent_bytes,
         after_kill.wall_seconds,
     );
+    tracing::info!(
+        "recovery is timed from the first byte offered; add the {:?} post-kill settle for the \
+         interval measured from the kill itself",
+        kill_settle(),
+    );
 
     // 1. It reached the rate, and inside the deadline.
     anyhow::ensure!(
@@ -479,11 +565,12 @@ fn assert_recovered(
 #[ignore = "requires hoprd/hoprd-localcluster binaries + a chain"]
 async fn a_symmetric_session_should_survive_relayer_loss() -> anyhow::Result<()> {
     let (_env, session, candidates) = setup_env_with_hops(1, 1).await?;
-    let payload = random_payload();
     let (mut rx, mut tx) = tokio::io::split(session);
 
+    let warmup_payload = random_payload(WARMUP_BYTES);
     let (before_kill, spread) =
-        pump_and_measure(&mut rx, &mut tx, &candidates, &payload, "sym-before-kill").await?;
+        pump_and_measure(&mut rx, &mut tx, &candidates, &warmup_payload, "sym-before-kill", None)
+            .await?;
     anyhow::ensure!(
         before_kill.arrival_pct() > 50.0,
         "baseline pump only returned {:.1}% — the path was already broken before the kill",
@@ -503,9 +590,20 @@ async fn a_symmetric_session_should_survive_relayer_loss() -> anyhow::Result<()>
         "killing the busiest relayer (symmetric 1-hop session; direction not attributable)"
     );
     victim.kill()?;
+    tokio::time::sleep(kill_settle()).await;
 
-    let (after_kill, spread_after) =
-        pump_and_measure(&mut rx, &mut tx, &candidates, &payload, "sym-after-kill").await?;
+    let offered_mbps = before_kill.mbps * SURVIVAL_LOAD_FRACTION;
+    let survival_bytes = (offered_mbps * 1_000_000.0 * SURVIVAL_LOAD_DURATION.as_secs_f64()) as usize;
+    let survival_payload = random_payload(survival_bytes);
+    let (after_kill, spread_after) = pump_and_measure(
+        &mut rx,
+        &mut tx,
+        &candidates,
+        &survival_payload,
+        "sym-after-kill",
+        pace_for_rate(offered_mbps),
+    )
+    .await?;
 
     assert_recovered(&before_kill, &after_kill, &spread, &spread_after)
 }
