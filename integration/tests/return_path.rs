@@ -370,6 +370,20 @@ fn assert_recovered(
     let steady_state = after_kill.steady_state_mbps(RECOVERY_SUSTAIN_WINDOW);
     let longest_stall = after_kill.longest_stall();
 
+    // Nothing on the other end is serving the session, so no amount of further waiting can change
+    // the answer. Report that as its own finding rather than as a recovery that ran out of time --
+    // "the exit stopped echoing" and "the return path is slow" call for entirely different work.
+    anyhow::ensure!(
+        !after_kill.outcome.exit_stopped_serving(),
+        "the exit stopped serving the session ({:?} after {:.1}s, {} of {} B returned); the return \
+         path never got the chance to recover, so this says nothing about recovery time — {}",
+        after_kill.outcome,
+        after_kill.wall_seconds,
+        after_kill.received_bytes,
+        after_kill.sent_bytes,
+        spread_after.summary(),
+    );
+
     // A pump shorter than the sustain window cannot answer the question at all. `time_to_sustain`
     // already refuses to guess, but say so explicitly rather than let it read as "never recovered".
     anyhow::ensure!(
@@ -381,10 +395,11 @@ fn assert_recovered(
     );
 
     tracing::info!(
-        "after-kill measurements: recovery {} (aim {}s, boundary {}s){} | steady state over the \
+        "after-kill measurements: outcome {:?} | recovery {} (aim {}s, boundary {}s){} | steady state over the \
          final {RECOVERY_SUSTAIN_WINDOW:?} {steady_state:.2} MB/s vs target {target_mbps:.2} | \
          ttfb {} | longest stall {longest_stall:.1}s | inter-arrival p50 {} / p95 {} | \
          arrival {:.1}% ({} B of {} B) | wall {:.1}s",
+        after_kill.outcome,
         recovered_after.map_or("never reached".to_string(), |s| format!("took {s:.1}s")),
         RECOVERY_AIM.as_secs(),
         RECOVERY_DEADLINE.as_secs(),

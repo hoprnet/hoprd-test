@@ -11,9 +11,41 @@ fn throughput_kibs(bytes: usize, elapsed: Duration) -> f64 {
     (bytes as f64 / 1024.0) / elapsed.as_secs_f64().max(1e-9)
 }
 
+/// Why the reader stopped.
+///
+/// A transfer that returned nothing and a transfer that ran slowly are different findings, and a
+/// bare timeout cannot tell them apart. Naming the reason is what lets a scenario fail immediately
+/// on "the exit stopped serving" instead of waiting out a deadline that can no longer teach it
+/// anything.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PumpOutcome {
+    /// The whole payload came back.
+    Complete,
+    /// Bytes arrived and then the return stream went quiet for [`READ_IDLE_TIMEOUT`].
+    Idle,
+    /// Nothing ever came back within [`NO_FIRST_BYTE_TIMEOUT`].
+    NeverStarted,
+    /// The session reported end-of-stream — the counterparty stopped serving it.
+    SessionClosed,
+    /// The overall deadline expired while the stream was still delivering.
+    DeadlineExceeded,
+}
+
+impl PumpOutcome {
+    /// Whether the counterparty stopped serving the session, as opposed to serving it badly.
+    ///
+    /// Both of these mean no further waiting can change the answer: there is nothing on the other
+    /// end to recover.
+    pub fn exit_stopped_serving(&self) -> bool {
+        matches!(self, Self::NeverStarted | Self::SessionClosed)
+    }
+}
+
 /// Result of one loopback round-trip.
 #[derive(Debug, Clone)]
 pub struct Transfer {
+    /// Why the reader stopped.
+    pub outcome: PumpOutcome,
     pub sent_bytes: usize,
     pub received_bytes: usize,
     /// Wall-clock from first byte written to last byte read back.
@@ -158,7 +190,40 @@ fn send_pace_per_chunk() -> Option<Duration> {
 }
 /// If no bytes arrive for this long after the first byte, the return transfer is
 /// considered finished (UDP loopback gives no EOF; lost tail bytes never arrive).
-const READ_IDLE_TIMEOUT: Duration = Duration::from_secs(10);
+pub const READ_IDLE_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// How long to wait for the *first* byte back before concluding nothing is coming.
+///
+/// The idle rule needs an arrival to anchor on, so before anything has come back it cannot fire and
+/// the reader would otherwise wait out the whole deadline. Generous against a recovery target
+/// measured in tens of seconds, but far short of the deadline: a return stream that has produced
+/// nothing by now has already failed, and the remaining minutes only cost wall-clock.
+pub const NO_FIRST_BYTE_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// How often the reader re-evaluates whether to keep waiting.
+const READ_POLL_INTERVAL: Duration = Duration::from_secs(1);
+
+/// Whether the reader should stop, and why; `None` to keep waiting.
+///
+/// Pure so the stopping rule can be exercised without a session or a cluster — the rule is what
+/// went wrong (a run spent seven minutes measuring a session whose server side had already ended),
+/// not the plumbing around it.
+fn stop_reason(
+    received: usize,
+    since_last_arrival: Duration,
+    since_start: Duration,
+    deadline: Duration,
+) -> Option<PumpOutcome> {
+    if since_start >= deadline {
+        return Some(PumpOutcome::DeadlineExceeded);
+    }
+    if received == 0 {
+        // Nothing has arrived at all, so the idle rule has nothing to measure from and the
+        // first-byte budget decides instead.
+        return (since_start >= NO_FIRST_BYTE_TIMEOUT).then_some(PumpOutcome::NeverStarted);
+    }
+    (since_last_arrival >= READ_IDLE_TIMEOUT).then_some(PumpOutcome::Idle)
+}
 
 pub fn sha256_digest(data: &[u8]) -> Vec<u8> {
     let mut h = Sha256::new();
@@ -234,19 +299,40 @@ pub async fn pump_halves(
     // arrival discards exactly the quantity a recovery deadline is about.
     let pump_started = std::time::Instant::now();
     let mut last_at = pump_started;
-    let overall_deadline = pump_started + timeout;
 
+
+    let mut outcome = PumpOutcome::Complete;
     let recv = async {
-        while received.len() < total_bytes {
-            if std::time::Instant::now() >= overall_deadline {
-                tracing::warn!(
-                    "{label}: overall timeout, received {}/{total_bytes} B",
-                    received.len()
-                );
+        loop {
+            if received.len() >= total_bytes {
+                outcome = PumpOutcome::Complete;
                 break;
             }
-            match tokio::time::timeout(READ_IDLE_TIMEOUT, rx.read(&mut buf)).await {
-                Ok(Ok(0)) => break, // EOF
+            let now = std::time::Instant::now();
+            if let Some(stop) = stop_reason(
+                received.len(),
+                now.saturating_duration_since(last_at),
+                now.saturating_duration_since(pump_started),
+                timeout,
+            ) {
+                tracing::warn!(
+                    "{label}: stopping ({stop:?}) at {}/{total_bytes} B",
+                    received.len()
+                );
+                outcome = stop;
+                break;
+            }
+            // Poll rather than block for the whole idle budget, so `stop_reason` -- which owns
+            // every stopping decision -- is re-evaluated on a fixed cadence.
+            match tokio::time::timeout(READ_POLL_INTERVAL, rx.read(&mut buf)).await {
+                Ok(Ok(0)) => {
+                    tracing::warn!(
+                        "{label}: counterparty closed the session at {}/{total_bytes} B",
+                        received.len()
+                    );
+                    outcome = PumpOutcome::SessionClosed;
+                    break;
+                }
                 Ok(Ok(just_read)) => {
                     last_at = std::time::Instant::now();
                     first_at.get_or_insert(last_at);
@@ -257,15 +343,7 @@ pub async fn pump_halves(
                     ));
                 }
                 Ok(Err(e)) => return Err(anyhow::anyhow!("{label}: read error: {e}")),
-                Err(_) => {
-                    if !received.is_empty() {
-                        tracing::info!(
-                            "{label}: return idle {READ_IDLE_TIMEOUT:?}, stopping at {}/{total_bytes} B",
-                            received.len()
-                        );
-                        break;
-                    }
-                }
+                Err(_) => continue,
             }
         }
         Ok(())
@@ -292,6 +370,7 @@ pub async fn pump_halves(
     let sha_ok = received_bytes == total_bytes && sha256_digest(&received) == expected;
 
     let transfer = Transfer {
+        outcome,
         sent_bytes: total_bytes,
         received_bytes,
         seconds,
@@ -303,8 +382,8 @@ pub async fn pump_halves(
 
     tracing::info!(
         "{label}: recv {received_bytes}/{total_bytes} B in {seconds:.2}s = {mbps:.2} MB/s \
-         (wall {wall_seconds:.2}s), arrival {:.2}%, ttfb {}, longest stall {:.2}s, \
-         inter-arrival p50 {} / p95 {}, sha_ok={sha_ok}",
+         (wall {wall_seconds:.2}s), arrival {:.2}%, outcome {outcome:?}, ttfb {}, \
+         longest stall {:.2}s, inter-arrival p50 {} / p95 {}, sha_ok={sha_ok}",
         transfer.arrival_pct(),
         transfer
             .time_to_first_byte()
@@ -398,6 +477,7 @@ mod tests {
     fn transfer(wall_seconds: f64, progress: &[(f64, usize)]) -> Transfer {
         let received_bytes = progress.last().map(|&(_, b)| b).unwrap_or(0);
         Transfer {
+            outcome: PumpOutcome::Complete,
             sent_bytes: received_bytes.max(1),
             received_bytes,
             seconds: progress
@@ -533,6 +613,82 @@ mod tests {
             smooth.inter_arrival_quantile(0.95),
             "an evenly-paced stream has no spread between p50 and p95"
         );
+    }
+
+    // ── stopping rule ─────────────────────────────────────────────────────────
+
+    const DEADLINE: Duration = Duration::from_secs(600);
+
+    /// A return stream that has produced nothing has already failed; waiting out the remaining
+    /// nine and a half minutes cannot change that. One run spent seven minutes measuring a session
+    /// whose server side had already ended.
+    #[test]
+    fn a_stream_that_never_delivers_should_give_up_at_the_first_byte_budget() {
+        assert_eq!(
+            stop_reason(0, NO_FIRST_BYTE_TIMEOUT, NO_FIRST_BYTE_TIMEOUT, DEADLINE),
+            Some(PumpOutcome::NeverStarted),
+        );
+        assert_eq!(
+            stop_reason(
+                0,
+                NO_FIRST_BYTE_TIMEOUT - Duration::from_secs(1),
+                NO_FIRST_BYTE_TIMEOUT - Duration::from_secs(1),
+                DEADLINE
+            ),
+            None,
+            "the budget must not expire early — a recovering stream may still be on its way"
+        );
+    }
+
+    /// The idle rule needs an arrival to measure from, so before one exists it must not fire.
+    /// Otherwise a stream that takes 11s to produce its first byte is cut off as idle.
+    #[test]
+    fn waiting_for_the_first_byte_should_not_be_cut_short_by_the_idle_rule() {
+        assert_eq!(
+            stop_reason(
+                0,
+                READ_IDLE_TIMEOUT * 2,
+                READ_IDLE_TIMEOUT * 2,
+                DEADLINE
+            ),
+            None,
+            "with nothing received the first-byte budget decides, not the idle timeout"
+        );
+    }
+
+    /// Once bytes have arrived, silence means the tail is never coming (UDP loopback has no EOF).
+    #[test]
+    fn a_stream_that_goes_quiet_after_delivering_should_stop_as_idle() {
+        assert_eq!(
+            stop_reason(1_000, READ_IDLE_TIMEOUT, Duration::from_secs(60), DEADLINE),
+            Some(PumpOutcome::Idle),
+        );
+        assert_eq!(
+            stop_reason(1_000, Duration::from_secs(1), Duration::from_secs(60), DEADLINE),
+            None,
+            "a stream still delivering must be left alone"
+        );
+    }
+
+    /// A stream that is still delivering when the deadline lands is a distinct outcome from one
+    /// that stopped: it was making progress and simply ran out of time.
+    #[test]
+    fn a_stream_still_delivering_at_the_deadline_should_report_the_deadline() {
+        assert_eq!(
+            stop_reason(1_000, Duration::ZERO, DEADLINE, DEADLINE),
+            Some(PumpOutcome::DeadlineExceeded),
+        );
+    }
+
+    /// The two "nothing is serving this session" outcomes have to be separable from the two that
+    /// mean "served, but badly" — that distinction is what a scenario branches on.
+    #[test]
+    fn only_the_no_service_outcomes_should_report_the_exit_stopped_serving() {
+        assert!(PumpOutcome::NeverStarted.exit_stopped_serving());
+        assert!(PumpOutcome::SessionClosed.exit_stopped_serving());
+        assert!(!PumpOutcome::Idle.exit_stopped_serving());
+        assert!(!PumpOutcome::DeadlineExceeded.exit_stopped_serving());
+        assert!(!PumpOutcome::Complete.exit_stopped_serving());
     }
 
     /// Nothing arrived at all: every statistic has to say so rather than divide by zero.
