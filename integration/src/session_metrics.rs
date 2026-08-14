@@ -15,25 +15,32 @@
 //! two-orders-of-magnitude delivery gap when most of those packets were never this session's.
 //!
 //! These counters are labelled by `session_id`, so they answer the question the node-wide counter
-//! cannot: how many segments actually reached *this* session, and what happened to them.
+//! cannot: how many packets actually reached *this* session.
 //!
 //! # Reading the result
 //!
-//! The three numbers separate three different failures that all look like "throughput collapsed":
+//! [`SessionCounters::packets_in`] against the payload the pump got back separates two failures
+//! that both present as "throughput collapsed":
 //!
-//! | segments in | frames discarded | reading |
-//! | ----------- | ---------------- | ------- |
-//! | ≈ what was sent | high | packets arrive, frames never complete — loss is in reassembly |
+//! | packets in | payload out | reading |
+//! | ---------- | ----------- | ------- |
 //! | ≈ 0 | ≈ 0 | nothing arrived — the exit never sent, look at its SURB balance |
-//! | ≈ what was sent | ≈ 0 | delivered; the shortfall is downstream of the session |
+//! | high | ≈ 0 | it arrived and did not come back out — look above the return path |
 //!
-//! # Observability is not assumed
+//! # Observability is not assumed, twice over
 //!
 //! `mod telemetry` in `hopr-transport-session` is behind that crate's `telemetry` feature, which
-//! the harness turns on via a direct `hopr-lib` dependency. With the feature off the metric
-//! families do not exist, and a parser would report zero for every one of them — identical to a
-//! session that received nothing, which is precisely the conclusion under test. So absence is
-//! tracked explicitly as [`SessionCounters::observable`] rather than folded into a zero.
+//! the harness turns on via a direct `hopr-lib` dependency. With the feature off no family exists
+//! at all, and reporting that as zero is indistinguishable from a session that received nothing —
+//! precisely the conclusion under test.
+//!
+//! Enabling the feature is not sufficient either. The segment and frame families are driven by
+//! `SessionTelemetryTracker`, which an unreliable session never installs, so they stay absent while
+//! packets pour in. The first version of this module read exactly those and reported "segments in
+//! 0, frames completed 0 / emitted 0 / discarded 0" for a phase carrying 12 466 packets.
+//!
+//! Hence: absence is `None` and prints as "absent", a real zero is `Some(0)`, and
+//! [`SessionCounters::nonzero`] lists whatever moved so an unnamed live family cannot hide.
 
 use std::collections::BTreeMap;
 
