@@ -50,10 +50,9 @@ use std::time::Duration;
 use hoprd_integration_test::{
     HoprSession, IntegrationEnv,
     cluster::{NodeInfo, request_cluster_size, request_latency_profile},
-    pump::{Transfer, drain_until_quiet, pace_for_rate, pump_halves},
+    pump::{PumpOpts, Transfer, drain_until_quiet, pace_for_rate, pump_halves, tagged_payload},
     relayers::{self, RelayerSpread},
 };
-use rand::RngExt as _;
 
 /// `hoprd-localcluster` caps out here, and every extra node is one more possible return
 /// relayer: with 5 nodes the exit has 4, enough for concentration and spread to look
@@ -215,15 +214,10 @@ const RECOVERY_AIM: Duration = Duration::from_secs(15);
 /// alone and reported a recovery that never happened.
 const RECOVERY_SUSTAIN_WINDOW: Duration = Duration::from_secs(3);
 
-/// A fresh random payload of `bytes`.
-///
-/// Each phase gets its own: sharing one payload across a kill makes it impossible to argue that
-/// what came back in the second phase was not still echoing from the first.
-fn random_payload(bytes: usize) -> Vec<u8> {
-    let mut payload = vec![0u8; bytes];
-    rand::rng().fill(&mut payload[..]);
-    payload
-}
+/// Phase tag for the warm-up payload.
+const WARMUP_PHASE: u8 = 1;
+/// Phase tag for the post-kill survival payload.
+const SURVIVAL_PHASE: u8 = 2;
 
 /// Bring up a cluster sized for return-path work and open a 0-hop-out / 1-hop-back
 /// session, returning the env, the session, and the nodes that can relay replies.
@@ -276,10 +270,10 @@ async fn pump_and_measure(
     candidates: &[NodeInfo],
     payload: &[u8],
     label: &str,
-    pace: Option<Duration>,
+    opts: PumpOpts,
 ) -> anyhow::Result<(Transfer, RelayerSpread)> {
     let before = relayers::sample(candidates).await;
-    let transfer = pump_halves(rx, tx, payload, label, PUMP_TIMEOUT, pace).await?;
+    let transfer = pump_halves(rx, tx, payload, label, PUMP_TIMEOUT, opts).await?;
     let after = relayers::sample(candidates).await;
     let spread = relayers::spread(&before, &after);
     tracing::info!(
@@ -303,11 +297,21 @@ async fn pump_and_measure(
 #[ignore = "requires hoprd/hoprd-localcluster binaries + a chain"]
 async fn return_paths_should_spread_across_distinct_relayers() -> anyhow::Result<()> {
     let (_env, session, candidates) = setup_return_path_env().await?;
-    let payload = random_payload(WARMUP_BYTES);
+    let payload = tagged_payload(WARMUP_PHASE, WARMUP_BYTES);
 
     let (mut rx, mut tx) = tokio::io::split(session);
-    let (transfer, spread) =
-        pump_and_measure(&mut rx, &mut tx, &candidates, &payload, "spread", None).await?;
+    let (transfer, spread) = pump_and_measure(
+        &mut rx,
+        &mut tx,
+        &candidates,
+        &payload,
+        "spread",
+        PumpOpts {
+            phase: Some(WARMUP_PHASE),
+            ..PumpOpts::default()
+        },
+    )
+    .await?;
 
     anyhow::ensure!(
         spread.total > 0,
@@ -361,9 +365,19 @@ async fn session_should_survive_return_relayer_loss() -> anyhow::Result<()> {
     let (mut rx, mut tx) = tokio::io::split(session);
 
     // Phase 1 -- warm up: establish the baseline rate and who is actually carrying replies.
-    let warmup_payload = random_payload(WARMUP_BYTES);
-    let (before_kill, spread) =
-        pump_and_measure(&mut rx, &mut tx, &candidates, &warmup_payload, "before-kill", None).await?;
+    let warmup_payload = tagged_payload(WARMUP_PHASE, WARMUP_BYTES);
+    let (before_kill, spread) = pump_and_measure(
+        &mut rx,
+        &mut tx,
+        &candidates,
+        &warmup_payload,
+        "before-kill",
+        PumpOpts {
+            phase: Some(WARMUP_PHASE),
+            ..PumpOpts::default()
+        },
+    )
+    .await?;
     anyhow::ensure!(
         before_kill.arrival_pct() > 50.0,
         "baseline pump only returned {:.1}% — the path was already broken before the \
@@ -417,14 +431,17 @@ async fn session_should_survive_return_relayer_loss() -> anyhow::Result<()> {
         survival_bytes as f64 / 1_000_000.0,
         before_kill.mbps,
     );
-    let survival_payload = random_payload(survival_bytes);
+    let survival_payload = tagged_payload(SURVIVAL_PHASE, survival_bytes);
     let (after_kill, spread_after) = pump_and_measure(
         &mut rx,
         &mut tx,
         &candidates,
         &survival_payload,
         "after-kill",
-        pace_for_rate(offered_mbps),
+        PumpOpts {
+            pace: pace_for_rate(offered_mbps),
+            phase: Some(SURVIVAL_PHASE),
+        },
     )
     .await?;
 
@@ -463,6 +480,23 @@ fn assert_recovered(
         after_kill.received_bytes,
         after_kill.sent_bytes,
         spread_after.summary(),
+    );
+
+    // Any warm-up bytes that surfaced during the survival phase are a backlog releasing, not this
+    // phase recovering. They are excluded from every figure above by construction; report them, and
+    // refuse the run if there are enough of them to mean the drain did not work.
+    if after_kill.foreign_bytes > 0 {
+        tracing::warn!(
+            "{} B of earlier-phase traffic arrived during the survival phase and was excluded",
+            after_kill.foreign_bytes,
+        );
+    }
+    anyhow::ensure!(
+        after_kill.foreign_bytes <= MAX_LEFTOVER_BYTES,
+        "{} B of warm-up traffic arrived during the survival phase (limit {MAX_LEFTOVER_BYTES} B); \
+         the drain did not separate the phases, so the session was still working off a backlog \
+         rather than carrying new load",
+        after_kill.foreign_bytes,
     );
 
     // A pump shorter than the sustain window cannot answer the question at all. `time_to_sustain`
@@ -567,10 +601,19 @@ async fn a_symmetric_session_should_survive_relayer_loss() -> anyhow::Result<()>
     let (_env, session, candidates) = setup_env_with_hops(1, 1).await?;
     let (mut rx, mut tx) = tokio::io::split(session);
 
-    let warmup_payload = random_payload(WARMUP_BYTES);
-    let (before_kill, spread) =
-        pump_and_measure(&mut rx, &mut tx, &candidates, &warmup_payload, "sym-before-kill", None)
-            .await?;
+    let warmup_payload = tagged_payload(WARMUP_PHASE, WARMUP_BYTES);
+    let (before_kill, spread) = pump_and_measure(
+        &mut rx,
+        &mut tx,
+        &candidates,
+        &warmup_payload,
+        "sym-before-kill",
+        PumpOpts {
+            phase: Some(WARMUP_PHASE),
+            ..PumpOpts::default()
+        },
+    )
+    .await?;
     anyhow::ensure!(
         before_kill.arrival_pct() > 50.0,
         "baseline pump only returned {:.1}% — the path was already broken before the kill",
@@ -594,14 +637,17 @@ async fn a_symmetric_session_should_survive_relayer_loss() -> anyhow::Result<()>
 
     let offered_mbps = before_kill.mbps * SURVIVAL_LOAD_FRACTION;
     let survival_bytes = (offered_mbps * 1_000_000.0 * SURVIVAL_LOAD_DURATION.as_secs_f64()) as usize;
-    let survival_payload = random_payload(survival_bytes);
+    let survival_payload = tagged_payload(SURVIVAL_PHASE, survival_bytes);
     let (after_kill, spread_after) = pump_and_measure(
         &mut rx,
         &mut tx,
         &candidates,
         &survival_payload,
         "sym-after-kill",
-        pace_for_rate(offered_mbps),
+        PumpOpts {
+            pace: pace_for_rate(offered_mbps),
+            phase: Some(SURVIVAL_PHASE),
+        },
     )
     .await?;
 

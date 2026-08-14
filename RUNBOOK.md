@@ -92,6 +92,15 @@ Current settings under this rule: `pop_order`, `sustain_on_return_path_loss`, `f
 grep -A2 'name = "hopr-lib"' <hoprd-test-worktree>/integration/Cargo.lock | grep -c "$TIP"   # must be 1
 grep -c 'name = "hopr-lib"'  <hoprd-test-worktree>/integration/Cargo.lock                    # must be 1
 
+# a2) all four [patch.crates-io] tables agree -- hoprnet, edge-client, hoprd, hoprd-test.
+# Each repo carries its own copy of the same three revs and nothing enforces agreement.
+# The harness workspace supplies the patch table for the *entry* build, so a stale rev there
+# silently excludes the change from the only participant whose path selection matters.
+for f in <hoprnet>/Cargo.toml <edge-client>/Cargo.toml <hoprd>/Cargo.toml \
+         <hoprd-test>/integration/Cargo.toml; do
+  echo "== $f"; grep -E 'hopr-(api|utilities|network-graph) = \{ git' "$f"
+done   # the three revs must be identical in all four
+
 # b) the binaries actually contain the change — pick a string unique to it
 MARKER='return path silent, re-planned'
 strings "$HOPRD_BIN" | grep -qc "$MARKER" || echo "HOPRD MISSING THE CHANGE"
@@ -107,13 +116,15 @@ and unobservable regardless of what the lock says.
 ```sh
 HOPRD_KEEP_ARTIFACTS=1 \
 HOPRD_BIN=<hoprd-worktree>/target/release/hoprd \
-HOPRD_KILL_SETTLE_SECS=0 TEST_TARGET=return_path TEST_ARGS=--nocapture \
+TEST_TARGET=return_path TEST_ARGS=--nocapture \
 SCENARIOS=session_should_survive_return_relayer_loss \
   bash scripts/integration/run-binchain.sh
 ```
 
 `HOPRD_KEEP_ARTIFACTS=1` always — without it the node logs are deleted at teardown and a failed
-run yields nothing. One run at a time: the cluster binds fixed ports and this is a single machine.
+run yields nothing. `HOPRD_KILL_SETTLE_SECS` is deliberately *not* set: the scenario's own 4 s
+settle is part of what it measures, and forcing it to 0 makes the survival phase race packets that
+were already in flight when the relayer died. Override it only for a one-off experiment. One run at a time: the cluster binds fixed ports and this is a single machine.
 
 **Redirect with `>`, never pipe into `tail`/`head`.** A pipe buffers the whole run, so the log stays
 empty until the process exits and the two-minute cadence has nothing to read — and worse, the
@@ -125,7 +136,7 @@ each node is running, and the kill is directly visible as a node disappearing.
 
 A run takes ten to fifteen minutes and produces nothing until it ends. Poll the output file on a
 two-minute cadence from launch until the run resolves, and report each time — bootstrap progress,
-node count, whether the pre-kill pump has started, the kill, the post-kill pump.
+node count, whether the warm-up has started, the drain, the kill, the settle, the survival phase.
 
 Say "still bootstrapping" when that is all that is true. A silent wait is indistinguishable from a
 hung run, and the whole point of a two-minute cadence is that a run which has already failed gets
@@ -137,9 +148,13 @@ killed and relaunched in two minutes rather than at the fifteen-minute mark.
   13:57:13 local. Compare like with like before concluding a binary predates a run.
 - All lines in the test stdout come from the **in-process entry**. Node logs are separate files.
   A tracing target of `hopr_transport` in stdout is the entry, not a relayer.
-- Recovery is `time_to_sustain(target_mbps, window)`. It is only meaningful if the pump ran
-  **longer than the sustain window** — a transfer that ends after 1.6 s satisfies a 2 s window
-  from its opening burst alone and reports a recovery that did not happen.
+- Recovery is `time_to_sustain(target_mbps, window)` over **attributed** bytes only, timed from
+  the first byte the survival phase offered. `time_to_sustain` now refuses to answer before a full
+  window has elapsed, so an opening burst can no longer satisfy it.
+- Read `outcome` first. `NeverStarted` / `SessionClosed` mean nothing was serving the session, and
+  every other number in that run is about a stream that had no counterparty.
+- Read `foreign` next. Non-zero means warm-up traffic surfaced during the survival phase; it is
+  excluded from the figures, but a large value means the drain failed and the phases are mixed.
 - Healthy-run throughput varies 1–45 %. A single run cannot establish an improvement; compare
   against the spread, not against one prior number.
 - **Strip ANSI before grepping structured fields.** `tracing` wraps *field names* in escape codes,
@@ -150,8 +165,26 @@ killed and relaunched in two minutes rather than at the fifteen-minute mark.
   is broken, and every post-kill number in that run is meaningless. A collapsed baseline is itself
   the finding — it means the change under test broke a healthy session.
 
+## What the survival scenario measures
+
+**warm up (2 MB, phase tag 1) → drain to quiet → kill → settle 4 s → offer phase tag 2 at half the
+measured baseline for 60 s.**
+
+Each element is load-bearing, and each replaced something that made an earlier run unmeasurable:
+
+| element | what it prevents |
+| ------- | ---------------- |
+| distinct phase tags in the payload | a released backlog counted as the later phase recovering |
+| drain to quiet before the kill | warm-up traffic landing inside the survival window |
+| settle after the kill | the survival phase racing packets already in flight when the relay died |
+| paced load for 60 s | the payload being fully committed before recovery can happen |
+
+The session is **unreliable** — there is no retransmission — so bytes lost during the outage never
+arrive and 100 % arrival is unreachable by construction. The headline is therefore *when the
+delivered rate returns*, never total arrival.
+
 ## Acceptance criterion
 
-`HOPRD_KILL_SETTLE_SECS=0` survives — the configuration that collapsed in four independent runs,
-where the only thing that has ever made it pass is waiting out the 60 s recovery window.
-Target: sustained throughput restored within **15 s** of the kill.
+The survival phase reaches 50 % of the measured baseline rate and **holds it to the end of the
+pump**, having never gone quiet for longer than the deadline. Boundary **20 s**, design aim **15 s**,
+both timed from the first byte offered; add the 4 s settle for the interval measured from the kill.

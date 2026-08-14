@@ -41,13 +41,79 @@ impl PumpOutcome {
     }
 }
 
+/// Size of one tagged payload record. See [`tagged_payload`].
+pub const RECORD_SIZE: usize = 16;
+
+/// Marks the start of a record, so arrivals can be attributed without assuming alignment.
+const RECORD_MAGIC: [u8; 4] = *b"HPRT";
+
+/// Builds a `bytes`-long payload out of records stamped with `phase` and a running index.
+///
+/// Two phases running over one session cannot be told apart by volume alone. When a burst arrives
+/// late, "the second phase finally worked" and "the first phase's buffer released" produce the same
+/// byte count, and the wrong one of those reads as recovery. Stamping the bytes makes it a fact
+/// rather than an inference: 2.3 MB arriving in the last three seconds of a run is a completely
+/// different finding depending on which phase sent it.
+///
+/// Layout per record: `MAGIC(4) | phase(1) | reserved(3) | index u64 LE(8)`.
+pub fn tagged_payload(phase: u8, bytes: usize) -> Vec<u8> {
+    let records = bytes / RECORD_SIZE;
+    let mut payload = Vec::with_capacity(records * RECORD_SIZE);
+    for index in 0..records as u64 {
+        payload.extend_from_slice(&RECORD_MAGIC);
+        payload.push(phase);
+        payload.extend_from_slice(&[0u8; 3]);
+        payload.extend_from_slice(&index.to_le_bytes());
+    }
+    payload
+}
+
+/// Counts whole records in `buf[from..]`, splitting them by whether they carry `phase`.
+///
+/// Returns the position to resume from, so a caller reading a stream can scan incrementally and
+/// still catch a record straddling two reads: scanning stops at the first offset where a whole
+/// record no longer fits, and the next call picks up exactly there.
+fn scan_records(buf: &[u8], from: usize, phase: u8, mine: &mut usize, foreign: &mut usize) -> usize {
+    let mut at = from;
+    while at + RECORD_SIZE <= buf.len() {
+        if buf[at..at + 4] == RECORD_MAGIC {
+            if buf[at + 4] == phase {
+                *mine += 1;
+            } else {
+                *foreign += 1;
+            }
+            at += RECORD_SIZE;
+        } else {
+            at += 1;
+        }
+    }
+    at
+}
+
+/// How a pump offers its payload and what it counts as its own.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct PumpOpts {
+    /// Per-chunk send delay; `None` offers data as fast as the session accepts it.
+    pub pace: Option<Duration>,
+    /// Phase tag whose records count toward this transfer; `None` counts every byte received.
+    pub phase: Option<u8>,
+}
+
 /// Result of one loopback round-trip.
 #[derive(Debug, Clone)]
 pub struct Transfer {
     /// Why the reader stopped.
     pub outcome: PumpOutcome,
     pub sent_bytes: usize,
+    /// Every byte read back, whichever phase sent it.
     pub received_bytes: usize,
+    /// Bytes carrying this transfer's own phase tag, or all of them when untagged.
+    ///
+    /// This — not [`Self::received_bytes`] — is what every rate and recovery figure is computed
+    /// from, so a backlog released by an earlier phase cannot be read as this one recovering.
+    pub attributed_bytes: usize,
+    /// Bytes carrying some *other* phase's tag: an earlier phase's backlog arriving late.
+    pub foreign_bytes: usize,
     /// Wall-clock from first byte written to last byte read back.
     pub seconds: f64,
     /// Goodput = received_bytes / seconds, in MB/s.
@@ -73,9 +139,12 @@ pub struct Transfer {
 }
 
 impl Transfer {
-    /// Percent of sent bytes that returned.
+    /// Percent of sent bytes that returned *carrying this phase's tag*.
+    ///
+    /// Deliberately not [`Self::received_bytes`]: on a session shared with an earlier phase, a
+    /// backlog released late would otherwise inflate this figure into a recovery that never was.
     pub fn arrival_pct(&self) -> f64 {
-        (self.received_bytes as f64) / (self.sent_bytes.max(1) as f64) * 100.0
+        (self.attributed_bytes as f64) / (self.sent_bytes.max(1) as f64) * 100.0
     }
 
     /// Seconds from the start of the pump to the first byte back, `None` if none ever arrived.
@@ -243,7 +312,7 @@ pub async fn pump_loopback(
     timeout: Duration,
 ) -> anyhow::Result<Transfer> {
     let (mut rx, mut tx) = tokio::io::split(session);
-    pump_halves(&mut rx, &mut tx, payload, label, timeout, None).await
+    pump_halves(&mut rx, &mut tx, payload, label, timeout, PumpOpts::default()).await
 }
 
 /// Per-chunk delay that offers `payload_bytes` at `mbps` MB/s.
@@ -303,11 +372,11 @@ pub async fn pump_halves(
     payload: &[u8],
     label: &str,
     timeout: Duration,
-    pace: Option<Duration>,
+    opts: PumpOpts,
 ) -> anyhow::Result<Transfer> {
     let expected = sha256_digest(payload);
     let total_bytes = payload.len();
-    let pace = pace.or_else(send_pace_per_chunk);
+    let pace = opts.pace.or_else(send_pace_per_chunk);
 
     let send = async {
         let mut offset = 0;
@@ -334,6 +403,11 @@ pub async fn pump_halves(
     let mut last_at = pump_started;
 
 
+    // Attribution is incremental: rescanning the whole buffer after every read would be quadratic
+    // over a payload measured in megabytes.
+    let mut scan_at = 0usize;
+    let mut mine = 0usize;
+    let mut foreign = 0usize;
     let mut outcome = PumpOutcome::Complete;
     let recv = async {
         loop {
@@ -370,9 +444,16 @@ pub async fn pump_halves(
                     last_at = std::time::Instant::now();
                     first_at.get_or_insert(last_at);
                     received.extend_from_slice(&buf[..just_read]);
+                    let attributed = match opts.phase {
+                        Some(phase) => {
+                            scan_at = scan_records(&received, scan_at, phase, &mut mine, &mut foreign);
+                            mine * RECORD_SIZE
+                        }
+                        None => received.len(),
+                    };
                     progress.push((
                         last_at.saturating_duration_since(pump_started).as_secs_f64(),
-                        received.len(),
+                        attributed,
                     ));
                 }
                 Ok(Err(e)) => return Err(anyhow::anyhow!("{label}: read error: {e}")),
@@ -399,13 +480,19 @@ pub async fn pump_halves(
         .max(1e-9);
     let wall_seconds = pump_started.elapsed().as_secs_f64().max(1e-9);
     let received_bytes = received.len();
-    let mbps = (received_bytes as f64) / 1_000_000.0 / seconds;
+    let (attributed_bytes, foreign_bytes) = match opts.phase {
+        Some(_) => (mine * RECORD_SIZE, foreign * RECORD_SIZE),
+        None => (received_bytes, 0),
+    };
+    let mbps = (attributed_bytes as f64) / 1_000_000.0 / seconds;
     let sha_ok = received_bytes == total_bytes && sha256_digest(&received) == expected;
 
     let transfer = Transfer {
         outcome,
         sent_bytes: total_bytes,
         received_bytes,
+        attributed_bytes,
+        foreign_bytes,
         seconds,
         mbps,
         sha_ok,
@@ -415,7 +502,8 @@ pub async fn pump_halves(
 
     tracing::info!(
         "{label}: recv {received_bytes}/{total_bytes} B in {seconds:.2}s = {mbps:.2} MB/s \
-         (wall {wall_seconds:.2}s), arrival {:.2}%, outcome {outcome:?}, ttfb {}, \
+         (wall {wall_seconds:.2}s), attributed {attributed_bytes} B, foreign {foreign_bytes} B, \
+         arrival {:.2}%, outcome {outcome:?}, ttfb {}, \
          longest stall {:.2}s, inter-arrival p50 {} / p95 {}, sha_ok={sha_ok}",
         transfer.arrival_pct(),
         transfer
@@ -513,6 +601,8 @@ mod tests {
             outcome: PumpOutcome::Complete,
             sent_bytes: received_bytes.max(1),
             received_bytes,
+            attributed_bytes: received_bytes,
+            foreign_bytes: 0,
             seconds: progress
                 .last()
                 .zip(progress.first())
@@ -646,6 +736,54 @@ mod tests {
             smooth.inter_arrival_quantile(0.95),
             "an evenly-paced stream has no spread between p50 and p95"
         );
+    }
+
+    // ── payload attribution ───────────────────────────────────────────────────
+
+    /// The property the whole two-phase measurement rests on: a byte can be traced to the phase
+    /// that sent it, so a backlog released late is never counted as the later phase recovering.
+    #[test]
+    fn records_should_be_attributed_to_the_phase_that_sent_them() {
+        let mut buf = tagged_payload(1, 4 * RECORD_SIZE);
+        buf.extend_from_slice(&tagged_payload(2, 6 * RECORD_SIZE));
+
+        let (mut mine, mut foreign) = (0, 0);
+        scan_records(&buf, 0, 2, &mut mine, &mut foreign);
+        assert_eq!(mine, 6, "phase 2 sent six records");
+        assert_eq!(foreign, 4, "the other four belong to phase 1 and must not be credited");
+    }
+
+    /// Reads land on arbitrary boundaries, so a record routinely straddles two of them. Resuming
+    /// from the returned position must count it exactly once — never dropped, never double-counted.
+    #[test]
+    fn a_record_split_across_two_reads_should_be_counted_once() {
+        let buf = tagged_payload(1, 3 * RECORD_SIZE);
+        let split = RECORD_SIZE + 5; // mid-record
+
+        let (mut mine, mut foreign) = (0, 0);
+        let resume = scan_records(&buf[..split], 0, 1, &mut mine, &mut foreign);
+        assert_eq!(mine, 1, "only the first whole record fits in the first read");
+
+        scan_records(&buf, resume, 1, &mut mine, &mut foreign);
+        assert_eq!(mine, 3, "the straddling record is picked up on the next scan");
+        assert_eq!(foreign, 0);
+    }
+
+    /// Loss removes whole segments mid-stream, which shifts everything after it. Attribution must
+    /// survive that, since it is exactly the condition under test.
+    #[test]
+    fn attribution_should_survive_a_hole_in_the_stream() {
+        let whole = tagged_payload(2, 10 * RECORD_SIZE);
+        let mut lossy = whole[..3 * RECORD_SIZE].to_vec();
+        lossy.extend_from_slice(&whole[5 * RECORD_SIZE + 7..]); // drop 2 records, misalign the rest
+
+        let (mut mine, mut foreign) = (0, 0);
+        scan_records(&lossy, 0, 2, &mut mine, &mut foreign);
+        assert!(
+            (7..=8).contains(&mine),
+            "the surviving records must still be found after a hole, got {mine}"
+        );
+        assert_eq!(foreign, 0, "nothing here belongs to another phase");
     }
 
     // ── stopping rule ─────────────────────────────────────────────────────────
