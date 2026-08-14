@@ -175,6 +175,18 @@ fn random_payload() -> Vec<u8> {
 /// Bring up a cluster sized for return-path work and open a 0-hop-out / 1-hop-back
 /// session, returning the env, the session, and the nodes that can relay replies.
 async fn setup_return_path_env() -> anyhow::Result<(IntegrationEnv, HoprSession, Vec<NodeInfo>)> {
+    setup_env_with_hops(0, 1).await
+}
+
+/// As above, with the forward and return hop counts named explicitly.
+///
+/// `(0, 1)` keeps the relayer histogram attributable — no cluster node relays anything outbound, so
+/// every forwarded packet is a reply. `(1, 1)` is the realistic shape but gives up that attribution,
+/// since the victim can sit on either direction.
+async fn setup_env_with_hops(
+    forward_hops: usize,
+    return_hops: usize,
+) -> anyhow::Result<(IntegrationEnv, HoprSession, Vec<NodeInfo>)> {
     let size = request_cluster_size(NODES);
     request_latency_profile(LATENCY_PROFILE);
     anyhow::ensure!(
@@ -183,7 +195,9 @@ async fn setup_return_path_env() -> anyhow::Result<(IntegrationEnv, HoprSession,
     );
 
     let env = IntegrationEnv::setup().await?;
-    let (session, exit) = env.open_unreliable_session_paths(0, 1).await?;
+    let (session, exit) = env
+        .open_unreliable_session_paths(forward_hops, return_hops)
+        .await?;
     let candidates = env.return_relayer_candidates(exit)?;
     anyhow::ensure!(
         candidates.len() >= 2,
@@ -193,7 +207,9 @@ async fn setup_return_path_env() -> anyhow::Result<(IntegrationEnv, HoprSession,
     tracing::info!(
         %exit,
         candidates = candidates.len(),
-        "return-path env ready (0-hop forward, 1-hop return)"
+        forward_hops,
+        return_hops,
+        "return-path env ready"
     );
     Ok((env, session, candidates))
 }
@@ -331,51 +347,71 @@ async fn session_should_survive_return_relayer_loss() -> anyhow::Result<()> {
     let (after_kill, spread_after) =
         pump_and_measure(&mut rx, &mut tx, &candidates, &payload, "after-kill").await?;
 
-    // How long the stream stayed degraded, which is what a recovery target is actually about.
-    // Aggregate arrival cannot express it: it folds recovery latency, steady-state rate and
-    // timeout behaviour into one number whose run-to-run spread (measured: 19-45% on identical
-    // builds) is wider than the effects worth detecting.
-    let recovery_target_mbps = before_kill.mbps * RECOVERY_FRACTION;
-    let recovered_after = after_kill.time_to_sustain(recovery_target_mbps, RECOVERY_SUSTAIN_WINDOW);
+    assert_recovered(&before_kill, &after_kill, &spread, &spread_after)
+}
 
-    // A sustain measurement over a pump shorter than the window is meaningless -- the opening
-    // burst satisfies it on its own. Fail loudly rather than report a recovery that cannot have
-    // been observed.
+/// Report every measurement, then assert on them in combination.
+///
+/// Each statistic alone has a way of being satisfied by a stream that is dead. `time_to_sustain`
+/// once reported "recovered after 381.3s" for one, because an opening burst filled the window and
+/// nothing was required of the stream afterwards. Aggregate arrival folds recovery latency,
+/// steady-state rate and transfer length into one number whose run-to-run spread (measured: 19-45%
+/// on identical builds) is wider than the effect being detected. The conjunction is what has no
+/// such hole: the stream must reach the rate in time, *still* be carrying it when the pump ends,
+/// and never have gone quiet for longer than the deadline on the way.
+fn assert_recovered(
+    before_kill: &Transfer,
+    after_kill: &Transfer,
+    spread: &RelayerSpread,
+    spread_after: &RelayerSpread,
+) -> anyhow::Result<()> {
+    let target_mbps = before_kill.mbps * RECOVERY_FRACTION;
+    let recovered_after = after_kill.time_to_sustain(target_mbps, RECOVERY_SUSTAIN_WINDOW);
+    let steady_state = after_kill.steady_state_mbps(RECOVERY_SUSTAIN_WINDOW);
+    let longest_stall = after_kill.longest_stall();
+
+    // A pump shorter than the sustain window cannot answer the question at all. `time_to_sustain`
+    // already refuses to guess, but say so explicitly rather than let it read as "never recovered".
     anyhow::ensure!(
-        after_kill.seconds > RECOVERY_SUSTAIN_WINDOW.as_secs_f64(),
+        after_kill.wall_seconds > RECOVERY_SUSTAIN_WINDOW.as_secs_f64(),
         "after-kill pump ran only {:.2}s, shorter than the {RECOVERY_SUSTAIN_WINDOW:?} sustain \
          window, so recovery cannot be measured at all ({:.1}% arrived)",
-        after_kill.seconds,
+        after_kill.wall_seconds,
         after_kill.arrival_pct(),
     );
 
-    match recovered_after {
-        Some(secs) => tracing::info!(
-            "after-kill: recovered to {recovery_target_mbps:.2} MB/s ({:.0}% of pre-kill) after \
-             {secs:.1}s, sustained over {RECOVERY_SUSTAIN_WINDOW:?} -- aim {}s, boundary {}s{}",
-            RECOVERY_FRACTION * 100.0,
-            RECOVERY_AIM.as_secs(),
-            RECOVERY_DEADLINE.as_secs(),
-            if secs > RECOVERY_AIM.as_secs_f64() {
-                " (PASSES the boundary but MISSES the aim)"
-            } else {
-                ""
-            },
-        ),
-        None => tracing::info!(
-            "after-kill: never sustained {recovery_target_mbps:.2} MB/s over \
-             {RECOVERY_SUSTAIN_WINDOW:?} within the pump window"
-        ),
-    }
+    tracing::info!(
+        "after-kill measurements: recovery {} (aim {}s, boundary {}s){} | steady state over the \
+         final {RECOVERY_SUSTAIN_WINDOW:?} {steady_state:.2} MB/s vs target {target_mbps:.2} | \
+         ttfb {} | longest stall {longest_stall:.1}s | inter-arrival p50 {} / p95 {} | \
+         arrival {:.1}% ({} B of {} B) | wall {:.1}s",
+        recovered_after.map_or("never reached".to_string(), |s| format!("took {s:.1}s")),
+        RECOVERY_AIM.as_secs(),
+        RECOVERY_DEADLINE.as_secs(),
+        match recovered_after {
+            Some(s) if s > RECOVERY_AIM.as_secs_f64() => " (PASSES the boundary but MISSES the aim)",
+            _ => "",
+        },
+        after_kill
+            .time_to_first_byte()
+            .map_or("never".to_string(), |s| format!("{s:.1}s")),
+        after_kill
+            .inter_arrival_quantile(0.5)
+            .map_or("n/a".to_string(), |s| format!("{s:.3}s")),
+        after_kill
+            .inter_arrival_quantile(0.95)
+            .map_or("n/a".to_string(), |s| format!("{s:.3}s")),
+        after_kill.arrival_pct(),
+        after_kill.received_bytes,
+        after_kill.sent_bytes,
+        after_kill.wall_seconds,
+    );
 
-    // Recovery *time*, not aggregate arrival. Losing a relayer is supposed to cost throughput; what
-    // it must not cost is a stream that never settles. Aggregate arrival cannot express that --
-    // it folds recovery latency, steady-state rate and transfer length into one number whose
-    // run-to-run spread (measured: 19-45% on identical builds) is wider than the effect.
+    // 1. It reached the rate, and inside the deadline.
     anyhow::ensure!(
         recovered_after.is_some_and(|secs| secs <= RECOVERY_DEADLINE.as_secs_f64()),
-        "return path did not recover in time: {} (target {recovery_target_mbps:.2} MB/s = {:.0}% \
-         of pre-kill {:.2} MB/s, deadline {RECOVERY_DEADLINE:?}); {:.1}% arrived overall, the lost \
+        "return path did not recover in time: {} (target {target_mbps:.2} MB/s = {:.0}% of \
+         pre-kill {:.2} MB/s, deadline {RECOVERY_DEADLINE:?}); {:.1}% arrived overall, the lost \
          relayer had carried {:.0}% of replies — {}",
         recovered_after.map_or("never reached".to_string(), |s| format!("took {s:.1}s")),
         RECOVERY_FRACTION * 100.0,
@@ -384,6 +420,26 @@ async fn session_should_survive_return_relayer_loss() -> anyhow::Result<()> {
         spread.max_share() * 100.0,
         spread_after.summary(),
     );
+
+    // 2. It was still carrying that rate when the pump ended — a stream that recovered and then
+    //    died again has not recovered, and only the tail of the transfer can say so.
+    anyhow::ensure!(
+        steady_state >= target_mbps,
+        "return path recovered at {} but was down to {steady_state:.2} MB/s over the final \
+         {RECOVERY_SUSTAIN_WINDOW:?} (target {target_mbps:.2} MB/s) — it did not hold",
+        recovered_after.map_or("never".to_string(), |s| format!("{s:.1}s")),
+    );
+
+    // 3. It never went quiet for longer than the deadline. A stream that stalls for a minute
+    //    mid-transfer can still satisfy both of the above, and is not a recovered stream.
+    anyhow::ensure!(
+        longest_stall <= RECOVERY_DEADLINE.as_secs_f64(),
+        "return path went quiet for {longest_stall:.1}s, longer than the {RECOVERY_DEADLINE:?} \
+         deadline, despite recovering at {} — {}",
+        recovered_after.map_or("never".to_string(), |s| format!("{s:.1}s")),
+        spread_after.summary(),
+    );
+
     anyhow::ensure!(
         after_kill.received_bytes < after_kill.sent_bytes || after_kill.sha_ok,
         "full payload returned after the kill but corrupted (SHA-256 mismatch)",
@@ -395,4 +451,46 @@ async fn session_should_survive_return_relayer_loss() -> anyhow::Result<()> {
         spread_after.summary(),
     );
     Ok(())
+}
+
+/// The same incident on a symmetric 1-hop-out / 1-hop-back session — the shape a real deployment
+/// runs.
+///
+/// Kept alongside the `(0, 1)` case rather than replacing it. With a relay on both directions the
+/// forwarded-packet histogram no longer attributes cleanly: the victim may have been carrying data
+/// out, replies back, or both, so a collapse cannot be pinned on the return path from the counters
+/// alone. That makes this the realistic test and `(0, 1)` the diagnostic one.
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+#[ignore = "requires hoprd/hoprd-localcluster binaries + a chain"]
+async fn a_symmetric_session_should_survive_relayer_loss() -> anyhow::Result<()> {
+    let (_env, session, candidates) = setup_env_with_hops(1, 1).await?;
+    let payload = random_payload();
+    let (mut rx, mut tx) = tokio::io::split(session);
+
+    let (before_kill, spread) =
+        pump_and_measure(&mut rx, &mut tx, &candidates, &payload, "sym-before-kill").await?;
+    anyhow::ensure!(
+        before_kill.arrival_pct() > 50.0,
+        "baseline pump only returned {:.1}% — the path was already broken before the kill",
+        before_kill.arrival_pct(),
+    );
+
+    let busiest = spread
+        .busiest()
+        .ok_or_else(|| anyhow::anyhow!("no relayer forwarded anything; nothing to kill"))?;
+    let victim = candidates
+        .iter()
+        .find(|n| n.address == busiest)
+        .ok_or_else(|| anyhow::anyhow!("busiest relayer {busiest} is not a cluster node"))?;
+    tracing::info!(
+        victim = %busiest,
+        share_pct = spread.max_share() * 100.0,
+        "killing the busiest relayer (symmetric 1-hop session; direction not attributable)"
+    );
+    victim.kill()?;
+
+    let (after_kill, spread_after) =
+        pump_and_measure(&mut rx, &mut tx, &candidates, &payload, "sym-after-kill").await?;
+
+    assert_recovered(&before_kill, &after_kill, &spread, &spread_after)
 }

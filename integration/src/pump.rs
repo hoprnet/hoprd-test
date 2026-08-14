@@ -22,12 +22,21 @@ pub struct Transfer {
     pub mbps: f64,
     /// True only when the full payload returned intact (received == sent and bytes match).
     pub sha_ok: bool,
-    /// `(seconds since the transfer started, cumulative bytes received)`, one per read.
+    /// Wall-clock from the moment the pump started to the moment the reader stopped.
+    ///
+    /// Distinct from [`Self::seconds`], which spans first byte to last: the difference between the
+    /// two is exactly the time a recovering stream spent delivering nothing, which is the interval
+    /// a recovery deadline is about.
+    pub wall_seconds: f64,
+    /// `(seconds since the *pump started*, cumulative bytes received)`, one per read.
     ///
     /// Aggregate arrival cannot express *when* a transfer recovered — it folds recovery latency,
     /// steady-state rate and timeout behaviour into a single number whose run-to-run spread is
     /// wider than the effects worth measuring. The series keeps the shape so recovery can be read
     /// off it directly.
+    ///
+    /// Stamped from the pump start rather than the first arrival, so a stream that delivered
+    /// nothing for its first 12 s cannot report that it recovered at t=0.
     pub progress: Vec<(f64, usize)>,
 }
 
@@ -37,18 +46,88 @@ impl Transfer {
         (self.received_bytes as f64) / (self.sent_bytes.max(1) as f64) * 100.0
     }
 
+    /// Seconds from the start of the pump to the first byte back, `None` if none ever arrived.
+    pub fn time_to_first_byte(&self) -> Option<f64> {
+        self.progress.first().map(|&(at, _)| at)
+    }
+
+    /// The longest interval in which no bytes arrived.
+    ///
+    /// Counts the wait for the first byte and the tail after the last one, not merely the gaps
+    /// between arrivals: a stream that delivered a burst and then died has its worst stall
+    /// entirely in that tail, and a measure that ignored it would call the burst healthy.
+    pub fn longest_stall(&self) -> f64 {
+        let mut previous = 0.0;
+        let mut worst: f64 = 0.0;
+        for &(at, _) in &self.progress {
+            worst = worst.max(at - previous);
+            previous = at;
+        }
+        worst.max(self.wall_seconds - previous)
+    }
+
+    /// Gap between consecutive arrivals at quantile `q`, `None` with fewer than two arrivals.
+    ///
+    /// The pair p50/p95 separates a stream that is merely slow (both rise together) from one that
+    /// is stuttering (p50 stays low while p95 blows out) — a distinction that mean throughput
+    /// cannot make.
+    pub fn inter_arrival_quantile(&self, q: f64) -> Option<f64> {
+        if self.progress.len() < 2 {
+            return None;
+        }
+        let mut gaps: Vec<f64> = self.progress.windows(2).map(|w| w[1].0 - w[0].0).collect();
+        gaps.sort_by(|a, b| a.partial_cmp(b).expect("arrival timestamps are never NaN"));
+        let index = (((gaps.len() - 1) as f64) * q.clamp(0.0, 1.0)).round() as usize;
+        gaps.get(index).copied()
+    }
+
+    /// Throughput over the final `window` of the pump, in MB/s.
+    ///
+    /// Anchored on the end of the *pump*, not on the last arrival. A stream that died has no
+    /// arrivals to anchor on, and anchoring on its last one would report the rate it managed
+    /// before dying — which is precisely how a dead stream came to be reported as recovered.
+    pub fn steady_state_mbps(&self, window: Duration) -> f64 {
+        let window_s = window.as_secs_f64();
+        let from = self.wall_seconds - window_s;
+        if from < 0.0 {
+            return 0.0;
+        }
+        let Some(&(_, total)) = self.progress.last() else {
+            return 0.0;
+        };
+        let at_from = self
+            .progress
+            .iter()
+            .rev()
+            .find(|(at, _)| *at <= from)
+            .map(|&(_, bytes)| bytes)
+            .unwrap_or(0);
+        ((total.saturating_sub(at_from)) as f64) / 1_000_000.0 / window_s
+    }
+
     /// Seconds until throughput first sustains `target_mbps` over a `window`.
     ///
     /// This is the statistic a recovery target is actually about: how long the transfer stayed
     /// degraded, not how much arrived in total. `None` means it never got there.
+    ///
+    /// A window that has not yet elapsed cannot have been sustained, so no answer is returned
+    /// before `window` and none at all for a pump shorter than one. Without that, an opening burst
+    /// satisfies the window on its own and a transfer that died immediately afterwards reports a
+    /// recovery that never happened.
     pub fn time_to_sustain(&self, target_mbps: f64, window: Duration) -> Option<f64> {
         let window_s = window.as_secs_f64();
+        if self.wall_seconds < window_s {
+            return None;
+        }
         let need = target_mbps * 1_000_000.0 * window_s;
 
         // For each sample, look back one window; the first point where enough arrived within it is
         // when the transfer was last still degraded.
         let mut earliest = 0usize;
         for (i, &(at, bytes)) in self.progress.iter().enumerate() {
+            if at < window_s {
+                continue;
+            }
             while self.progress[earliest].0 < at - window_s {
                 earliest += 1;
             }
@@ -150,8 +229,12 @@ pub async fn pump_halves(
     let mut buf = vec![0u8; IO_CHUNK];
     let mut progress: Vec<(f64, usize)> = Vec::new();
     let mut first_at: Option<std::time::Instant> = None;
-    let mut last_at = std::time::Instant::now();
-    let overall_deadline = std::time::Instant::now() + timeout;
+    // Everything is stamped against the moment the pump started, not the first byte back. On a
+    // recovering stream the interval between the two *is* the outage, and timing from the first
+    // arrival discards exactly the quantity a recovery deadline is about.
+    let pump_started = std::time::Instant::now();
+    let mut last_at = pump_started;
+    let overall_deadline = pump_started + timeout;
 
     let recv = async {
         while received.len() < total_bytes {
@@ -165,11 +248,11 @@ pub async fn pump_halves(
             match tokio::time::timeout(READ_IDLE_TIMEOUT, rx.read(&mut buf)).await {
                 Ok(Ok(0)) => break, // EOF
                 Ok(Ok(just_read)) => {
-                    let started = *first_at.get_or_insert_with(std::time::Instant::now);
                     last_at = std::time::Instant::now();
+                    first_at.get_or_insert(last_at);
                     received.extend_from_slice(&buf[..just_read]);
                     progress.push((
-                        last_at.saturating_duration_since(started).as_secs_f64(),
+                        last_at.saturating_duration_since(pump_started).as_secs_f64(),
                         received.len(),
                     ));
                 }
@@ -203,24 +286,39 @@ pub async fn pump_halves(
         .saturating_duration_since(first_at)
         .as_secs_f64()
         .max(1e-9);
+    let wall_seconds = pump_started.elapsed().as_secs_f64().max(1e-9);
     let received_bytes = received.len();
     let mbps = (received_bytes as f64) / 1_000_000.0 / seconds;
     let sha_ok = received_bytes == total_bytes && sha256_digest(&received) == expected;
 
-    tracing::info!(
-        "{label}: recv {received_bytes}/{total_bytes} B in {seconds:.2}s = {mbps:.2} MB/s, \
-         arrival {:.2}%, sha_ok={sha_ok}",
-        (received_bytes as f64) / (total_bytes.max(1) as f64) * 100.0,
-    );
-
-    Ok(Transfer {
+    let transfer = Transfer {
         sent_bytes: total_bytes,
         received_bytes,
         seconds,
         mbps,
         sha_ok,
+        wall_seconds,
         progress,
-    })
+    };
+
+    tracing::info!(
+        "{label}: recv {received_bytes}/{total_bytes} B in {seconds:.2}s = {mbps:.2} MB/s \
+         (wall {wall_seconds:.2}s), arrival {:.2}%, ttfb {}, longest stall {:.2}s, \
+         inter-arrival p50 {} / p95 {}, sha_ok={sha_ok}",
+        transfer.arrival_pct(),
+        transfer
+            .time_to_first_byte()
+            .map_or("never".to_string(), |s| format!("{s:.2}s")),
+        transfer.longest_stall(),
+        transfer
+            .inter_arrival_quantile(0.5)
+            .map_or("n/a".to_string(), |s| format!("{s:.3}s")),
+        transfer
+            .inter_arrival_quantile(0.95)
+            .map_or("n/a".to_string(), |s| format!("{s:.3}s")),
+    );
+
+    Ok(transfer)
 }
 
 /// Pump `payload` with a **single `write_all`** — no batching, no inter-batch
@@ -290,4 +388,162 @@ pub async fn pump_continuous(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A transfer with the given `(second, cumulative bytes)` arrivals over a `wall_seconds` pump.
+    fn transfer(wall_seconds: f64, progress: &[(f64, usize)]) -> Transfer {
+        let received_bytes = progress.last().map(|&(_, b)| b).unwrap_or(0);
+        Transfer {
+            sent_bytes: received_bytes.max(1),
+            received_bytes,
+            seconds: progress
+                .last()
+                .zip(progress.first())
+                .map(|((last, _), (first, _))| last - first)
+                .unwrap_or(0.0),
+            mbps: 0.0,
+            sha_ok: false,
+            wall_seconds,
+            progress: progress.to_vec(),
+        }
+    }
+
+    /// One megabyte per arrival, one arrival per second, from `from` to `to` inclusive.
+    fn steady(from: u64, to: u64) -> Vec<(f64, usize)> {
+        (from..=to)
+            .map(|s| (s as f64, ((s - from + 1) as usize) * 1_000_000))
+            .collect()
+    }
+
+    /// The measurement that reported "recovered after 381.3s" for a stream that was dead.
+    ///
+    /// A burst delivers well over the target, the stream then delivers nothing for the rest of the
+    /// pump. Anchoring on arrivals alone, the burst satisfies the window and the transfer looks
+    /// recovered; the window has to be anchored in wall-clock for the burst to be seen for what it
+    /// is.
+    #[test]
+    fn a_burst_followed_by_silence_should_not_read_as_recovery() {
+        let burst = transfer(380.0, &steady(0, 2));
+
+        assert_eq!(
+            burst.time_to_sustain(0.5, Duration::from_secs(3)),
+            None,
+            "an opening burst is not a sustained rate"
+        );
+        assert_eq!(
+            burst.steady_state_mbps(Duration::from_secs(3)),
+            0.0,
+            "the final window of a dead stream carries nothing"
+        );
+        assert!(
+            burst.longest_stall() > 370.0,
+            "the tail after the last byte is the stall, got {:.1}s",
+            burst.longest_stall()
+        );
+    }
+
+    /// Vacuity guard for the above: the same shape sustained to the end must read as recovered.
+    #[test]
+    fn a_rate_held_to_the_end_should_read_as_recovery() {
+        let healthy = transfer(10.0, &steady(0, 10));
+
+        assert!(
+            healthy
+                .time_to_sustain(0.5, Duration::from_secs(3))
+                .is_some_and(|s| s <= 4.0),
+            "a rate held throughout should recover promptly, got {:?}",
+            healthy.time_to_sustain(0.5, Duration::from_secs(3))
+        );
+        assert!(
+            healthy.steady_state_mbps(Duration::from_secs(3)) >= 0.9,
+            "the final window should carry ~1 MB/s, got {:.2}",
+            healthy.steady_state_mbps(Duration::from_secs(3))
+        );
+    }
+
+    /// Recovery is measured from the moment the pump starts, because that is when the fault the
+    /// stream is recovering from was introduced. Timing from the first byte back silently discards
+    /// the entire outage.
+    #[test]
+    fn recovery_should_be_timed_from_the_pump_start_not_the_first_byte() {
+        let late = transfer(30.0, &steady(12, 30));
+
+        let recovered = late
+            .time_to_sustain(0.5, Duration::from_secs(3))
+            .expect("the stream does sustain the rate once it starts");
+        assert!(
+            recovered >= 12.0,
+            "the 12s outage before the first byte must be counted, got {recovered:.1}s"
+        );
+        assert_eq!(late.time_to_first_byte(), Some(12.0));
+    }
+
+    /// A pump shorter than the sustain window cannot answer the question at all.
+    #[test]
+    fn a_pump_shorter_than_the_window_should_report_no_recovery() {
+        let brief = transfer(1.6, &[(0.0, 4_000_000), (1.6, 8_000_000)]);
+
+        assert_eq!(
+            brief.time_to_sustain(0.5, Duration::from_secs(3)),
+            None,
+            "a 1.6s pump cannot demonstrate a 3s sustained rate"
+        );
+    }
+
+    /// The wait for the first byte is a stall like any other, and on a recovering stream it is
+    /// usually the longest one.
+    #[test]
+    fn the_wait_for_the_first_byte_should_count_as_a_stall() {
+        let late = transfer(20.0, &steady(9, 20));
+
+        assert!(
+            (late.longest_stall() - 9.0).abs() < 1e-9,
+            "the 9s opening gap is the longest stall, got {:.1}s",
+            late.longest_stall()
+        );
+    }
+
+    /// A stuttering stream and a uniformly slow one can carry identical totals; the p50/p95 pair is
+    /// what tells them apart.
+    #[test]
+    fn inter_arrival_quantiles_should_separate_stutter_from_slowness() {
+        let stuttering = transfer(
+            20.0,
+            &[
+                (0.0, 1_000_000),
+                (0.1, 2_000_000),
+                (0.2, 3_000_000),
+                (0.3, 4_000_000),
+                (12.0, 5_000_000),
+            ],
+        );
+        let p50 = stuttering.inter_arrival_quantile(0.5).expect("has gaps");
+        let p95 = stuttering.inter_arrival_quantile(0.95).expect("has gaps");
+
+        assert!(p50 <= 0.2, "typical gap should stay small, got {p50:.2}s");
+        assert!(p95 > 10.0, "the outlier gap must show at p95, got {p95:.2}s");
+
+        let smooth = transfer(5.0, &steady(0, 5));
+        assert_eq!(
+            smooth.inter_arrival_quantile(0.5),
+            smooth.inter_arrival_quantile(0.95),
+            "an evenly-paced stream has no spread between p50 and p95"
+        );
+    }
+
+    /// Nothing arrived at all: every statistic has to say so rather than divide by zero.
+    #[test]
+    fn a_stream_that_delivered_nothing_should_report_no_recovery_and_no_rate() {
+        let dead = transfer(30.0, &[]);
+
+        assert_eq!(dead.time_to_first_byte(), None);
+        assert_eq!(dead.time_to_sustain(0.5, Duration::from_secs(3)), None);
+        assert_eq!(dead.steady_state_mbps(Duration::from_secs(3)), 0.0);
+        assert_eq!(dead.inter_arrival_quantile(0.5), None);
+        assert!((dead.longest_stall() - 30.0).abs() < 1e-9);
+    }
 }
