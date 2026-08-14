@@ -15,8 +15,6 @@ use std::{path::PathBuf, time::Duration};
 
 use anyhow::Context as _;
 
-use edgli::hopr_lib::SESSION_MTU;
-
 use crate::Address;
 
 /// Node count used unless `HOPRD_CLUSTER_SIZE` overrides it.
@@ -87,38 +85,23 @@ pub const P2P_PORT_BASE: u16 = 19000;
 pub const API_HOST: &str = "127.0.0.1";
 pub const API_TOKEN: &str = "test-token-localcluster";
 
-/// Payload volume one full-mesh channel must be able to relay before it can run dry.
+/// Per-channel stake for the full-mesh channels localcluster opens over the REST API.
 ///
-/// A survival run has to be able to push its whole budget through any single relayer without the
-/// payment layer becoming the binding constraint: a channel that exhausts mid-run makes the relay
-/// reject every subsequent ticket, which collapses throughput and is indistinguishable from the
-/// return-path failure these scenarios exist to measure.
-const CHANNEL_DATA_BUDGET_BYTES: u64 = 1024 * 1024 * 1024;
-
-/// Face value of one ticket at the cluster's own ticket-price oracle.
+/// localcluster's own default has been observed to exhaust mid-run: a relayer began rejecting
+/// every ticket with "ticket value is greater than remaining unrealized balance" about three
+/// minutes into a survival phase, which throttles the path at the payment layer and is
+/// indistinguishable from the return-path failure the scenario exists to measure.
 ///
-/// Measured on a live cluster: the oracle is set to 1e-16 wxHOPR and a relayed packet issues a
-/// ticket of 0.0000000000024 wxHOPR. One ticket is issued per relayed packet per hop.
-const TICKET_FACE_VALUE_WXHOPR: f64 = 2.4e-12;
-
-/// Floor on the per-channel stake, independent of the data budget above.
+/// A flat figure rather than one derived from a data budget. The ticket arithmetic for a 1 GiB
+/// channel comes to a few microHOPR -- seven orders of magnitude below this -- so a derivation
+/// would compute a number that never applies and read as though it were load-bearing. Each node
+/// holds 1000 wxHOPR and opens at most four channels, so 100 is affordable and leaves the
+/// payment layer far from binding.
 ///
-/// The arithmetic says [`CHANNEL_DATA_BUDGET_BYTES`] costs a few microHOPR, which is *below*
-/// localcluster's own 1 wxHOPR default — yet a run still exhausted a relayer's channel, reporting
-/// 0.0000000000016 wxHOPR remaining after only ~883 tickets. Ticket volume alone does not explain
-/// that, so the ticket-derived figure cannot be trusted as sufficient on its own. Until the real
-/// accounting is known (see `log_channel_stakes`), the stake is floored far above every reading of
-/// it. Each node holds 1000 wxHOPR and opens at most four channels, so 100 is affordable.
-const MIN_CHANNEL_FUNDING_WXHOPR: f64 = 100.0;
-
-/// Per-channel stake passed to localcluster for REST-API channel opening.
-///
-/// Without it localcluster uses its own default, which a sustained run has been observed to
-/// exhaust.
+/// `log_channel_stakes` records what the channels actually hold at bootstrap, since the node DBs
+/// are deleted at teardown and the starting stake cannot be recovered afterwards.
 fn channel_funding_amount() -> String {
-    let packets = (CHANNEL_DATA_BUDGET_BYTES as f64 / SESSION_MTU as f64).ceil();
-    let for_budget = packets * TICKET_FACE_VALUE_WXHOPR;
-    format!("{} wxHOPR", for_budget.max(MIN_CHANNEL_FUNDING_WXHOPR))
+    "100 wxHOPR".to_string()
 }
 
 const CLUSTER_START_TIMEOUT: Duration = Duration::from_secs(600);

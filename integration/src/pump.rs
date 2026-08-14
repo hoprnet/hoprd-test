@@ -343,11 +343,6 @@ pub fn pace_for_rate(mbps: f64) -> Option<Duration> {
     (mbps > 0.0).then(|| Duration::from_secs_f64(IO_CHUNK as f64 / (mbps * 1_000_000.0)))
 }
 
-/// Reads and discards whatever is still arriving until the stream is quiet for `quiet_for`.
-///
-/// Between two measured phases on one session this is what stops the first phase's tail being
-/// counted as the second phase's arrival. The returned byte count is itself a finding: a large
-/// number means the previous phase had not actually finished when it was declared complete.
 /// Upper bound on a single drain, however busy the stream stays.
 ///
 /// Without it the loop only ends on quiet or end-of-stream, so a return stream that keeps
@@ -355,6 +350,11 @@ pub fn pace_for_rate(mbps: f64) -> Option<Duration> {
 /// next phase, so the run would hang rather than fail.
 const DRAIN_MAX_TOTAL: Duration = Duration::from_secs(60);
 
+/// Reads and discards whatever is still arriving until the stream is quiet for `quiet_for`.
+///
+/// Between two measured phases on one session this is what stops the first phase's tail being
+/// counted as the second phase's arrival. The returned byte count is itself a finding: a large
+/// number means the previous phase had not actually finished when it was declared complete.
 pub async fn drain_until_quiet(
     rx: &mut tokio::io::ReadHalf<HoprSession>,
     quiet_for: Duration,
@@ -443,6 +443,11 @@ pub async fn pump_halves(
     // arrival discards exactly the quantity a recovery deadline is about.
     let pump_started = std::time::Instant::now();
     let mut last_at = pump_started;
+    // Liveness for a phased pump is about *this* phase. An earlier phase draining keeps the raw
+    // stream busy and `last_at` fresh, so neither `NeverStarted` nor `Idle` could fire while this
+    // phase received nothing -- the pump would burn the whole timeout and report
+    // `DeadlineExceeded` instead of the fast, accurate answer.
+    let mut last_mine_at = pump_started;
 
     // Attribution is incremental: rescanning the whole buffer after every read would be quadratic
     // over a payload measured in megabytes.
@@ -467,9 +472,16 @@ pub async fn pump_halves(
                 break;
             }
             let now = std::time::Instant::now();
+            let (live_bytes, since_live) = match opts.phase {
+                Some(_) => (
+                    mine * RECORD_SIZE,
+                    now.saturating_duration_since(last_mine_at),
+                ),
+                None => (received.len(), now.saturating_duration_since(last_at)),
+            };
             if let Some(stop) = stop_reason(
-                received.len(),
-                now.saturating_duration_since(last_at),
+                live_bytes,
+                since_live,
                 now.saturating_duration_since(pump_started),
                 timeout,
             ) {
@@ -497,6 +509,7 @@ pub async fn pump_halves(
                     received.extend_from_slice(&buf[..just_read]);
                     let attributed = match opts.phase {
                         Some(phase) => {
+                            let before = mine;
                             scan_at = scan_records(
                                 &received,
                                 scan_at,
@@ -505,6 +518,9 @@ pub async fn pump_halves(
                                 &mut foreign,
                                 Some(&mut mine_buf),
                             );
+                            if mine > before {
+                                last_mine_at = last_at;
+                            }
                             mine * RECORD_SIZE
                         }
                         None => received.len(),
@@ -821,6 +837,39 @@ mod tests {
         assert_eq!(
             foreign, 4,
             "the other four belong to phase 1 and must not be credited"
+        );
+    }
+
+    /// The collected buffer must survive a record straddling two reads, since that is the normal
+    /// case on a live stream — the single-scan tests would not catch an off-by-one there.
+    #[test]
+    fn the_collected_buffer_should_be_intact_across_a_read_boundary() {
+        let payload = tagged_payload(2, 4 * RECORD_SIZE);
+        let split = RECORD_SIZE + 5; // lands mid-record
+
+        let (mut mine, mut foreign) = (0, 0);
+        let mut mine_buf = Vec::new();
+        let resume = scan_records(
+            &payload[..split],
+            0,
+            2,
+            &mut mine,
+            &mut foreign,
+            Some(&mut mine_buf),
+        );
+        scan_records(
+            &payload,
+            resume,
+            2,
+            &mut mine,
+            &mut foreign,
+            Some(&mut mine_buf),
+        );
+
+        assert_eq!(4, mine);
+        assert_eq!(
+            payload, mine_buf,
+            "the straddling record must appear exactly once, in order"
         );
     }
 

@@ -8,8 +8,9 @@
 //! first relayers — exactly the distribution that collapsed onto three nodes in the
 //! 2026-08-11 incident.
 //!
-//! Metrics come from the node's own process, so a node that has been killed simply
-//! stops answering; [`sample`] keeps its last known value rather than failing the run.
+//! Metrics come from the node's own process, so a node that has been killed simply stops
+//! answering. [`sample`] drops it rather than failing the run, and [`spread`] therefore
+//! reports no delta for it — see [`spread`] for why that is the wanted behaviour here.
 //!
 //! **What this cannot see.** A dead node forwards nothing whether or not the sender still
 //! picked it, so a zero delta after a kill does not prove the sender stopped choosing that
@@ -134,9 +135,11 @@ pub async fn sample(nodes: &[NodeInfo]) -> ForwardedSample {
 
 /// Per-node deltas between two samples, as a return-relayer histogram.
 ///
-/// A node missing from `after` (killed mid-run) contributes whatever it had already
-/// forwarded at its last successful read — its share up to that point is real traffic
-/// and must not be silently dropped.
+/// A node missing from `after` (killed mid-run) yields no delta. That is deliberate: the
+/// windows these scenarios measure begin *after* the kill, so the victim genuinely carried
+/// nothing during them, and carrying a stale end value forward would credit pre-death traffic
+/// to a post-kill window. The cost is that a window spanning the kill under-reports the
+/// victim and so inflates every survivor's share — do not use `spread` across a kill boundary.
 ///
 /// A node missing from `before` is a different matter and is excluded. `sample` omits a node
 /// whose scrape failed, so an address that appears only in `after` has no start value —
@@ -274,9 +277,10 @@ hopr_packets_forwarded_bytes 99999
     }
 
     #[test]
-    fn spread_should_keep_a_relayer_that_stopped_answering() {
-        // Node 2 was killed mid-run: present in `before`, gone from `after`. The traffic
-        // it carried before dying is real and must still count.
+    fn spread_should_report_no_delta_for_a_relayer_that_stopped_answering() {
+        // Node 2 was killed mid-run: present in `before`, gone from `after`. It has no end value,
+        // so it yields no delta -- the post-kill window it would be measured over is one in
+        // which it genuinely carried nothing.
         let before = sample_of(&[(addr(1), 0), (addr(2), 50)]);
         let after = sample_of(&[(addr(1), 100)]);
 

@@ -605,8 +605,13 @@ fn assert_recovered(
         spread_after.summary(),
     );
 
+    // Both sides must speak in attributed bytes. `sha_ok` for a phased pump is computed over
+    // this phase's records alone, so comparing it against the *raw* `received_bytes` -- which
+    // includes the earlier phase's backlog -- lets foreign traffic push the count past the
+    // budget while some of this phase's records are still missing, and reports a merely lossy
+    // stream as corrupted.
     anyhow::ensure!(
-        after_kill.received_bytes < after_kill.sent_bytes || after_kill.sha_ok,
+        after_kill.attributed_bytes < after_kill.sent_bytes || after_kill.sha_ok,
         "full payload returned after the kill but corrupted (SHA-256 mismatch)",
     );
     tracing::info!(
