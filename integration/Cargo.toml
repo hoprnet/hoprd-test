@@ -13,7 +13,7 @@ publish = false
 # rewrites it to the resolved edge-client ref (EDGLI_REF, default main HEAD, or the
 # rev from a merge dispatch) and runs `cargo update -p edgli`. Keep it recent so
 # local `just` builds match what CI tests.
-edgli = { git = "https://github.com/hoprnet/edge-client", rev = "415ea4c3bf7d485f5a7bfb3501e50ce44e623f33", default-features = false, features = [
+edgli = { git = "https://github.com/hoprnet/edge-client", rev = "3f0b288a11ef27a61beeb9627cc204f4aab8afcd", default-features = false, features = [
   "runtime-tokio",
   "blokli",
 ] }
