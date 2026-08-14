@@ -3,7 +3,13 @@
 Scenarios for the weaknesses behind the 2026-08-11 `gnosis_vpn-client` return-path break,
 and the fixes for them: [hoprnet#8328] (SURB pop order), [hoprnet#8329] (invalidate
 relayers whose channel closed), [hoprnet#8331] (return-path diversity), [hoprnet#8330]
-(frame max-age).
+(frame max-age), [hoprnet#8341] (report SURB round-trips into the network graph) and
+[hoprnet#8345] (act on return-path silence from the supply side).
+
+The last two are what turn the earlier fixes from "a better return path is available" into
+"a broken one is noticed and replaced": #8341 gives the graph per-leg round-trip evidence,
+and #8345 acts on sustained silence. They are the mechanism
+`session_should_survive_return_relayer_loss` measures.
 
 Section references (§) are to the [HOPR protocol summary][summary] at the commit the
 `hopr-debug` skill pins. They are the reason each scenario is shaped the way it is —
@@ -14,6 +20,8 @@ explains.
 [hoprnet#8329]: https://github.com/hoprnet/hoprnet/pull/8329
 [hoprnet#8330]: https://github.com/hoprnet/hoprnet/pull/8330
 [hoprnet#8331]: https://github.com/hoprnet/hoprnet/pull/8331
+[hoprnet#8341]: https://github.com/hoprnet/hoprnet/pull/8341
+[hoprnet#8345]: https://github.com/hoprnet/hoprnet/pull/8345
 [summary]: https://github.com/hoprnet/rfc/blob/0b1eb50cf8e11a312ce3f29e723fc97e1d47bf32/SUMMARY.md
 
 ## Design constraints that apply to all of them
