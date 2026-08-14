@@ -21,6 +21,7 @@ pub mod cluster;
 pub mod env;
 pub mod pump;
 pub mod relayers;
+pub mod session_metrics;
 
 /// Payload size pumped through each session. Also sizes the strategy's expected
 /// packet count for channel funding (see [`env`]).

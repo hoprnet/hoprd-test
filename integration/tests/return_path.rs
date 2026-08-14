@@ -52,6 +52,7 @@ use hoprd_integration_test::{
     cluster::{NodeInfo, request_cluster_size, request_latency_profile},
     pump::{PumpOpts, Transfer, drain_until_quiet, pace_for_rate, pump_halves, tagged_payload},
     relayers::{self, RelayerSpread},
+    session_metrics,
 };
 
 /// `hoprd-localcluster` caps out here, and every extra node is one more possible return
@@ -519,6 +520,13 @@ async fn session_should_survive_return_relayer_loss() -> anyhow::Result<()> {
         survival_bytes as f64 / 1_000_000.0,
         before_kill.mbps,
     );
+    // Counted at the entry's own session, not from the relayers' node-wide `forwarded` counter.
+    // That counter includes probes, keep-alives and every other session those nodes carry, so
+    // comparing it against this phase's payload is not a like-for-like measurement -- doing so once
+    // produced a two-orders-of-magnitude "delivery gap" that was mostly other traffic. These
+    // counters carry a `session_id`, so they say what actually reached this session and what became
+    // of it.
+    let counters_before = session_metrics::sample();
     let survival_payload = tagged_payload(SURVIVAL_PHASE, survival_bytes);
     let (after_kill, spread_after) = pump_and_measure(
         &mut rx,
@@ -534,6 +542,12 @@ async fn session_should_survive_return_relayer_loss() -> anyhow::Result<()> {
         },
     )
     .await?;
+    // Logged whatever the outcome: on a healthy run it confirms the counters track the payload, so
+    // the one time they disagree the reading is already trusted.
+    tracing::info!(
+        "after-kill session counters: {}",
+        counters_before.delta(&session_metrics::sample()).summary()
+    );
 
     assert_recovered(&before_kill, &after_kill, &spread, &spread_after, settle)
 }
@@ -745,6 +759,13 @@ async fn a_symmetric_session_should_survive_relayer_loss() -> anyhow::Result<()>
     let offered_mbps = before_kill.mbps * SURVIVAL_LOAD_FRACTION;
     let survival_bytes =
         (offered_mbps * 1_000_000.0 * SURVIVAL_LOAD_DURATION.as_secs_f64()) as usize;
+    // Counted at the entry's own session, not from the relayers' node-wide `forwarded` counter.
+    // That counter includes probes, keep-alives and every other session those nodes carry, so
+    // comparing it against this phase's payload is not a like-for-like measurement -- doing so once
+    // produced a two-orders-of-magnitude "delivery gap" that was mostly other traffic. These
+    // counters carry a `session_id`, so they say what actually reached this session and what became
+    // of it.
+    let counters_before = session_metrics::sample();
     let survival_payload = tagged_payload(SURVIVAL_PHASE, survival_bytes);
     let (after_kill, spread_after) = pump_and_measure(
         &mut rx,
@@ -760,6 +781,12 @@ async fn a_symmetric_session_should_survive_relayer_loss() -> anyhow::Result<()>
         },
     )
     .await?;
+    // Logged whatever the outcome: on a healthy run it confirms the counters track the payload, so
+    // the one time they disagree the reading is already trusted.
+    tracing::info!(
+        "after-kill session counters: {}",
+        counters_before.delta(&session_metrics::sample()).summary()
+    );
 
     assert_recovered(&before_kill, &after_kill, &spread, &spread_after, settle)
 }
