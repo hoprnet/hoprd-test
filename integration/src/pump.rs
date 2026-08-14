@@ -79,12 +79,16 @@ fn scan_records(
     phase: u8,
     mine: &mut usize,
     foreign: &mut usize,
+    mut mine_buf: Option<&mut Vec<u8>>,
 ) -> usize {
     let mut at = from;
     while at + RECORD_SIZE <= buf.len() {
         if buf[at..at + 4] == RECORD_MAGIC {
             if buf[at + 4] == phase {
                 *mine += 1;
+                if let Some(out) = mine_buf.as_deref_mut() {
+                    out.extend_from_slice(&buf[at..at + RECORD_SIZE]);
+                }
             } else {
                 *foreign += 1;
             }
@@ -445,10 +449,20 @@ pub async fn pump_halves(
     let mut scan_at = 0usize;
     let mut mine = 0usize;
     let mut foreign = 0usize;
+    // Records belonging to this phase, in arrival order, so integrity is checked against what
+    // this phase actually sent rather than against a stream carrying another phase's backlog.
+    let mut mine_buf: Vec<u8> = Vec::new();
     let mut outcome = PumpOutcome::Complete;
     let recv = async {
         loop {
-            if received.len() >= total_bytes {
+            // Completion is per phase. Counting the raw stream lets a released backlog from an
+            // earlier phase fill the budget, so the pump would report `Complete` before its own
+            // records had all arrived -- and the byte count it reported would not be its own.
+            let done = match opts.phase {
+                Some(_) => mine * RECORD_SIZE >= total_bytes,
+                None => received.len() >= total_bytes,
+            };
+            if done {
                 outcome = PumpOutcome::Complete;
                 break;
             }
@@ -483,8 +497,14 @@ pub async fn pump_halves(
                     received.extend_from_slice(&buf[..just_read]);
                     let attributed = match opts.phase {
                         Some(phase) => {
-                            scan_at =
-                                scan_records(&received, scan_at, phase, &mut mine, &mut foreign);
+                            scan_at = scan_records(
+                                &received,
+                                scan_at,
+                                phase,
+                                &mut mine,
+                                &mut foreign,
+                                Some(&mut mine_buf),
+                            );
                             mine * RECORD_SIZE
                         }
                         None => received.len(),
@@ -525,7 +545,12 @@ pub async fn pump_halves(
         None => (received_bytes, 0),
     };
     let mbps = (attributed_bytes as f64) / 1_000_000.0 / seconds;
-    let sha_ok = received_bytes == total_bytes && sha256_digest(&received) == expected;
+    // A phased pump's raw buffer interleaves another phase's records, so hashing it can never
+    // match. Check the records this phase actually sent.
+    let sha_ok = match opts.phase {
+        Some(_) => mine_buf.len() == total_bytes && sha256_digest(&mine_buf) == expected,
+        None => received_bytes == total_bytes && sha256_digest(&received) == expected,
+    };
 
     let transfer = Transfer {
         outcome,
@@ -791,11 +816,34 @@ mod tests {
         buf.extend_from_slice(&tagged_payload(2, 6 * RECORD_SIZE));
 
         let (mut mine, mut foreign) = (0, 0);
-        scan_records(&buf, 0, 2, &mut mine, &mut foreign);
+        scan_records(&buf, 0, 2, &mut mine, &mut foreign, None);
         assert_eq!(mine, 6, "phase 2 sent six records");
         assert_eq!(
             foreign, 4,
             "the other four belong to phase 1 and must not be credited"
+        );
+    }
+
+    /// Regression: a phased pump used to complete on the raw byte count, so records released
+    /// late by an earlier phase filled the budget and the pump reported `Complete` before its
+    /// own records had arrived. The collected buffer is what completion and integrity are now
+    /// measured on, so it must contain this phase's records and nothing else.
+    #[test]
+    fn scanning_should_collect_only_this_phase_for_integrity() {
+        let phase_one = tagged_payload(1, 3 * RECORD_SIZE);
+        let phase_two = tagged_payload(2, 5 * RECORD_SIZE);
+        let mut buf = phase_one.clone();
+        buf.extend_from_slice(&phase_two);
+
+        let (mut mine, mut foreign) = (0, 0);
+        let mut mine_buf = Vec::new();
+        scan_records(&buf, 0, 2, &mut mine, &mut foreign, Some(&mut mine_buf));
+
+        assert_eq!(mine, 5);
+        assert_eq!(foreign, 3);
+        assert_eq!(
+            phase_two, mine_buf,
+            "the collected buffer must be phase 2's payload exactly, so its digest can be checked"
         );
     }
 
@@ -807,13 +855,13 @@ mod tests {
         let split = RECORD_SIZE + 5; // mid-record
 
         let (mut mine, mut foreign) = (0, 0);
-        let resume = scan_records(&buf[..split], 0, 1, &mut mine, &mut foreign);
+        let resume = scan_records(&buf[..split], 0, 1, &mut mine, &mut foreign, None);
         assert_eq!(
             mine, 1,
             "only the first whole record fits in the first read"
         );
 
-        scan_records(&buf, resume, 1, &mut mine, &mut foreign);
+        scan_records(&buf, resume, 1, &mut mine, &mut foreign, None);
         assert_eq!(
             mine, 3,
             "the straddling record is picked up on the next scan"
@@ -830,7 +878,7 @@ mod tests {
         lossy.extend_from_slice(&whole[5 * RECORD_SIZE + 7..]); // drop 2 records, misalign the rest
 
         let (mut mine, mut foreign) = (0, 0);
-        scan_records(&lossy, 0, 2, &mut mine, &mut foreign);
+        scan_records(&lossy, 0, 2, &mut mine, &mut foreign, None);
         assert!(
             (7..=8).contains(&mine),
             "the surviving records must still be found after a hole, got {mine}"
