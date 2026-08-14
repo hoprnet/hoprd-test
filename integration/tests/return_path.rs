@@ -544,9 +544,11 @@ async fn session_should_survive_return_relayer_loss() -> anyhow::Result<()> {
     .await?;
     // Logged whatever the outcome: on a healthy run it confirms the counters track the payload, so
     // the one time they disagree the reading is already trusted.
+    let counters = counters_before.delta(&session_metrics::sample());
+    tracing::info!("after-kill session counters: {}", counters.summary());
     tracing::info!(
-        "after-kill session counters: {}",
-        counters_before.delta(&session_metrics::sample()).summary()
+        "after-kill session families that moved: {}",
+        counters.nonzero()
     );
 
     assert_recovered(&before_kill, &after_kill, &spread, &spread_after, settle)
@@ -783,9 +785,11 @@ async fn a_symmetric_session_should_survive_relayer_loss() -> anyhow::Result<()>
     .await?;
     // Logged whatever the outcome: on a healthy run it confirms the counters track the payload, so
     // the one time they disagree the reading is already trusted.
+    let counters = counters_before.delta(&session_metrics::sample());
+    tracing::info!("after-kill session counters: {}", counters.summary());
     tracing::info!(
-        "after-kill session counters: {}",
-        counters_before.delta(&session_metrics::sample()).summary()
+        "after-kill session families that moved: {}",
+        counters.nonzero()
     );
 
     assert_recovered(&before_kill, &after_kill, &spread, &spread_after, settle)
