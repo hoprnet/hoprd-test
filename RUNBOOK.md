@@ -134,7 +134,7 @@ SCENARIOS=session_should_survive_return_relayer_loss \
 ```
 
 `HOPRD_KEEP_ARTIFACTS=1` always — without it the node logs are deleted at teardown and a failed
-run yields nothing. `HOPRD_KILL_SETTLE_SECS` is deliberately *not* set: the scenario's own 4 s
+run yields nothing. `HOPRD_KILL_SETTLE_SECS` is deliberately *not* set: the scenario's own 10 s
 settle is part of what it measures, and forcing it to 0 makes the survival phase race packets that
 were already in flight when the relayer died. Override it only for a one-off experiment. One run at a time: the cluster binds fixed ports and this is a single machine.
 
@@ -161,7 +161,7 @@ killed and relaunched in two minutes rather than at the fifteen-minute mark.
 - All lines in the test stdout come from the **in-process entry**. Node logs are separate files.
   A tracing target of `hopr_transport` in stdout is the entry, not a relayer.
 - Recovery is `time_to_sustain(target_mbps, window)` over **attributed** bytes only, timed **from
-  the kill** — the 4 s settle is included, since the session is broken throughout it.
+  the kill** — the 10 s settle is included, since the session is broken throughout it.
   `time_to_sustain` refuses to answer before a full window has elapsed, so an opening burst can no
   longer satisfy it.
 - Read `outcome` first. `NeverStarted` / `SessionClosed` mean nothing was serving the session, and
@@ -180,8 +180,8 @@ killed and relaunched in two minutes rather than at the fifteen-minute mark.
 
 ## What the survival scenario measures
 
-**warm up (2 MB, phase tag 1) → drain to quiet → kill → settle 4 s → offer phase tag 2 at the
-measured baseline for 60 s.**
+**warm up (2 MB, phase tag 1) → drain to quiet → kill → settle 10 s → offer phase tag 2 at 0.7×
+the measured baseline for 60 s.**
 
 Each element is load-bearing, and each replaced something that made an earlier run unmeasurable:
 
@@ -197,9 +197,19 @@ arrive and 100 % arrival is unreachable by construction.
 
 ## Acceptance criterion
 
-**At least 90 % of the payload offered after the fault must arrive** (`MIN_SURVIVAL_ARRIVAL_PCT`),
-counting attributed bytes only, and the leftover from earlier phases must stay under
-`MAX_LEFTOVER_BYTES` — above it the drain failed and the phases are mixed, so the run says nothing.
+**The payload offered after the fault must arrive**, counting attributed bytes only, above a floor
+that is *derived* rather than chosen — do not read a number out of this file, read
+`MIN_SURVIVAL_ARRIVAL_PCT`:
+
+```
+MIN_SURVIVAL_ARRIVAL_PCT = 100 × (1 − (RECOVERY_DEADLINE − KILL_SETTLE) / SURVIVAL_LOAD_DURATION)
+```
+
+Nothing is offered during the settle, so only the part of the outage overlapping the phase costs
+arrival; requiring the outage inside the deadline and requiring this arrival are the same statement.
+At the current constants (20 s, 10 s, 60 s) that is **83.3 %**. The leftover from earlier phases must
+also stay under `MAX_LEFTOVER_BYTES` — above it the drain failed and the phases are mixed, so the
+run says nothing.
 
 Everything else the run prints is a **diagnostic, not a gate**: `time_to_sustain` against the 20 s
 boundary and 15 s aim, steady-state throughput, longest stall and the inter-arrival quantiles are

@@ -144,11 +144,16 @@ const _: () = assert!(
 ///
 /// Requiring the outage to stay inside the deadline is therefore the same statement as requiring
 /// this arrival, and the two can no longer drift apart. The previous flat 90 % was only reachable
-/// because writer backpressure stretched the phase far past its nominal duration: with the offer
-/// corrected, an outage that lands exactly on the 20 s deadline yields ~67 %, so 90 % would have
-/// failed a session that recovered perfectly on time.
-const MIN_SURVIVAL_ARRIVAL_PCT: f64 =
-    100.0 * (1.0 - (RECOVERY_DEADLINE.as_secs() as f64 / SURVIVAL_LOAD_DURATION.as_secs() as f64));
+/// because writer backpressure stretched the phase far past its nominal duration.
+///
+/// Only the part of the outage that overlaps the phase costs arrival. Nothing is offered during
+/// [`KILL_SETTLE`], so a session that recovers exactly on the deadline is only ever seen to be down
+/// for `RECOVERY_DEADLINE - KILL_SETTLE`; charging it for the settle as well would demand less than
+/// the deadline does and let a late recovery pass.
+const MIN_SURVIVAL_ARRIVAL_PCT: f64 = 100.0
+    * (1.0
+        - ((RECOVERY_DEADLINE.as_secs() - KILL_SETTLE.as_secs()) as f64
+            / SURVIVAL_LOAD_DURATION.as_secs() as f64));
 
 /// Quiet period the survival pump tolerates before calling the stream idle.
 ///
@@ -173,7 +178,17 @@ const _: () = assert!(
 /// first byte offered. Nothing is in flight during the settle, so the mechanism cannot demonstrate
 /// itself here -- but the session is broken throughout it, and the clock a user experiences starts
 /// when the relay dies, not when the test resumes sending.
-const KILL_SETTLE: Duration = Duration::from_secs(4);
+///
+/// Ten seconds rather than four: detection has been measured at ~9 s from the kill, so a shorter
+/// settle offers the opening seconds of the survival phase into a path whose re-plan has not landed
+/// yet. Those bytes are lost to an outage the session is still in, and they are charged to arrival
+/// as though the recovered path had dropped them.
+const KILL_SETTLE: Duration = Duration::from_secs(10);
+
+const _: () = assert!(
+    KILL_SETTLE.as_secs() < RECOVERY_DEADLINE.as_secs(),
+    "the settle must leave some of the deadline for the mechanism to demonstrate itself in"
+);
 
 /// [`KILL_SETTLE`], overridable for a one-off experiment via `HOPRD_KILL_SETTLE_SECS`.
 fn kill_settle() -> Duration {
