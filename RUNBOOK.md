@@ -93,7 +93,7 @@ grep -A2 'name = "hopr-lib"' <hoprd-test-worktree>/integration/Cargo.lock | grep
 grep -c 'name = "hopr-lib"'  <hoprd-test-worktree>/integration/Cargo.lock                    # must be 1
 
 # b) the binaries actually contain the change — pick a string unique to it
-MARKER='return path silent; re-planning'
+MARKER='return path silent, re-planned'
 strings "$HOPRD_BIN" | grep -qc "$MARKER" || echo "HOPRD MISSING THE CHANGE"
 strings <test-binary>  | grep -qc "$MARKER" || echo "ENTRY MISSING THE CHANGE"
 ```
