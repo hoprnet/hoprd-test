@@ -339,7 +339,11 @@ async fn boot_edgli(
         target_open_channels: target_channels + genesis_channels,
         ..Default::default()
     };
-    let mut strat_cfg = default_strategy_cfg(&edgli, &sizing).await?;
+    // Sync and sizing-only since edge-client#136: the strategy resolves capacities to balances
+    // each tick against the live winning probability, so nothing is read from the chain here.
+    // `channel_capacity` is left at its default deliberately -- raising it also raises the safe
+    // gate below which the node opens *zero* channels, which is not what this scenario measures.
+    let mut strat_cfg = default_strategy_cfg(&sizing)?;
     for kind in &mut strat_cfg.strategies {
         let EdgeStrategyKind::ChannelLifecycle(lc) = kind;
         lc.eligibility = EligibilityConfig {
