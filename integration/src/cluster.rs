@@ -695,7 +695,10 @@ pub async fn log_channel_stakes(summary: &ClusterSummary) {
     for (id, node) in summary.nodes.iter().enumerate() {
         let stakes = async {
             let body: serde_json::Value = client
-                .get(format!("{}/api/v4/channels?includingClosed=false", node.api_url))
+                .get(format!(
+                    "{}/api/v4/channels?includingClosed=false",
+                    node.api_url
+                ))
                 .header("Authorization", auth_header())
                 .send()
                 .await?
@@ -722,8 +725,10 @@ pub async fn log_channel_stakes(summary: &ClusterSummary) {
         .await;
 
         match stakes {
-            Ok(s) => tracing::info!(node = id, requested = %channel_funding_amount(), outgoing = %s,
-                "outgoing channel stakes at bootstrap"),
+            Ok(s) => {
+                tracing::info!(node = id, requested = %channel_funding_amount(), outgoing = %s,
+                "outgoing channel stakes at bootstrap")
+            }
             Err(e) => tracing::warn!(node = id, error = %e, "could not read channel stakes"),
         }
     }

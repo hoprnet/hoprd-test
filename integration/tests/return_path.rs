@@ -442,7 +442,8 @@ async fn session_should_survive_return_relayer_loss() -> anyhow::Result<()> {
     // that load is still arriving when recovery happens. Sized from the measured baseline rather
     // than fixed, so the offered rate stays a constant fraction of what this cluster can do.
     let offered_mbps = before_kill.mbps * SURVIVAL_LOAD_FRACTION;
-    let survival_bytes = (offered_mbps * 1_000_000.0 * SURVIVAL_LOAD_DURATION.as_secs_f64()) as usize;
+    let survival_bytes =
+        (offered_mbps * 1_000_000.0 * SURVIVAL_LOAD_DURATION.as_secs_f64()) as usize;
     tracing::info!(
         "survival phase: offering {:.2} MB at {offered_mbps:.2} MB/s for {SURVIVAL_LOAD_DURATION:?} \
          (baseline {:.2} MB/s)",
@@ -500,7 +501,8 @@ fn assert_recovered(
     // recover" would be plainly false, and was -- a run reporting exactly that had already returned
     // 93.6% of its payload.
     anyhow::ensure!(
-        !after_kill.outcome.exit_stopped_serving() || after_kill.arrival_pct() >= MIN_SURVIVAL_ARRIVAL_PCT,
+        !after_kill.outcome.exit_stopped_serving()
+            || after_kill.arrival_pct() >= MIN_SURVIVAL_ARRIVAL_PCT,
         "the exit stopped serving the session before it could recover ({:?} after {:.1}s, only \
          {:.1}% of {} B returned) — {}",
         after_kill.outcome,
@@ -586,7 +588,9 @@ fn assert_recovered(
          replies — {}",
         after_kill.arrival_pct(),
         after_kill.sent_bytes,
-        recovered_after.map_or("never reached the target rate".to_string(), |s| format!("took {s:.1}s")),
+        recovered_after.map_or("never reached the target rate".to_string(), |s| format!(
+            "took {s:.1}s"
+        )),
         spread.max_share() * 100.0,
         spread_after.summary(),
     );
@@ -663,7 +667,8 @@ async fn a_symmetric_session_should_survive_relayer_loss() -> anyhow::Result<()>
     tokio::time::sleep(settle).await;
 
     let offered_mbps = before_kill.mbps * SURVIVAL_LOAD_FRACTION;
-    let survival_bytes = (offered_mbps * 1_000_000.0 * SURVIVAL_LOAD_DURATION.as_secs_f64()) as usize;
+    let survival_bytes =
+        (offered_mbps * 1_000_000.0 * SURVIVAL_LOAD_DURATION.as_secs_f64()) as usize;
     let survival_payload = tagged_payload(SURVIVAL_PHASE, survival_bytes);
     let (after_kill, spread_after) = pump_and_measure(
         &mut rx,

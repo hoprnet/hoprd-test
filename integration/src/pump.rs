@@ -73,7 +73,13 @@ pub fn tagged_payload(phase: u8, bytes: usize) -> Vec<u8> {
 /// Returns the position to resume from, so a caller reading a stream can scan incrementally and
 /// still catch a record straddling two reads: scanning stops at the first offset where a whole
 /// record no longer fits, and the next call picks up exactly there.
-fn scan_records(buf: &[u8], from: usize, phase: u8, mine: &mut usize, foreign: &mut usize) -> usize {
+fn scan_records(
+    buf: &[u8],
+    from: usize,
+    phase: u8,
+    mine: &mut usize,
+    foreign: &mut usize,
+) -> usize {
     let mut at = from;
     while at + RECORD_SIZE <= buf.len() {
         if buf[at..at + 4] == RECORD_MAGIC {
@@ -312,7 +318,15 @@ pub async fn pump_loopback(
     timeout: Duration,
 ) -> anyhow::Result<Transfer> {
     let (mut rx, mut tx) = tokio::io::split(session);
-    pump_halves(&mut rx, &mut tx, payload, label, timeout, PumpOpts::default()).await
+    pump_halves(
+        &mut rx,
+        &mut tx,
+        payload,
+        label,
+        timeout,
+        PumpOpts::default(),
+    )
+    .await
 }
 
 /// Per-chunk delay that offers `payload_bytes` at `mbps` MB/s.
@@ -343,7 +357,9 @@ pub async fn drain_until_quiet(
         }
         discarded += read;
     }
-    tracing::info!("{label}: drained {discarded} B of leftover return traffic before the next phase");
+    tracing::info!(
+        "{label}: drained {discarded} B of leftover return traffic before the next phase"
+    );
     discarded
 }
 
@@ -402,7 +418,6 @@ pub async fn pump_halves(
     let pump_started = std::time::Instant::now();
     let mut last_at = pump_started;
 
-
     // Attribution is incremental: rescanning the whole buffer after every read would be quadratic
     // over a payload measured in megabytes.
     let mut scan_at = 0usize;
@@ -446,13 +461,16 @@ pub async fn pump_halves(
                     received.extend_from_slice(&buf[..just_read]);
                     let attributed = match opts.phase {
                         Some(phase) => {
-                            scan_at = scan_records(&received, scan_at, phase, &mut mine, &mut foreign);
+                            scan_at =
+                                scan_records(&received, scan_at, phase, &mut mine, &mut foreign);
                             mine * RECORD_SIZE
                         }
                         None => received.len(),
                     };
                     progress.push((
-                        last_at.saturating_duration_since(pump_started).as_secs_f64(),
+                        last_at
+                            .saturating_duration_since(pump_started)
+                            .as_secs_f64(),
                         attributed,
                     ));
                 }
@@ -728,7 +746,10 @@ mod tests {
         let p95 = stuttering.inter_arrival_quantile(0.95).expect("has gaps");
 
         assert!(p50 <= 0.2, "typical gap should stay small, got {p50:.2}s");
-        assert!(p95 > 10.0, "the outlier gap must show at p95, got {p95:.2}s");
+        assert!(
+            p95 > 10.0,
+            "the outlier gap must show at p95, got {p95:.2}s"
+        );
 
         let smooth = transfer(5.0, &steady(0, 5));
         assert_eq!(
@@ -750,7 +771,10 @@ mod tests {
         let (mut mine, mut foreign) = (0, 0);
         scan_records(&buf, 0, 2, &mut mine, &mut foreign);
         assert_eq!(mine, 6, "phase 2 sent six records");
-        assert_eq!(foreign, 4, "the other four belong to phase 1 and must not be credited");
+        assert_eq!(
+            foreign, 4,
+            "the other four belong to phase 1 and must not be credited"
+        );
     }
 
     /// Reads land on arbitrary boundaries, so a record routinely straddles two of them. Resuming
@@ -762,10 +786,16 @@ mod tests {
 
         let (mut mine, mut foreign) = (0, 0);
         let resume = scan_records(&buf[..split], 0, 1, &mut mine, &mut foreign);
-        assert_eq!(mine, 1, "only the first whole record fits in the first read");
+        assert_eq!(
+            mine, 1,
+            "only the first whole record fits in the first read"
+        );
 
         scan_records(&buf, resume, 1, &mut mine, &mut foreign);
-        assert_eq!(mine, 3, "the straddling record is picked up on the next scan");
+        assert_eq!(
+            mine, 3,
+            "the straddling record is picked up on the next scan"
+        );
         assert_eq!(foreign, 0);
     }
 
@@ -816,12 +846,7 @@ mod tests {
     #[test]
     fn waiting_for_the_first_byte_should_not_be_cut_short_by_the_idle_rule() {
         assert_eq!(
-            stop_reason(
-                0,
-                READ_IDLE_TIMEOUT * 2,
-                READ_IDLE_TIMEOUT * 2,
-                DEADLINE
-            ),
+            stop_reason(0, READ_IDLE_TIMEOUT * 2, READ_IDLE_TIMEOUT * 2, DEADLINE),
             None,
             "with nothing received the first-byte budget decides, not the idle timeout"
         );
@@ -835,7 +860,12 @@ mod tests {
             Some(PumpOutcome::Idle),
         );
         assert_eq!(
-            stop_reason(1_000, Duration::from_secs(1), Duration::from_secs(60), DEADLINE),
+            stop_reason(
+                1_000,
+                Duration::from_secs(1),
+                Duration::from_secs(60),
+                DEADLINE
+            ),
             None,
             "a stream still delivering must be left alone"
         );
