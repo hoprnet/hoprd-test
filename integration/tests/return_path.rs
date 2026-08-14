@@ -112,23 +112,55 @@ const SURVIVAL_LOAD_DURATION: Duration = Duration::from_secs(60);
 
 /// Fraction of the measured baseline rate at which the survival phase offers data.
 ///
-/// Must stay **above** [`RECOVERY_FRACTION`], or the test demands exactly what it offers and any
-/// loss at all puts the target permanently out of reach. An earlier version set both to 0.5, which
-/// made the run unpassable by construction while the doc comment claimed the opposite.
-const SURVIVAL_LOAD_FRACTION: f64 = 1.0;
+/// Below 1.0 on purpose. `before_kill.mbps` is a *burst* rate: the warm-up drains a SURB buffer
+/// that was filled before it started, so it measures what the session can do with SURBs already
+/// in hand, not what it sustains. Offering that same rate back after a quarter of the return
+/// capacity has gone simply backpressures the writer -- measured, a 60 s offer took 266 s, and
+/// the "recovery" at ~270 s was the backlog draining, not the path returning. The pump's own
+/// pacing cannot detect this, because backpressure and not [`pace_for_rate`] sets the real rate.
+///
+/// Must also stay **above** [`RECOVERY_FRACTION`], or the test demands exactly what it offers and
+/// any loss at all puts the target out of reach.
+const SURVIVAL_LOAD_FRACTION: f64 = 0.7;
 
 const _: () = assert!(
     SURVIVAL_LOAD_FRACTION > RECOVERY_FRACTION,
     "the survival phase must offer more than the recovery target demands"
 );
+const _: () = assert!(
+    SURVIVAL_LOAD_FRACTION < 1.0,
+    "offering the full burst baseline backpressures the writer and measures the harness"
+);
 
 /// Share of the survival payload that must come back for the session to count as having survived.
 ///
-/// The bar is aggregate delivery, not a rate held over every window. Losing a relayer costs real
-/// throughput and the session is unreliable, so demanding a sustained rate byte-by-byte tests the
-/// test's own pacing more than the protocol. What matters is that nearly all the data offered
-/// after the fault eventually arrives.
-const MIN_SURVIVAL_ARRIVAL_PCT: f64 = 90.0;
+/// Derived from [`RECOVERY_DEADLINE`] rather than chosen. Over a paced phase the session delivers
+/// nothing while the return path is down and roughly the offered rate once it is back, so
+/// aggregate arrival *is* the outage expressed as a fraction of the phase:
+///
+/// ```text
+/// arrival ≈ 1 − outage / SURVIVAL_LOAD_DURATION
+/// ```
+///
+/// Requiring the outage to stay inside the deadline is therefore the same statement as requiring
+/// this arrival, and the two can no longer drift apart. The previous flat 90 % was only reachable
+/// because writer backpressure stretched the phase far past its nominal duration: with the offer
+/// corrected, an outage that lands exactly on the 20 s deadline yields ~67 %, so 90 % would have
+/// failed a session that recovered perfectly on time.
+const MIN_SURVIVAL_ARRIVAL_PCT: f64 =
+    100.0 * (1.0 - (RECOVERY_DEADLINE.as_secs() as f64 / SURVIVAL_LOAD_DURATION.as_secs() as f64));
+
+/// Quiet period the survival pump tolerates before calling the stream idle.
+///
+/// Must exceed [`RECOVERY_DEADLINE`]: the pump exists to observe how long the path takes to come
+/// back, so a budget shorter than the deadline ends the measurement before the thing being
+/// measured can happen. The pump's own default is shorter, which is why this is stated.
+const SURVIVAL_IDLE_BUDGET: Duration = Duration::from_secs(30);
+
+const _: () = assert!(
+    SURVIVAL_IDLE_BUDGET.as_secs() > RECOVERY_DEADLINE.as_secs(),
+    "the idle budget must outlive the recovery deadline it is measuring"
+);
 
 /// How long to wait after the kill before offering any new data.
 ///
@@ -460,6 +492,7 @@ async fn session_should_survive_return_relayer_loss() -> anyhow::Result<()> {
         PumpOpts {
             pace: pace_for_rate(offered_mbps),
             phase: Some(SURVIVAL_PHASE),
+            idle_budget: Some(SURVIVAL_IDLE_BUDGET),
         },
     )
     .await?;
@@ -684,6 +717,7 @@ async fn a_symmetric_session_should_survive_relayer_loss() -> anyhow::Result<()>
         PumpOpts {
             pace: pace_for_rate(offered_mbps),
             phase: Some(SURVIVAL_PHASE),
+            idle_budget: Some(SURVIVAL_IDLE_BUDGET),
         },
     )
     .await?;

@@ -107,6 +107,16 @@ pub struct PumpOpts {
     pub pace: Option<Duration>,
     /// Phase tag whose records count toward this transfer; `None` counts every byte received.
     pub phase: Option<u8>,
+    /// Quiet period after which the stream counts as idle; `None` uses [`READ_IDLE_TIMEOUT`].
+    ///
+    /// Must be stated by any caller measuring how long a stream takes to come back, and must
+    /// exceed that deadline. The default is shorter than the return-path recovery deadline, so a
+    /// recovery slower than it would end the pump before it could be observed -- and for a phased
+    /// pump that has received nothing yet, it ends as `NeverStarted`, which reads as "the exit
+    /// stopped serving" while the exit is still visibly serving the other phase on the same
+    /// socket. The budget and the deadline live in different files, so state it here rather than
+    /// leave them to drift.
+    pub idle_budget: Option<Duration>,
 }
 
 /// Result of one loopback round-trip.
@@ -292,6 +302,7 @@ fn stop_reason(
     since_last_arrival: Duration,
     since_start: Duration,
     deadline: Duration,
+    idle_budget: Duration,
 ) -> Option<PumpOutcome> {
     if since_start >= deadline {
         return Some(PumpOutcome::DeadlineExceeded);
@@ -299,9 +310,10 @@ fn stop_reason(
     if received == 0 {
         // Nothing has arrived at all, so the idle rule has nothing to measure from and the
         // first-byte budget decides instead.
-        return (since_start >= NO_FIRST_BYTE_TIMEOUT).then_some(PumpOutcome::NeverStarted);
+        return (since_start >= idle_budget.max(NO_FIRST_BYTE_TIMEOUT))
+            .then_some(PumpOutcome::NeverStarted);
     }
-    (since_last_arrival >= READ_IDLE_TIMEOUT).then_some(PumpOutcome::Idle)
+    (since_last_arrival >= idle_budget).then_some(PumpOutcome::Idle)
 }
 
 pub fn sha256_digest(data: &[u8]) -> Vec<u8> {
@@ -448,6 +460,7 @@ pub async fn pump_halves(
     // phase received nothing -- the pump would burn the whole timeout and report
     // `DeadlineExceeded` instead of the fast, accurate answer.
     let mut last_mine_at = pump_started;
+    let idle_budget = opts.idle_budget.unwrap_or(READ_IDLE_TIMEOUT);
 
     // Attribution is incremental: rescanning the whole buffer after every read would be quadratic
     // over a payload measured in megabytes.
@@ -484,6 +497,7 @@ pub async fn pump_halves(
                 since_live,
                 now.saturating_duration_since(pump_started),
                 timeout,
+                idle_budget,
             ) {
                 tracing::warn!(
                     "{label}: stopping ({stop:?}) at {}/{total_bytes} B",
@@ -945,7 +959,13 @@ mod tests {
     #[test]
     fn a_stream_that_never_delivers_should_give_up_at_the_first_byte_budget() {
         assert_eq!(
-            stop_reason(0, NO_FIRST_BYTE_TIMEOUT, NO_FIRST_BYTE_TIMEOUT, DEADLINE),
+            stop_reason(
+                0,
+                NO_FIRST_BYTE_TIMEOUT,
+                NO_FIRST_BYTE_TIMEOUT,
+                DEADLINE,
+                READ_IDLE_TIMEOUT
+            ),
             Some(PumpOutcome::NeverStarted),
         );
         assert_eq!(
@@ -953,7 +973,8 @@ mod tests {
                 0,
                 NO_FIRST_BYTE_TIMEOUT - Duration::from_secs(1),
                 NO_FIRST_BYTE_TIMEOUT - Duration::from_secs(1),
-                DEADLINE
+                DEADLINE,
+                READ_IDLE_TIMEOUT
             ),
             None,
             "the budget must not expire early — a recovering stream may still be on its way"
@@ -965,7 +986,13 @@ mod tests {
     #[test]
     fn waiting_for_the_first_byte_should_not_be_cut_short_by_the_idle_rule() {
         assert_eq!(
-            stop_reason(0, READ_IDLE_TIMEOUT * 2, READ_IDLE_TIMEOUT * 2, DEADLINE),
+            stop_reason(
+                0,
+                READ_IDLE_TIMEOUT * 2,
+                READ_IDLE_TIMEOUT * 2,
+                DEADLINE,
+                READ_IDLE_TIMEOUT
+            ),
             None,
             "with nothing received the first-byte budget decides, not the idle timeout"
         );
@@ -975,7 +1002,13 @@ mod tests {
     #[test]
     fn a_stream_that_goes_quiet_after_delivering_should_stop_as_idle() {
         assert_eq!(
-            stop_reason(1_000, READ_IDLE_TIMEOUT, Duration::from_secs(60), DEADLINE),
+            stop_reason(
+                1_000,
+                READ_IDLE_TIMEOUT,
+                Duration::from_secs(60),
+                DEADLINE,
+                READ_IDLE_TIMEOUT
+            ),
             Some(PumpOutcome::Idle),
         );
         assert_eq!(
@@ -983,7 +1016,8 @@ mod tests {
                 1_000,
                 Duration::from_secs(1),
                 Duration::from_secs(60),
-                DEADLINE
+                DEADLINE,
+                READ_IDLE_TIMEOUT
             ),
             None,
             "a stream still delivering must be left alone"
@@ -995,7 +1029,7 @@ mod tests {
     #[test]
     fn a_stream_still_delivering_at_the_deadline_should_report_the_deadline() {
         assert_eq!(
-            stop_reason(1_000, Duration::ZERO, DEADLINE, DEADLINE),
+            stop_reason(1_000, Duration::ZERO, DEADLINE, DEADLINE, READ_IDLE_TIMEOUT),
             Some(PumpOutcome::DeadlineExceeded),
         );
     }
