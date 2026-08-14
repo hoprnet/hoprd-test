@@ -140,11 +140,16 @@ pub struct Transfer {
     pub mbps: f64,
     /// True only when the full payload returned intact (received == sent and bytes match).
     pub sha_ok: bool,
-    /// Wall-clock from the moment the pump started to the moment the reader stopped.
+    /// Wall-clock from the moment the pump started to the moment **the reader** stopped.
     ///
     /// Distinct from [`Self::seconds`], which spans first byte to last: the difference between the
     /// two is exactly the time a recovering stream spent delivering nothing, which is the interval
     /// a recovery deadline is about.
+    ///
+    /// Deliberately not the moment the pump returns. The writer is bounded separately, and a
+    /// backpressured one can keep running long after the reader has stopped; charging that to the
+    /// stream would make [`Self::longest_stall`] report the writer as return-path silence -- and
+    /// that value is asserted against the recovery deadline.
     pub wall_seconds: f64,
     /// `(seconds since the *pump started*, cumulative bytes received)`, one per read.
     ///
@@ -461,6 +466,10 @@ pub async fn pump_halves(
     // `DeadlineExceeded` instead of the fast, accurate answer.
     let mut last_mine_at = pump_started;
     let idle_budget = opts.idle_budget.unwrap_or(READ_IDLE_TIMEOUT);
+    // When the *reader* stopped, which is not when the pump returns. The writer is bounded
+    // separately and a backpressured one can outlive the reader by minutes; measuring to the join
+    // would charge that time to the return path.
+    let mut reader_stopped_at: Option<std::time::Instant> = None;
 
     // Attribution is incremental: rescanning the whole buffer after every read would be quadratic
     // over a payload measured in megabytes.
@@ -550,6 +559,7 @@ pub async fn pump_halves(
                 Err(_) => continue,
             }
         }
+        reader_stopped_at = Some(std::time::Instant::now());
         Ok(())
     };
 
@@ -568,7 +578,13 @@ pub async fn pump_halves(
         .saturating_duration_since(first_at)
         .as_secs_f64()
         .max(1e-9);
-    let wall_seconds = pump_started.elapsed().as_secs_f64().max(1e-9);
+    // To the reader's own stop, per this field's contract. Falling back to now only covers the
+    // read-error path, which returns before the measurement is used.
+    let wall_seconds = reader_stopped_at
+        .unwrap_or_else(std::time::Instant::now)
+        .saturating_duration_since(pump_started)
+        .as_secs_f64()
+        .max(1e-9);
     let received_bytes = received.len();
     let (attributed_bytes, foreign_bytes) = match opts.phase {
         Some(_) => (mine * RECORD_SIZE, foreign * RECORD_SIZE),
