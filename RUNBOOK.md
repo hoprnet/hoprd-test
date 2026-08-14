@@ -181,7 +181,7 @@ killed and relaunched in two minutes rather than at the fifteen-minute mark.
 ## What the survival scenario measures
 
 **warm up (2 MB, phase tag 1) → drain to quiet → kill → settle 10 s → offer phase tag 2 at 0.7×
-the measured baseline for 60 s.**
+the measured baseline for 60 s → stop reading 45 s after the last byte is offered.**
 
 Each element is load-bearing, and each replaced something that made an earlier run unmeasurable:
 
@@ -191,6 +191,23 @@ Each element is load-bearing, and each replaced something that made an earlier r
 | drain to quiet before the kill | warm-up traffic landing inside the survival window |
 | settle after the kill | the survival phase racing packets already in flight when the relay died |
 | paced load for 60 s | the payload being fully committed before recovery can happen |
+| 45 s tail cap after the offer | a trickle running to the overall deadline and scoring a backlog drain |
+
+The tail cap is the one to understand before reading any arrival figure. The idle budget cannot
+bound a stream that trickles — a session returning a few bytes a second is never quiet long enough
+to look idle and never fast enough to finish — so before the cap existed the phase ran until the
+exit gave up. The two runs on the same build differ by more than any tuning does:
+
+| | without the cap | with the 45 s cap |
+| --- | --- | --- |
+| wall | 447 s for a 60 s offer | 129 s |
+| arrival | 96.2 % | **0.7 %** |
+
+Both are true statements about the same session. The first says everything eventually showed up;
+the second says almost none of it was back within a bounded window. Only the second is a
+statement about the return path — the first is mostly a measurement of how long a backlog takes to
+drain. Note the offer itself stretched to 85 s under writer backpressure; the cap starts from the
+writer's last flush, not from the phase start, so backpressure does not eat the observation window.
 
 The session is **unreliable** — there is no retransmission — so bytes lost during the outage never
 arrive and 100 % arrival is unreachable by construction.
