@@ -527,6 +527,13 @@ async fn session_should_survive_return_relayer_loss() -> anyhow::Result<()> {
     // counters carry a `session_id`, so they say what actually reached this session and what became
     // of it.
     let counters_before = session_metrics::sample();
+    // Absolute, not a delta: a gauge that never moves differences to zero. Logged so an experiment
+    // on HOPR_SESSION_FRAME_TIMEOUT_MS can tell "the timeout changed nothing" from "the timeout
+    // never changed" -- the override is floored at 100 ms and read once at manager construction.
+    tracing::info!(
+        frame_timeout_ms = ?counters_before.frame_timeout_ms(),
+        "sequencer frame timeout in effect for this session"
+    );
     let survival_payload = tagged_payload(SURVIVAL_PHASE, survival_bytes);
     let (after_kill, spread_after) = pump_and_measure(
         &mut rx,
@@ -768,6 +775,13 @@ async fn a_symmetric_session_should_survive_relayer_loss() -> anyhow::Result<()>
     // counters carry a `session_id`, so they say what actually reached this session and what became
     // of it.
     let counters_before = session_metrics::sample();
+    // Absolute, not a delta: a gauge that never moves differences to zero. Logged so an experiment
+    // on HOPR_SESSION_FRAME_TIMEOUT_MS can tell "the timeout changed nothing" from "the timeout
+    // never changed" -- the override is floored at 100 ms and read once at manager construction.
+    tracing::info!(
+        frame_timeout_ms = ?counters_before.frame_timeout_ms(),
+        "sequencer frame timeout in effect for this session"
+    );
     let survival_payload = tagged_payload(SURVIVAL_PHASE, survival_bytes);
     let (after_kill, spread_after) = pump_and_measure(
         &mut rx,

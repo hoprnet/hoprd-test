@@ -64,6 +64,15 @@ const PACKETS_IN: &str = "hopr_session_surb_consumed_total";
 /// SURBs minted by the entry for the counterparty to reply with.
 const SURBS_PRODUCED: &str = "hopr_session_surb_produced_total";
 
+/// The sequencer's frame timeout, as the session actually resolved it.
+///
+/// A gauge, so it is read absolutely rather than as a delta. It exists here to make an experiment
+/// falsifiable: `HOPR_SESSION_FRAME_TIMEOUT_MS` is floored at 100 ms and read once at manager
+/// construction, so a mistyped or unpropagated value silently leaves the default in place. Without
+/// reading it back, "changing the timeout did nothing" and "the timeout never changed" are the same
+/// observation.
+const FRAME_TIMEOUT_MS: &str = "hopr_session_frame_timeout_ms";
+
 /// Segment/frame accounting. Driven by `SessionTelemetryTracker`, which is **not** installed for
 /// every session type — read these only alongside their presence flag, never as bare zeroes.
 const SEGMENTS_IN: &str = "hopr_session_ack_incoming_segments_total";
@@ -96,6 +105,14 @@ impl SessionCounters {
     /// Packets received by the session. See [`PACKETS_IN`].
     pub fn packets_in(&self) -> Option<u64> {
         self.get(PACKETS_IN)
+    }
+
+    /// The frame timeout the session resolved, summed over live sessions. See [`FRAME_TIMEOUT_MS`].
+    ///
+    /// Read from an *absolute* sample, never a delta — it is a gauge, and one session's steady
+    /// value differences to zero.
+    pub fn frame_timeout_ms(&self) -> Option<u64> {
+        self.get(FRAME_TIMEOUT_MS)
     }
 
     /// Whether any per-session family exists at all; `false` means the build has no telemetry.
