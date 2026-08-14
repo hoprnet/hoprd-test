@@ -15,6 +15,8 @@ use std::{path::PathBuf, time::Duration};
 
 use anyhow::Context as _;
 
+use edgli::hopr_lib::SESSION_MTU;
+
 use crate::Address;
 
 /// Node count used unless `HOPRD_CLUSTER_SIZE` overrides it.
@@ -77,6 +79,40 @@ pub const API_PORT_BASE: u16 = 13000;
 pub const P2P_PORT_BASE: u16 = 19000;
 pub const API_HOST: &str = "127.0.0.1";
 pub const API_TOKEN: &str = "test-token-localcluster";
+
+/// Payload volume one full-mesh channel must be able to relay before it can run dry.
+///
+/// A survival run has to be able to push its whole budget through any single relayer without the
+/// payment layer becoming the binding constraint: a channel that exhausts mid-run makes the relay
+/// reject every subsequent ticket, which collapses throughput and is indistinguishable from the
+/// return-path failure these scenarios exist to measure.
+const CHANNEL_DATA_BUDGET_BYTES: u64 = 1024 * 1024 * 1024;
+
+/// Face value of one ticket at the cluster's own ticket-price oracle.
+///
+/// Measured on a live cluster: the oracle is set to 1e-16 wxHOPR and a relayed packet issues a
+/// ticket of 0.0000000000024 wxHOPR. One ticket is issued per relayed packet per hop.
+const TICKET_FACE_VALUE_WXHOPR: f64 = 2.4e-12;
+
+/// Floor on the per-channel stake, independent of the data budget above.
+///
+/// The arithmetic says [`CHANNEL_DATA_BUDGET_BYTES`] costs a few microHOPR, which is *below*
+/// localcluster's own 1 wxHOPR default — yet a run still exhausted a relayer's channel, reporting
+/// 0.0000000000016 wxHOPR remaining after only ~883 tickets. Ticket volume alone does not explain
+/// that, so the ticket-derived figure cannot be trusted as sufficient on its own. Until the real
+/// accounting is known (see `log_channel_stakes`), the stake is floored far above every reading of
+/// it. Each node holds 1000 wxHOPR and opens at most four channels, so 100 is affordable.
+const MIN_CHANNEL_FUNDING_WXHOPR: f64 = 100.0;
+
+/// Per-channel stake passed to localcluster for REST-API channel opening.
+///
+/// Without it localcluster uses its own default, which a sustained run has been observed to
+/// exhaust.
+fn channel_funding_amount() -> String {
+    let packets = (CHANNEL_DATA_BUDGET_BYTES as f64 / SESSION_MTU as f64).ceil();
+    let for_budget = packets * TICKET_FACE_VALUE_WXHOPR;
+    format!("{} wxHOPR", for_budget.max(MIN_CHANNEL_FUNDING_WXHOPR))
+}
 
 const CLUSTER_START_TIMEOUT: Duration = Duration::from_secs(600);
 const READYZ_TIMEOUT: Duration = Duration::from_secs(120);
@@ -308,6 +344,7 @@ pub async fn bring_up() -> anyhow::Result<ClusterHandle> {
     await_cluster_peers_discovered().await?;
     tracing::info!("verifying cluster: full-mesh outgoing channels Open");
     await_intracluster_channels_open().await?;
+    log_channel_stakes(&handle.summary).await;
     Ok(handle)
 }
 
@@ -407,6 +444,10 @@ async fn spawn_managed() -> anyhow::Result<ClusterHandle> {
         &P2P_PORT_BASE.to_string(),
         "--api-token",
         API_TOKEN,
+        // Stated rather than defaulted: localcluster's own default has been observed to exhaust
+        // mid-run, which throttles the path at the payment layer and reads as a return-path failure.
+        "--funding-amount",
+        &channel_funding_amount(),
     ]);
     // Written inside the data dir so it lives exactly as long as the cluster does.
     if let Some(yaml) = REQUESTED_LATENCY.get() {
@@ -640,6 +681,52 @@ async fn await_intracluster_channels_open() -> anyhow::Result<()> {
         },
     )
     .await
+}
+
+/// Records the stake actually sitting in every outgoing channel, once, after bootstrap.
+///
+/// A run has already been thrown away because a relayer exhausted its channel mid-survival, and
+/// the stake it started from could not be recovered afterwards: the node DBs are deleted at
+/// teardown even under `HOPRD_KEEP_ARTIFACTS`, and the ticket volume observed does not by itself
+/// explain the exhaustion. Reading the balances here turns that from something inferred after the
+/// fact into something the log states outright.
+pub async fn log_channel_stakes(summary: &ClusterSummary) {
+    let client = node_http_client();
+    for (id, node) in summary.nodes.iter().enumerate() {
+        let stakes = async {
+            let body: serde_json::Value = client
+                .get(format!("{}/api/v4/channels?includingClosed=false", node.api_url))
+                .header("Authorization", auth_header())
+                .send()
+                .await?
+                .json()
+                .await?;
+            anyhow::Ok(
+                body["outgoing"]
+                    .as_array()
+                    .map(|arr| {
+                        arr.iter()
+                            .map(|ch| {
+                                format!(
+                                    "{}={}",
+                                    ch["peerAddress"].as_str().unwrap_or("?"),
+                                    ch["balance"].as_str().unwrap_or("?")
+                                )
+                            })
+                            .collect::<Vec<_>>()
+                            .join(" ")
+                    })
+                    .unwrap_or_default(),
+            )
+        }
+        .await;
+
+        match stakes {
+            Ok(s) => tracing::info!(node = id, requested = %channel_funding_amount(), outgoing = %s,
+                "outgoing channel stakes at bootstrap"),
+            Err(e) => tracing::warn!(node = id, error = %e, "could not read channel stakes"),
+        }
+    }
 }
 
 #[cfg(test)]

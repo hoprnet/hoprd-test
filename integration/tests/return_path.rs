@@ -546,9 +546,16 @@ fn assert_recovered(
         recovered_after.map_or("never reached".to_string(), |s| format!("took {s:.1}s")),
         RECOVERY_AIM.as_secs(),
         RECOVERY_DEADLINE.as_secs(),
+        // Both thresholds, in order. The earlier version only compared against the aim and then
+        // claimed the boundary had been met regardless, so a 270s recovery against a 20s boundary
+        // printed "PASSES the boundary" -- the opposite of the truth, in the one line a reader
+        // scans first. Neither threshold is asserted, which is exactly why the wording has to be
+        // right: this string is the only place the run says whether it hit them.
         match recovered_after {
-            Some(s) if s > RECOVERY_AIM.as_secs_f64() => " (PASSES the boundary but MISSES the aim)",
-            _ => "",
+            None => " (MISSES the boundary: never reached)",
+            Some(s) if s > RECOVERY_DEADLINE.as_secs_f64() => " (MISSES the boundary, and the aim)",
+            Some(s) if s > RECOVERY_AIM.as_secs_f64() => " (passes the boundary, MISSES the aim)",
+            Some(_) => " (passes the boundary and the aim)",
         },
         after_kill
             .time_to_first_byte()
