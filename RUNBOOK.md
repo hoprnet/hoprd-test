@@ -148,9 +148,10 @@ killed and relaunched in two minutes rather than at the fifteen-minute mark.
   13:57:13 local. Compare like with like before concluding a binary predates a run.
 - All lines in the test stdout come from the **in-process entry**. Node logs are separate files.
   A tracing target of `hopr_transport` in stdout is the entry, not a relayer.
-- Recovery is `time_to_sustain(target_mbps, window)` over **attributed** bytes only, timed from
-  the first byte the survival phase offered. `time_to_sustain` now refuses to answer before a full
-  window has elapsed, so an opening burst can no longer satisfy it.
+- Recovery is `time_to_sustain(target_mbps, window)` over **attributed** bytes only, timed **from
+  the kill** — the 4 s settle is included, since the session is broken throughout it.
+  `time_to_sustain` refuses to answer before a full window has elapsed, so an opening burst can no
+  longer satisfy it.
 - Read `outcome` first. `NeverStarted` / `SessionClosed` mean nothing was serving the session, and
   every other number in that run is about a stream that had no counterparty.
 - Read `foreign` next. Non-zero means warm-up traffic surfaced during the survival phase; it is
@@ -187,4 +188,5 @@ delivered rate returns*, never total arrival.
 
 The survival phase reaches 50 % of the measured baseline rate and **holds it to the end of the
 pump**, having never gone quiet for longer than the deadline. Boundary **20 s**, design aim **15 s**,
-both timed from the first byte offered; add the 4 s settle for the interval measured from the kill.
+both timed **from the kill** and therefore inclusive of the 4 s settle — so the mechanism has
+roughly 16 s of offered load in which to demonstrate recovery.

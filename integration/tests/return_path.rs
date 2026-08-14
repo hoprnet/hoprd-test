@@ -123,10 +123,10 @@ const SURVIVAL_LOAD_FRACTION: f64 = 0.5;
 /// session rather than to one that had not yet noticed. A few seconds of quiet means every byte
 /// measured afterwards was offered to a network that has already lost the relayer.
 ///
-/// Recovery is timed from the first byte *offered*, not from the kill: with no load in flight there
-/// is nothing for the session to recover on, so charging the mechanism for this window would
-/// measure the test's own pause. The settle is reported alongside the result so the two can always
-/// be added back together.
+/// This window counts against [`RECOVERY_DEADLINE`]: recovery is timed from the kill, not from the
+/// first byte offered. Nothing is in flight during the settle, so the mechanism cannot demonstrate
+/// itself here -- but the session is broken throughout it, and the clock a user experiences starts
+/// when the relay dies, not when the test resumes sending.
 const KILL_SETTLE: Duration = Duration::from_secs(4);
 
 /// [`KILL_SETTLE`], overridable for a one-off experiment via `HOPRD_KILL_SETTLE_SECS`.
@@ -190,6 +190,10 @@ const MAX_RELAYER_IMBALANCE: f64 = 2.1;
 const RECOVERY_FRACTION: f64 = 0.5;
 
 /// How long after the kill that rate must be reached, as the *test* boundary.
+///
+/// Measured from the kill itself, which includes [`KILL_SETTLE`] -- the session is already broken
+/// during that window even though the test is offering nothing, and whoever is waiting for the
+/// connection is not paused along with it.
 ///
 /// The design target is [`RECOVERY_AIM`] -- 15s. This bar sits above it deliberately: the recovery
 /// path is a sequence of independent stages (detection, graph trend, weight recompute, refill) and
@@ -445,7 +449,7 @@ async fn session_should_survive_return_relayer_loss() -> anyhow::Result<()> {
     )
     .await?;
 
-    assert_recovered(&before_kill, &after_kill, &spread, &spread_after)
+    assert_recovered(&before_kill, &after_kill, &spread, &spread_after, settle)
 }
 
 /// Report every measurement, then assert on them in combination.
@@ -462,9 +466,15 @@ fn assert_recovered(
     after_kill: &Transfer,
     spread: &RelayerSpread,
     spread_after: &RelayerSpread,
+    settle: Duration,
 ) -> anyhow::Result<()> {
     let target_mbps = before_kill.mbps * RECOVERY_FRACTION;
-    let recovered_after = after_kill.time_to_sustain(target_mbps, RECOVERY_SUSTAIN_WINDOW);
+    // Timed from the kill, so the post-kill settle counts against the deadline. The session is
+    // already broken during that window even though no load is being offered, and a user waiting
+    // for their connection to come back is not paused with it.
+    let recovered_after = after_kill
+        .time_to_sustain(target_mbps, RECOVERY_SUSTAIN_WINDOW)
+        .map(|since_offer| since_offer + settle.as_secs_f64());
     let steady_state = after_kill.steady_state_mbps(RECOVERY_SUSTAIN_WINDOW);
     let longest_stall = after_kill.longest_stall();
 
@@ -537,9 +547,8 @@ fn assert_recovered(
         after_kill.wall_seconds,
     );
     tracing::info!(
-        "recovery is timed from the first byte offered; add the {:?} post-kill settle for the \
-         interval measured from the kill itself",
-        kill_settle(),
+        "recovery is timed from the kill: the {settle:?} settle before any load was offered is \
+         included in the figure above",
     );
 
     // 1. It reached the rate, and inside the deadline.
@@ -633,7 +642,8 @@ async fn a_symmetric_session_should_survive_relayer_loss() -> anyhow::Result<()>
         "killing the busiest relayer (symmetric 1-hop session; direction not attributable)"
     );
     victim.kill()?;
-    tokio::time::sleep(kill_settle()).await;
+    let settle = kill_settle();
+    tokio::time::sleep(settle).await;
 
     let offered_mbps = before_kill.mbps * SURVIVAL_LOAD_FRACTION;
     let survival_bytes = (offered_mbps * 1_000_000.0 * SURVIVAL_LOAD_DURATION.as_secs_f64()) as usize;
@@ -651,5 +661,5 @@ async fn a_symmetric_session_should_survive_relayer_loss() -> anyhow::Result<()>
     )
     .await?;
 
-    assert_recovered(&before_kill, &after_kill, &spread, &spread_after)
+    assert_recovered(&before_kill, &after_kill, &spread, &spread_after, settle)
 }
