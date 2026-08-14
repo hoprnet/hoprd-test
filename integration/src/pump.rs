@@ -29,6 +29,12 @@ pub enum PumpOutcome {
     SessionClosed,
     /// The overall deadline expired while the stream was still delivering.
     DeadlineExceeded,
+    /// Everything had been offered and the reader's grace period after that expired.
+    ///
+    /// Distinct from [`Self::Idle`]: the stream was still arriving, just far too slowly to finish.
+    /// Whatever had not come back by then is loss, and waiting longer only measures the size of a
+    /// backlog rather than the health of the return path.
+    TailGraceExpired,
 }
 
 impl PumpOutcome {
@@ -117,6 +123,17 @@ pub struct PumpOpts {
     /// socket. The budget and the deadline live in different files, so state it here rather than
     /// leave them to drift.
     pub idle_budget: Option<Duration>,
+    /// How long to keep reading after the last byte has been *offered*; `None` waits indefinitely
+    /// (subject to the overall deadline and the idle budget).
+    ///
+    /// The idle budget cannot bound a stream that trickles: a session returning a few bytes a
+    /// second is never quiet long enough to look idle and never fast enough to finish, so the
+    /// pump runs until the overall deadline or until the exit gives up. One run spent 444 s that
+    /// way to offer 60 s of data, and the seven minutes it added measured a draining backlog, not
+    /// the return path. Stating a grace here turns "how long until everything eventually shows up"
+    /// into "how much came back in a fixed window", which is the question a survival scenario is
+    /// actually asking.
+    pub tail_grace: Option<Duration>,
 }
 
 /// Result of one loopback round-trip.
@@ -297,6 +314,21 @@ pub const NO_FIRST_BYTE_TIMEOUT: Duration = Duration::from_secs(30);
 /// How often the reader re-evaluates whether to keep waiting.
 const READ_POLL_INTERVAL: Duration = Duration::from_secs(1);
 
+/// The writer's completion as the reader sees it.
+///
+/// `None` at the call site means the offer is still in flight, or that the caller set no grace —
+/// either way the cap cannot fire yet, which keeps "has the offer finished?" out of the rule.
+#[derive(Debug, Clone, Copy)]
+struct TailWindow {
+    /// How long ago the last byte was handed to the session.
+    since_offer_complete: Duration,
+    /// How long the reader keeps reading after that.
+    grace: Duration,
+}
+
+/// Sentinel for "the writer has not finished offering yet" in the shared stamp.
+const OFFER_IN_FLIGHT: u64 = u64::MAX;
+
 /// Whether the reader should stop, and why; `None` to keep waiting.
 ///
 /// Pure so the stopping rule can be exercised without a session or a cluster — the rule is what
@@ -308,9 +340,24 @@ fn stop_reason(
     since_start: Duration,
     deadline: Duration,
     idle_budget: Duration,
+    tail: Option<TailWindow>,
 ) -> Option<PumpOutcome> {
     if since_start >= deadline {
         return Some(PumpOutcome::DeadlineExceeded);
+    }
+    // A hard cap, and deliberately ahead of every rule below it: once the last byte has been
+    // offered the reader waits out the grace and stops, whatever the stream is doing. The idle
+    // rule cannot express this -- a trickling stream is never quiet -- so without the cap a
+    // session returning a few bytes a second runs to the overall deadline and the run reports how
+    // long a backlog took to drain rather than whether the return path recovered.
+    if tail.is_some_and(|t| t.since_offer_complete >= t.grace) {
+        // The cap only decides *when* to stop asking. If nothing ever came back, the exit never
+        // served this phase, and that -- not the cap -- is the finding worth reporting.
+        return Some(if received == 0 {
+            PumpOutcome::NeverStarted
+        } else {
+            PumpOutcome::TailGraceExpired
+        });
     }
     if received == 0 {
         // Nothing has arrived at all, so the idle rule has nothing to measure from and the
@@ -437,6 +484,14 @@ pub async fn pump_halves(
     let total_bytes = payload.len();
     let pace = opts.pace.or_else(send_pace_per_chunk);
 
+    // Everything is stamped against the moment the pump started, not the first byte back. On a
+    // recovering stream the interval between the two *is* the outage, and timing from the first
+    // arrival discards exactly the quantity a recovery deadline is about.
+    let pump_started = std::time::Instant::now();
+    // When the writer finished offering, shared with the reader so the tail cap has something to
+    // measure from. Written once by the writer, read on the reader's poll cadence.
+    let offer_completed_ms = std::sync::atomic::AtomicU64::new(OFFER_IN_FLIGHT);
+
     let send = async {
         let mut offset = 0;
         while offset < payload.len() {
@@ -448,6 +503,12 @@ pub async fn pump_halves(
             offset = end;
         }
         tx.flush().await?;
+        // After the flush, so the cap starts from the last byte actually handed over rather than
+        // from the last one queued.
+        offer_completed_ms.store(
+            pump_started.elapsed().as_millis() as u64,
+            std::sync::atomic::Ordering::Relaxed,
+        );
         Ok::<_, std::io::Error>(())
     };
 
@@ -455,10 +516,6 @@ pub async fn pump_halves(
     let mut buf = vec![0u8; IO_CHUNK];
     let mut progress: Vec<(f64, usize)> = Vec::new();
     let mut first_at: Option<std::time::Instant> = None;
-    // Everything is stamped against the moment the pump started, not the first byte back. On a
-    // recovering stream the interval between the two *is* the outage, and timing from the first
-    // arrival discards exactly the quantity a recovery deadline is about.
-    let pump_started = std::time::Instant::now();
     let mut last_at = pump_started;
     // Liveness for a phased pump is about *this* phase. An earlier phase draining keeps the raw
     // stream busy and `last_at` fresh, so neither `NeverStarted` nor `Idle` could fire while this
@@ -501,12 +558,24 @@ pub async fn pump_halves(
                 ),
                 None => (received.len(), now.saturating_duration_since(last_at)),
             };
+            let tail = opts.tail_grace.and_then(|grace| {
+                match offer_completed_ms.load(std::sync::atomic::Ordering::Relaxed) {
+                    OFFER_IN_FLIGHT => None,
+                    at => Some(TailWindow {
+                        since_offer_complete: now
+                            .saturating_duration_since(pump_started)
+                            .saturating_sub(Duration::from_millis(at)),
+                        grace,
+                    }),
+                }
+            });
             if let Some(stop) = stop_reason(
                 live_bytes,
                 since_live,
                 now.saturating_duration_since(pump_started),
                 timeout,
                 idle_budget,
+                tail,
             ) {
                 tracing::warn!(
                     "{label}: stopping ({stop:?}) at {}/{total_bytes} B",
@@ -980,7 +1049,8 @@ mod tests {
                 NO_FIRST_BYTE_TIMEOUT,
                 NO_FIRST_BYTE_TIMEOUT,
                 DEADLINE,
-                READ_IDLE_TIMEOUT
+                READ_IDLE_TIMEOUT,
+                None
             ),
             Some(PumpOutcome::NeverStarted),
         );
@@ -990,7 +1060,8 @@ mod tests {
                 NO_FIRST_BYTE_TIMEOUT - Duration::from_secs(1),
                 NO_FIRST_BYTE_TIMEOUT - Duration::from_secs(1),
                 DEADLINE,
-                READ_IDLE_TIMEOUT
+                READ_IDLE_TIMEOUT,
+                None
             ),
             None,
             "the budget must not expire early — a recovering stream may still be on its way"
@@ -1007,7 +1078,8 @@ mod tests {
                 READ_IDLE_TIMEOUT * 2,
                 READ_IDLE_TIMEOUT * 2,
                 DEADLINE,
-                READ_IDLE_TIMEOUT
+                READ_IDLE_TIMEOUT,
+                None
             ),
             None,
             "with nothing received the first-byte budget decides, not the idle timeout"
@@ -1023,7 +1095,8 @@ mod tests {
                 READ_IDLE_TIMEOUT,
                 Duration::from_secs(60),
                 DEADLINE,
-                READ_IDLE_TIMEOUT
+                READ_IDLE_TIMEOUT,
+                None
             ),
             Some(PumpOutcome::Idle),
         );
@@ -1033,7 +1106,8 @@ mod tests {
                 Duration::from_secs(1),
                 Duration::from_secs(60),
                 DEADLINE,
-                READ_IDLE_TIMEOUT
+                READ_IDLE_TIMEOUT,
+                None
             ),
             None,
             "a stream still delivering must be left alone"
@@ -1045,7 +1119,14 @@ mod tests {
     #[test]
     fn a_stream_still_delivering_at_the_deadline_should_report_the_deadline() {
         assert_eq!(
-            stop_reason(1_000, Duration::ZERO, DEADLINE, DEADLINE, READ_IDLE_TIMEOUT),
+            stop_reason(
+                1_000,
+                Duration::ZERO,
+                DEADLINE,
+                DEADLINE,
+                READ_IDLE_TIMEOUT,
+                None
+            ),
             Some(PumpOutcome::DeadlineExceeded),
         );
     }
@@ -1059,6 +1140,91 @@ mod tests {
         assert!(!PumpOutcome::Idle.exit_stopped_serving());
         assert!(!PumpOutcome::DeadlineExceeded.exit_stopped_serving());
         assert!(!PumpOutcome::Complete.exit_stopped_serving());
+        // The cap fires on a stream that was still arriving, so there was something on the other
+        // end. Grouping it with the no-service outcomes would fail a merely slow return path
+        // outright, instead of scoring what came back.
+        assert!(!PumpOutcome::TailGraceExpired.exit_stopped_serving());
+    }
+
+    // ── tail cap ──────────────────────────────────────────────────────────────
+
+    const TAIL_GRACE: Duration = Duration::from_secs(45);
+
+    /// The case the idle rule structurally cannot catch: bytes keep arriving, so the stream is
+    /// never quiet, but far too slowly to ever finish. One run trickled for 444 s to offer 60 s of
+    /// data — and every second past the cap measured a draining backlog, not the return path.
+    #[test]
+    fn a_trickling_stream_should_be_cut_off_once_the_tail_grace_expires() {
+        let still_arriving = Duration::ZERO;
+        assert_eq!(
+            stop_reason(
+                1_000,
+                still_arriving,
+                Duration::from_secs(300),
+                DEADLINE,
+                READ_IDLE_TIMEOUT,
+                Some(TailWindow {
+                    since_offer_complete: TAIL_GRACE,
+                    grace: TAIL_GRACE,
+                }),
+            ),
+            Some(PumpOutcome::TailGraceExpired),
+            "a stream that is never idle and never done must still be bounded"
+        );
+    }
+
+    /// The cap is measured from the *offer*, not from the start of the pump: while the writer is
+    /// still handing over bytes there is nothing to have been waiting for.
+    #[test]
+    fn the_tail_cap_should_not_fire_while_the_offer_is_still_in_flight() {
+        assert_eq!(
+            stop_reason(
+                1_000,
+                Duration::ZERO,
+                Duration::from_secs(300),
+                DEADLINE,
+                READ_IDLE_TIMEOUT,
+                None,
+            ),
+            None,
+            "no tail window means the offer has not finished — the cap cannot have started"
+        );
+        assert_eq!(
+            stop_reason(
+                1_000,
+                Duration::ZERO,
+                Duration::from_secs(300),
+                DEADLINE,
+                READ_IDLE_TIMEOUT,
+                Some(TailWindow {
+                    since_offer_complete: TAIL_GRACE - Duration::from_secs(1),
+                    grace: TAIL_GRACE,
+                }),
+            ),
+            None,
+            "the grace must run its full length before the reader gives up"
+        );
+    }
+
+    /// The cap decides *when* to stop asking, not what to conclude. A phase that received nothing
+    /// at all was never served, and reporting that as a slow tail would hide it from the check
+    /// that fails fast on a dead exit.
+    #[test]
+    fn the_tail_cap_should_still_report_a_phase_that_received_nothing_as_never_started() {
+        assert_eq!(
+            stop_reason(
+                0,
+                Duration::ZERO,
+                Duration::from_secs(300),
+                DEADLINE,
+                READ_IDLE_TIMEOUT,
+                Some(TailWindow {
+                    since_offer_complete: TAIL_GRACE,
+                    grace: TAIL_GRACE,
+                }),
+            ),
+            Some(PumpOutcome::NeverStarted),
+        );
     }
 
     /// Nothing arrived at all: every statistic has to say so rather than divide by zero.

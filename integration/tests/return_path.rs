@@ -167,6 +167,28 @@ const _: () = assert!(
     "the idle budget must outlive the recovery deadline it is measuring"
 );
 
+/// Hard cap on how long the survival phase keeps reading after the last byte has been offered.
+///
+/// The idle budget above cannot bound a trickle. A session returning a few bytes a second is never
+/// quiet long enough to look idle and never fast enough to finish, so the phase runs until the
+/// overall deadline: one run took 444 s to offer 60 s of data, and the extra seven minutes measured
+/// a backlog draining at the end, not a return path recovering. Some of that traffic is not even
+/// this phase's -- loopback and earlier-phase records keep the raw stream busy regardless.
+///
+/// Cutting at a fixed point after the offer changes the question from "how long until everything
+/// eventually shows up" to "how much came back in a bounded window", which is the one a survival
+/// scenario is asking. Whatever has not returned by then is loss.
+///
+/// Comfortably longer than [`RECOVERY_DEADLINE`], so a session that recovers within the deadline
+/// still has ample room to drain everything it was offered -- the cap bounds a *failing* stream, and
+/// must never truncate a healthy one.
+const SURVIVAL_TAIL_GRACE: Duration = Duration::from_secs(45);
+
+const _: () = assert!(
+    SURVIVAL_TAIL_GRACE.as_secs() > RECOVERY_DEADLINE.as_secs(),
+    "the tail cap must outlive the recovery deadline, or it truncates a session that recovered"
+);
+
 /// How long to wait after the kill before offering any new data.
 ///
 /// Not zero, deliberately. At zero the survival phase's opening seconds race packets that were
@@ -508,6 +530,7 @@ async fn session_should_survive_return_relayer_loss() -> anyhow::Result<()> {
             pace: pace_for_rate(offered_mbps),
             phase: Some(SURVIVAL_PHASE),
             idle_budget: Some(SURVIVAL_IDLE_BUDGET),
+            tail_grace: Some(SURVIVAL_TAIL_GRACE),
         },
     )
     .await?;
@@ -733,6 +756,7 @@ async fn a_symmetric_session_should_survive_relayer_loss() -> anyhow::Result<()>
             pace: pace_for_rate(offered_mbps),
             phase: Some(SURVIVAL_PHASE),
             idle_budget: Some(SURVIVAL_IDLE_BUDGET),
+            tail_grace: Some(SURVIVAL_TAIL_GRACE),
         },
     )
     .await?;
