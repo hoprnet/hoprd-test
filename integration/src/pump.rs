@@ -206,6 +206,16 @@ impl Transfer {
             worst = worst.max(at - previous);
             previous = at;
         }
+        // The silence after the last arrival counts only when the pump was still expecting data.
+        // `Idle` is *defined* by a trailing gap of exactly the idle budget, so counting it reports
+        // the detector's own threshold as the symptom -- and since that budget is required to
+        // exceed the recovery deadline it measures, every idle-terminated run would fail a
+        // deadline check it structurally cannot pass. One run delivered 97.8% and recovered in
+        // 13.8s, then failed for a "30.1s stall" that was the pump waiting to be sure the stream
+        // had ended.
+        if self.outcome == PumpOutcome::Idle {
+            return worst;
+        }
         worst.max(self.wall_seconds - previous)
     }
 
@@ -1225,6 +1235,45 @@ mod tests {
             ),
             Some(PumpOutcome::NeverStarted),
         );
+    }
+
+    /// A pump that stops because the stream went quiet ends, by definition, with a trailing gap of
+    /// exactly its idle budget. Counting that as a stall reports the detector's own threshold as
+    /// the symptom — and since the budget is required to exceed the recovery deadline it is
+    /// measuring, every idle-terminated run then fails a deadline check it structurally cannot
+    /// pass. Seen on a run that delivered 97.8 % and recovered in 13.8 s, failed for a "30.1 s
+    /// stall" that was the pump waiting to be sure the stream had ended.
+    #[test]
+    fn an_idle_terminated_pump_should_not_count_its_own_idle_budget_as_a_stall() {
+        let mut quiet = transfer(32.0, &[(1.0, 1), (2.0, 2)]);
+        quiet.outcome = PumpOutcome::Idle;
+
+        assert!(
+            (quiet.longest_stall() - 1.0).abs() < 1e-9,
+            "the trailing silence is how the pump stopped, not a gap in delivery; got {}",
+            quiet.longest_stall()
+        );
+    }
+
+    /// The inverse, so the rule does not become "ignore trailing silence". When the pump was cut
+    /// off while still expecting data, the silence up to that point is a real gap in delivery.
+    #[test]
+    fn a_pump_cut_off_while_still_waiting_should_count_the_trailing_silence() {
+        for cut_short in [
+            PumpOutcome::DeadlineExceeded,
+            PumpOutcome::TailGraceExpired,
+            PumpOutcome::SessionClosed,
+        ] {
+            let mut waiting = transfer(32.0, &[(1.0, 1), (2.0, 2)]);
+            waiting.outcome = cut_short;
+
+            assert!(
+                (waiting.longest_stall() - 30.0).abs() < 1e-9,
+                "{cut_short:?} stopped the pump while data was still expected, so the silence \
+                 counts; got {}",
+                waiting.longest_stall()
+            );
+        }
     }
 
     /// Nothing arrived at all: every statistic has to say so rather than divide by zero.
