@@ -239,10 +239,15 @@ impl IntegrationEnv {
                         // gnosis main: 10 MB response buffer, 16 Mb/s SURB upstream.
                         target_surb_buffer_size: 10_000_000 / SESSION_MTU as u64,
                         max_surbs_per_sec: 16_000_000 / (8 * SURB_SIZE as u64),
-                        // A lost return relayer otherwise reads as a well-stocked exit, because
-                        // consumption is only observed when a reply gets home. Without this the
-                        // exit is starved of SURBs at the exact moment it needs them to answer.
-                        sustain_on_return_path_loss: true,
+                        // Everything else stays at the default, because that is what the client
+                        // does: `to_surb_balancer_config` in gnosis_vpn-lib sets exactly these two
+                        // fields from the same formulas and then `..Default::default()`.
+                        //
+                        // In particular `sustain_on_return_path_loss` is left off. It was set here
+                        // once, on the reasoning that a lost return relayer reads as a well-stocked
+                        // exit because consumption is only observed when a reply gets home. That may
+                        // be true, but no client sets it, so a scenario that did was measuring a
+                        // configuration nobody runs.
                         ..SurbBalancerConfig::default()
                     }),
                     ..Default::default()
