@@ -667,6 +667,19 @@ fn assert_recovered(
         after_kill.sent_bytes,
         after_kill.wall_seconds,
     );
+    // The rate the session actually delivered, measured to the point where the bulk had returned
+    // rather than to whenever the last straggler landed. `mbps` above spans first arrival to last,
+    // which a single late packet can move by a third.
+    tracing::info!(
+        "delivered throughput: {} to 95% of the payload, {} to 50% (offered {:.2} MB/s)",
+        after_kill
+            .throughput_at(0.95)
+            .map_or("never reached 95%".to_string(), |r| format!("{r:.2} MB/s")),
+        after_kill
+            .throughput_at(0.50)
+            .map_or("never reached 50%".to_string(), |r| format!("{r:.2} MB/s")),
+        before_kill.mbps * SURVIVAL_LOAD_FRACTION,
+    );
     tracing::info!(
         "recovery is timed from the kill: the {settle:?} settle before any load was offered is \
          included in the figure above",

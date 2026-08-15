@@ -153,7 +153,12 @@ pub struct Transfer {
     pub foreign_bytes: usize,
     /// Wall-clock from first byte written to last byte read back.
     pub seconds: f64,
-    /// Goodput = received_bytes / seconds, in MB/s.
+    /// Goodput = [`Self::attributed_bytes`] / [`Self::seconds`], in MB/s.
+    ///
+    /// Spans first arrival to last, so a few late stragglers stretch the denominator after the bulk
+    /// has already landed: three cluster runs delivering the same 96 % reported 0.22, 0.22 and
+    /// 0.29 MB/s on that basis. Prefer [`Self::throughput_at`] for a figure a single packet cannot
+    /// move.
     pub mbps: f64,
     /// True only when the full payload returned intact (received == sent and bytes match).
     pub sha_ok: bool,
@@ -217,6 +222,26 @@ impl Transfer {
             return worst;
         }
         worst.max(self.wall_seconds - previous)
+    }
+
+    /// Throughput up to the moment `fraction` of the offered payload had come back, in MB/s.
+    ///
+    /// `None` if that share never arrived.
+    ///
+    /// [`Self::mbps`] divides everything received by first-arrival-to-last-arrival, which makes it
+    /// hostage to the tail: the same session delivering the same 96 % reported 0.22 MB/s on two
+    /// runs and 0.29 MB/s on a third, purely because a few late stragglers stretched the window
+    /// after the bulk had already landed. That is a statistic a single packet can move.
+    ///
+    /// Measuring to a share of the payload cuts the tail out. The denominator runs from the pump's
+    /// start, not from the first byte, so the outage the session actually suffered is charged to
+    /// it -- this is delivered throughput, not throughput-while-delivering.
+    pub fn throughput_at(&self, fraction: f64) -> Option<f64> {
+        let target = (self.sent_bytes as f64 * fraction.clamp(0.0, 1.0)).ceil() as usize;
+        self.progress
+            .iter()
+            .find(|&&(_, bytes)| bytes >= target && target > 0)
+            .map(|&(at, bytes)| bytes as f64 / 1_000_000.0 / at.max(1e-9))
     }
 
     /// Gap between consecutive arrivals at quantile `q`, `None` with fewer than two arrivals.
@@ -1235,6 +1260,53 @@ mod tests {
             ),
             Some(PumpOutcome::NeverStarted),
         );
+    }
+
+    /// The reason this metric exists: `mbps` is hostage to the tail, this is not.
+    ///
+    /// Both transfers below deliver the same 96 % of the payload, and the bulk of it at the same
+    /// rate. They differ only in when the last stragglers land -- which is exactly the difference
+    /// that made three identical cluster runs report 0.22, 0.22 and 0.29 MB/s.
+    #[test]
+    fn throughput_at_a_share_should_ignore_when_the_tail_lands() {
+        // 9.6 MB in over ten seconds, then the last of it much later.
+        let prompt = transfer(
+            12.0,
+            &[(5.0, 5_000_000), (10.0, 9_600_000), (11.0, 9_600_000)],
+        );
+        let dragging = transfer(
+            85.0,
+            &[(5.0, 5_000_000), (10.0, 9_600_000), (80.0, 9_600_000)],
+        );
+
+        let (a, b) = (
+            prompt.throughput_at(0.95).expect("95% was reached"),
+            dragging.throughput_at(0.95).expect("95% was reached"),
+        );
+        assert!(
+            (a - b).abs() < 1e-9,
+            "the tail must not move the figure: {a} vs {b}"
+        );
+        assert!(
+            (a - 0.96).abs() < 1e-9,
+            "9.6 MB by 10 s is 0.96 MB/s, got {a}"
+        );
+    }
+
+    /// A share that never arrived has no throughput to report, and must not be confused with zero.
+    #[test]
+    fn throughput_at_a_share_that_never_arrived_should_be_none() {
+        // The helper sizes `sent_bytes` from what arrived, so state the loss explicitly.
+        let mut lossy = transfer(30.0, &[(1.0, 100), (2.0, 200)]);
+        lossy.sent_bytes = 10_000;
+        assert_eq!(lossy.throughput_at(0.95), None);
+
+        // Nothing was offered, so there is no share of it to have arrived and no rate to report.
+        // Answering `0` here would read as "delivered nothing at zero throughput" for a transfer
+        // that was never asked to deliver anything.
+        let mut empty = transfer(30.0, &[]);
+        empty.sent_bytes = 0;
+        assert_eq!(empty.throughput_at(0.95), None);
     }
 
     /// A pump that stops because the stream went quiet ends, by definition, with a trailing gap of
