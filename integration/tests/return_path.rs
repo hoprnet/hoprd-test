@@ -94,6 +94,58 @@ per_node:
   4: "260ms"
 "#;
 
+/// Which direction of the session is put on a relay, and therefore which one the kill removes.
+///
+/// The scenarios differ only in this. Everything else -- the payload, the pacing, the settle, the
+/// thresholds, the assertions -- is shared, so a difference in outcome between them is a
+/// difference in the protocol rather than in how they were measured.
+///
+/// # Why one hop and zero
+///
+/// The relayer histogram counts `hopr_packets_count{type="forwarded"}` per node, which does not
+/// say which direction a packet was travelling. Pinning the *other* direction to 0 hops removes
+/// the ambiguity: no cluster node relays anything that way, so every forwarded packet belongs to
+/// the direction under test and the busiest node is unambiguously its relay.
+#[derive(Clone, Copy, Debug)]
+struct Topology {
+    /// Names the direction in log lines and failure messages.
+    direction: &'static str,
+    forward_hops: usize,
+    return_hops: usize,
+}
+
+/// Replies travel over one relay; the request path is direct.
+///
+/// The shape of the original incident, and the one the entry reassembles.
+const RETURN_PATH: Topology = Topology {
+    direction: "return",
+    forward_hops: 0,
+    return_hops: 1,
+};
+
+/// The mirror image: requests travel over one relay, replies come back directly.
+///
+/// Reassembly happens at the *exit* here, not the entry, so this covers the half of the fix that
+/// lives in the hoprd binary rather than in the client. A session that survives return-path loss
+/// says nothing about this one -- different process, different build, and in a real deployment
+/// they are upgraded separately.
+const FORWARD_PATH: Topology = Topology {
+    direction: "forward",
+    forward_hops: 1,
+    return_hops: 0,
+};
+
+/// One relay in each direction: what a real deployment runs.
+///
+/// Both directions traverse a relay, so a forwarded packet cannot be attributed to one of them and
+/// the histogram identifies only "the busiest relay". Weaker as a diagnostic, stronger as an
+/// end-to-end check.
+const SYMMETRIC: Topology = Topology {
+    direction: "symmetric",
+    forward_hops: 1,
+    return_hops: 1,
+};
+
 /// Warm-up payload: enough packets to make the relayer histogram unambiguous, no more.
 ///
 /// Its only jobs are to establish the baseline rate and to show who is carrying replies. Keeping it
@@ -333,7 +385,7 @@ async fn setup_env_with_hops(
     let (session, exit) = env
         .open_unreliable_session_paths(forward_hops, return_hops)
         .await?;
-    let candidates = env.return_relayer_candidates(exit)?;
+    let candidates = env.relayer_candidates(exit)?;
     anyhow::ensure!(
         candidates.len() >= 2,
         "need ≥2 return-relayer candidates to tell spread from concentration, got {}",
@@ -435,16 +487,24 @@ async fn return_paths_should_spread_across_distinct_relayers() -> anyhow::Result
     Ok(())
 }
 
-/// The incident: with the busiest return relayer killed mid-session, the reply stream
-/// must degrade proportionally rather than stop.
+/// The incident, in whichever direction [`Topology`] puts on a relay: with the busiest relay for
+/// that direction killed mid-session, the stream must degrade proportionally rather than stop.
 ///
-/// Fails on the pre-fix stack — the killed relayer was carrying essentially the whole
-/// return stream, so the second pump returns almost nothing.
-#[test_log::test(tokio::test(flavor = "multi_thread"))]
-#[ignore = "requires hoprd/hoprd-localcluster binaries + a chain"]
-async fn session_should_survive_return_relayer_loss() -> anyhow::Result<()> {
+/// Fails on the pre-fix stack — the killed relayer was carrying essentially the whole stream for
+/// its direction, so the second pump returns almost nothing.
+///
+/// Shared by both scenarios deliberately. The two differ only in the topology, so anything that
+/// separates them is the protocol behaving differently, not the measurement.
+async fn session_should_survive_relayer_loss(topology: Topology) -> anyhow::Result<()> {
+    tracing::info!(
+        direction = topology.direction,
+        forward_hops = topology.forward_hops,
+        return_hops = topology.return_hops,
+        "relayer-loss scenario"
+    );
     // Held for the cluster lifetime; the scenario itself never opens a second session.
-    let (_env, session, candidates) = setup_return_path_env().await?;
+    let (_env, session, candidates) =
+        setup_env_with_hops(topology.forward_hops, topology.return_hops).await?;
 
     // Split once and keep the halves: both phases run over this one session, so what is measured
     // is the *established* stream surviving. A replacement session opened after the kill would
@@ -459,7 +519,7 @@ async fn session_should_survive_return_relayer_loss() -> anyhow::Result<()> {
         &mut tx,
         &candidates,
         &warmup_payload,
-        "before-kill",
+        &format!("{}-before-kill", topology.direction),
         PumpOpts {
             phase: Some(WARMUP_PHASE),
             ..PumpOpts::default()
@@ -493,7 +553,8 @@ async fn session_should_survive_return_relayer_loss() -> anyhow::Result<()> {
     tracing::info!(
         victim = %busiest,
         share_pct = spread.max_share() * 100.0,
-        "killing the busiest return relayer"
+        direction = topology.direction,
+        "killing the busiest relayer for the direction under test"
     );
     victim.kill()?;
 
@@ -540,7 +601,7 @@ async fn session_should_survive_return_relayer_loss() -> anyhow::Result<()> {
         &mut tx,
         &candidates,
         &survival_payload,
-        "after-kill",
+        &format!("{}-after-kill", topology.direction),
         PumpOpts {
             pace: pace_for_rate(offered_mbps),
             phase: Some(SURVIVAL_PHASE),
@@ -559,6 +620,25 @@ async fn session_should_survive_return_relayer_loss() -> anyhow::Result<()> {
     );
 
     assert_recovered(&before_kill, &after_kill, &spread, &spread_after, settle)
+}
+
+/// The original incident: the entry reassembles the reply stream, and a return relay dies under it.
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+#[ignore = "requires hoprd/hoprd-localcluster binaries + a chain"]
+async fn session_should_survive_return_relayer_loss() -> anyhow::Result<()> {
+    session_should_survive_relayer_loss(RETURN_PATH).await
+}
+
+/// The other half of the same fix: the **exit** reassembles the request stream, so this exercises
+/// the sequencer inside `hoprd` rather than the one linked into the client.
+///
+/// Worth its own scenario because the two are deployed independently -- shipping the client alone
+/// leaves this path on whatever the exit is running -- and because nothing in the return-path
+/// result predicts it: different process, different binary, different build.
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+#[ignore = "requires hoprd/hoprd-localcluster binaries + a chain"]
+async fn session_should_survive_forward_relayer_loss() -> anyhow::Result<()> {
+    session_should_survive_relayer_loss(FORWARD_PATH).await
 }
 
 /// Report every measurement, then assert on them in combination.
@@ -730,94 +810,14 @@ fn assert_recovered(
     Ok(())
 }
 
-/// The same incident on a symmetric 1-hop-out / 1-hop-back session — the shape a real deployment
-/// runs.
+/// The shape a real deployment runs: one relay in each direction.
 ///
-/// Kept alongside the `(0, 1)` case rather than replacing it. With a relay on both directions the
-/// forwarded-packet histogram no longer attributes cleanly: the victim may have been carrying data
-/// out, replies back, or both, so a collapse cannot be pinned on the return path from the counters
-/// alone. That makes this the realistic test and `(0, 1)` the diagnostic one.
+/// Kept as its own scenario because it is the only one where the histogram cannot attribute a
+/// packet to a direction -- both directions traverse a relay, so the victim is "the busiest relay"
+/// without saying which stream it was carrying. That makes it a weaker diagnostic than the two
+/// single-sided scenarios and a better end-to-end check than either.
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 #[ignore = "requires hoprd/hoprd-localcluster binaries + a chain"]
 async fn a_symmetric_session_should_survive_relayer_loss() -> anyhow::Result<()> {
-    let (_env, session, candidates) = setup_env_with_hops(1, 1).await?;
-    let (mut rx, mut tx) = tokio::io::split(session);
-
-    let warmup_payload = tagged_payload(WARMUP_PHASE, WARMUP_BYTES);
-    let (before_kill, spread) = pump_and_measure(
-        &mut rx,
-        &mut tx,
-        &candidates,
-        &warmup_payload,
-        "sym-before-kill",
-        PumpOpts {
-            phase: Some(WARMUP_PHASE),
-            ..PumpOpts::default()
-        },
-    )
-    .await?;
-    anyhow::ensure!(
-        before_kill.arrival_pct() > 50.0,
-        "baseline pump only returned {:.1}% — the path was already broken before the kill",
-        before_kill.arrival_pct(),
-    );
-
-    let busiest = spread
-        .busiest()
-        .ok_or_else(|| anyhow::anyhow!("no relayer forwarded anything; nothing to kill"))?;
-    let victim = candidates
-        .iter()
-        .find(|n| n.address == busiest)
-        .ok_or_else(|| anyhow::anyhow!("busiest relayer {busiest} is not a cluster node"))?;
-    tracing::info!(
-        victim = %busiest,
-        share_pct = spread.max_share() * 100.0,
-        "killing the busiest relayer (symmetric 1-hop session; direction not attributable)"
-    );
-    victim.kill()?;
-    let settle = kill_settle();
-    tokio::time::sleep(settle).await;
-
-    let offered_mbps = before_kill.mbps * SURVIVAL_LOAD_FRACTION;
-    let survival_bytes =
-        (offered_mbps * 1_000_000.0 * SURVIVAL_LOAD_DURATION.as_secs_f64()) as usize;
-    // Counted at the entry's own session, not from the relayers' node-wide `forwarded` counter.
-    // That counter includes probes, keep-alives and every other session those nodes carry, so
-    // comparing it against this phase's payload is not a like-for-like measurement -- doing so once
-    // produced a two-orders-of-magnitude "delivery gap" that was mostly other traffic. These
-    // counters carry a `session_id`, so they say what actually reached this session and what became
-    // of it.
-    let counters_before = session_metrics::sample();
-    // Absolute, not a delta: a gauge that never moves differences to zero. Logged so an experiment
-    // on HOPR_SESSION_FRAME_TIMEOUT_MS can tell "the timeout changed nothing" from "the timeout
-    // never changed" -- the override is floored at 100 ms and read once at manager construction.
-    tracing::info!(
-        frame_timeout_ms = ?counters_before.frame_timeout_ms(),
-        "sequencer frame timeout in effect for this session"
-    );
-    let survival_payload = tagged_payload(SURVIVAL_PHASE, survival_bytes);
-    let (after_kill, spread_after) = pump_and_measure(
-        &mut rx,
-        &mut tx,
-        &candidates,
-        &survival_payload,
-        "sym-after-kill",
-        PumpOpts {
-            pace: pace_for_rate(offered_mbps),
-            phase: Some(SURVIVAL_PHASE),
-            idle_budget: Some(SURVIVAL_IDLE_BUDGET),
-            tail_grace: Some(SURVIVAL_TAIL_GRACE),
-        },
-    )
-    .await?;
-    // Logged whatever the outcome: on a healthy run it confirms the counters track the payload, so
-    // the one time they disagree the reading is already trusted.
-    let counters = counters_before.delta(&session_metrics::sample());
-    tracing::info!("after-kill session counters: {}", counters.summary());
-    tracing::info!(
-        "after-kill session families that moved: {}",
-        counters.nonzero()
-    );
-
-    assert_recovered(&before_kill, &after_kill, &spread, &spread_after, settle)
+    session_should_survive_relayer_loss(SYMMETRIC).await
 }

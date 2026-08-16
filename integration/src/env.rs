@@ -191,7 +191,7 @@ impl IntegrationEnv {
     /// Cluster nodes that can carry a return path for a session exiting at `exit` — every
     /// node but the exit itself. The cluster is a full mesh, so each of them has an open
     /// channel from the exit and is a legitimate first hop back towards Edgli.
-    pub fn return_relayer_candidates(&self, exit: Address) -> anyhow::Result<Vec<NodeInfo>> {
+    pub fn relayer_candidates(&self, exit: Address) -> anyhow::Result<Vec<NodeInfo>> {
         Ok(self
             .cluster()?
             .nodes
