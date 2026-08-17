@@ -125,7 +125,8 @@ const MIN_CANARY_ARRIVAL_PCT: f64 = 50.0;
 /// canary session — established and working before the fault — goes silent without ever erroring.
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 #[ignore = "requires hoprd/hoprd-localcluster binaries + a chain"]
-async fn exit_should_keep_originating_when_a_return_path_becomes_unresolvable() -> anyhow::Result<()> {
+async fn exit_should_keep_originating_when_a_return_path_becomes_unresolvable() -> anyhow::Result<()>
+{
     let size = request_cluster_size(NODES);
     anyhow::ensure!(size >= 2, "need at least an exit and one peer, got {size}");
     request_node_env([
@@ -264,10 +265,12 @@ async fn exit_should_keep_originating_when_a_return_path_becomes_unresolvable() 
     // Everything above passes just as well on a run where the fault was never armed: if the
     // pseudonym-lifetime override did not reach the nodes, the victim's SURBs never expire, no
     // return route ever goes unresolvable, and a node that was never under test reports healthy.
-    // That is the failure mode the RUNBOOK exists to prevent, so require positive evidence that
-    // the exit actually hit — and survived — a starved return route.
+    // That is the same class of failure as a participant silently running a build that predates the
+    // change under test, and it is indistinguishable from success — so require positive evidence
+    // that the exit actually hit, and survived, a starved return route.
     anyhow::ensure!(
-        env.cluster()?.node_log_contains(exit_addr, STARVATION_EVIDENCE)?,
+        env.cluster()?
+            .node_log_contains(exit_addr, STARVATION_EVIDENCE)?,
         "the exit never reported a starved return route, so the fault was not armed and this run \
          says nothing about the stall. Check that {SURB_LIFETIME_ENV} reached the hoprd processes \
          (expected {:?}) — {}",

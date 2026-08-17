@@ -39,11 +39,58 @@
 //!
 //! Both are `#[ignore]` (they need the external binaries and a chain) and both want more
 //! relayer candidates than the throughput tests, so they run their own 5-node cluster.
-//! Run with:
+//!
+//! # Running them
 //!
 //! ```bash
-//! cargo test --test return_path -- --include-ignored --test-threads=1
+//! HOPRD_KEEP_ARTIFACTS=1 HOPRD_BIN=<hoprd> HOPRD_LOCALCLUSTER_BIN=<localcluster> \
+//! TEST_TARGET=return_path TEST_ARGS=--nocapture SCENARIOS=<test name> \
+//!   bash scripts/integration/run-binchain.sh > /tmp/run.log 2>&1
 //! ```
+//!
+//! One at a time -- the cluster binds fixed ports. `HOPRD_KEEP_ARTIFACTS=1` always, or the node
+//! logs are deleted at teardown and a failed run yields nothing. **Redirect with `>`, never pipe
+//! into `tail`**: a pipe buffers the whole run, and the pipeline's exit status becomes `tail`'s, so
+//! a failed test reports success. One run was read as passing for exactly that reason.
+//!
+//! # Which build each participant runs
+//!
+//! | participant | role | comes from |
+//! | ----------- | ---- | ---------- |
+//! | entry (`edgli`, in-process) | opens the session, mints SURBs, selects return paths | a Cargo git dependency in `integration/Cargo.toml`, compiled into this binary |
+//! | relayers + exit | forward packets, reply | `$HOPRD_BIN` / `$HOPRD_LOCALCLUSTER_BIN` at runtime |
+//! | chain | anvil + blokli | nix `result-*` |
+//!
+//! The entry is a **compile-time** dependency and the nodes are **runtime** binaries, so they can
+//! silently be different builds. Before trusting a result, name the participant that owns the
+//! behaviour under test and confirm *that* one carries the change -- a `strings` grep for a marker
+//! unique to it is enough. Four separate runs were once invalidated this way, and the failure is
+//! indistinguishable from "the fix does not work".
+//!
+//! For the same reason, a behavioural setting has to be stated on **both** sides: the entry
+//! configures itself in [`hoprd_integration_test::env`], the nodes through their own config or
+//! [`hoprd_integration_test::cluster::request_node_env`]. `SurbPopOrder` once differed between the
+//! two ends for a long while, and every reading of return-path behaviour was against a mismatched
+//! pair.
+//!
+//! # Reading a result
+//!
+//! - Read `outcome` first. `NeverStarted` / `SessionClosed` mean nothing was serving the session,
+//!   and every other number in that run is about a stream with no counterparty.
+//! - Read `foreign` next. Non-zero means traffic from an earlier phase surfaced in this one; it is
+//!   excluded from the figures, but a large value means the drain failed and the phases are mixed.
+//! - Check the baseline before anything else. A collapsed pre-kill pump makes every post-kill
+//!   number meaningless -- and is itself the finding, since it means the change under test broke a
+//!   healthy session.
+//! - Healthy-run throughput varies 1-45 %. A single run cannot establish an improvement; compare
+//!   against the spread, not against one prior number.
+//! - Log timestamps are UTC, file mtimes are local. Compare like with like before concluding a
+//!   binary predates a run.
+//! - Strip ANSI before grepping structured fields: `tracing` wraps *field names* in escape codes,
+//!   so `grep -c 'sessions=1'` returns zero on a line that plainly contains it. Pipe through
+//!   `sed -E 's/\x1b\[[0-9;]*m//g'` first.
+//! - All lines on the test's own stdout come from the in-process entry; node logs are separate
+//!   files. A `hopr_transport` target in stdout is the entry, not a relayer.
 
 use std::time::Duration;
 
