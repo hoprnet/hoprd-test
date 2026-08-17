@@ -80,6 +80,27 @@ pub fn request_latency_profile(yaml: impl Into<String>) -> &'static str {
     REQUESTED_LATENCY.get_or_init(|| yaml.into())
 }
 
+static REQUESTED_NODE_ENV: std::sync::OnceLock<Vec<(String, String)>> = std::sync::OnceLock::new();
+
+/// Ask for environment variables to be set on every cluster `hoprd`, before the first
+/// [`bring_up`].
+///
+/// Some node behaviour is reachable only through `HOPR_INTERNAL_*` environment variables rather
+/// than the hoprd config file, so a scenario that needs one has nowhere else to state it. Setting
+/// them here rather than on the test process makes the request explicit and greppable — a
+/// behavioural setting that a run's node logs can be checked against, instead of ambient state
+/// inherited from whoever launched the harness.
+///
+/// These reach the nodes via the `hoprd-localcluster` process, which the nodes inherit from. First
+/// call in a test binary wins.
+pub fn request_node_env<K, V>(vars: impl IntoIterator<Item = (K, V)>) -> &'static [(String, String)]
+where
+    K: Into<String>,
+    V: Into<String>,
+{
+    REQUESTED_NODE_ENV.get_or_init(|| vars.into_iter().map(|(k, v)| (k.into(), v.into())).collect())
+}
+
 pub const API_PORT_BASE: u16 = 13000;
 pub const P2P_PORT_BASE: u16 = 19000;
 pub const API_HOST: &str = "127.0.0.1";
@@ -455,6 +476,10 @@ async fn spawn_managed() -> anyhow::Result<ClusterHandle> {
         cmd.args(["--container-runtime", &runtime]);
     }
     cmd.env("HOPRD_USE_OPENTELEMETRY", "false");
+    for (key, value) in REQUESTED_NODE_ENV.get().map(Vec::as_slice).unwrap_or_default() {
+        tracing::info!(key, value, "cluster nodes will run with a requested env override");
+        cmd.env(key, value);
+    }
     cmd.stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::inherit());
 
