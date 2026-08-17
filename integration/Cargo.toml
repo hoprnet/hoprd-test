@@ -13,7 +13,7 @@ publish = false
 # rewrites it to the resolved edge-client ref (EDGLI_REF, default main HEAD, or the
 # rev from a merge dispatch) and runs `cargo update -p edgli`. Keep it recent so
 # local `just` builds match what CI tests.
-edgli = { git = "https://github.com/hoprnet/edge-client", rev = "0edd1a25acb931fcf26ecd089ab94a2180df1540", default-features = false, features = [
+edgli = { git = "https://github.com/hoprnet/edge-client", rev = "9e24e8b9177e85f1e752010c43ab792d8ed93c3f", default-features = false, features = [
   "runtime-tokio",
   "blokli",
 ] }
@@ -22,7 +22,7 @@ edgli = { git = "https://github.com/hoprnet/edge-client", rev = "0edd1a25acb931f
 # `mod telemetry` into hopr-transport-session. Without it every per-session counter is absent
 # rather than zero, and "the session received nothing" is indistinguishable from "the metric was
 # never built". Same source and branch as the one edgli resolves, so the two unify.
-hopr-lib = { git = "https://github.com/hoprnet/hoprnet", branch = "release/4.0", default-features = false, features = [
+hopr-lib = { git = "https://github.com/hoprnet/hoprnet", branch = "kauki/test/transport/return-routing-origination-stall", default-features = false, features = [
   "telemetry",
 ] }
 
