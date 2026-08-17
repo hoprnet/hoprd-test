@@ -25,14 +25,10 @@
 
 use std::time::Duration;
 
-use anyhow::Context as _;
-
 use crate::cluster::NodeInfo;
 
 const PACKETS_METRIC: &str = "hopr_packets_count";
 const ACKS_SENT_METRIC: &str = "hopr_protocol_ack_sent_count";
-
-const SCRAPE_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// One reading of a node's packet-flow counters.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -100,23 +96,7 @@ impl OriginationVerdict {
 
 /// Read a node's packet-flow counters once.
 pub async fn sample(node: &NodeInfo) -> anyhow::Result<OriginationSample> {
-    let client = reqwest::Client::builder()
-        .timeout(SCRAPE_TIMEOUT)
-        .build()
-        .expect("reqwest client builds with only a timeout set");
-
-    let mut req = client.get(format!("{}/metrics", node.api_url));
-    if let Some(token) = &node.api_token {
-        req = req.header("Authorization", format!("Bearer {token}"));
-    }
-    let response = req.send().await.context("GET /metrics")?;
-    anyhow::ensure!(
-        response.status().is_success(),
-        "/metrics returned {}",
-        response.status()
-    );
-
-    Ok(parse(&response.text().await?))
+    Ok(parse(&crate::cluster::scrape_metrics(node).await?))
 }
 
 /// Sample `node` `count` times, `interval` apart, and return the verdict.

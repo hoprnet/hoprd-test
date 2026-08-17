@@ -18,16 +18,12 @@
 //! *live* relayers' shares; to reason about selection after a kill you need the sender's
 //! own path-planner telemetry, which this crate does not have.
 
-use std::{collections::HashMap, time::Duration};
-
-use anyhow::Context as _;
+use std::collections::HashMap;
 
 use crate::{Address, cluster::NodeInfo};
 
 /// The metric and label the histogram is read from.
 const FORWARDED_TYPE: &str = "forwarded";
-
-const SCRAPE_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Forwarded-packet counts per node address, as read at one instant.
 #[derive(Debug, Clone, Default)]
@@ -110,20 +106,12 @@ impl RelayerSpread {
 /// Nodes that do not answer (killed mid-scenario, or still starting) are simply absent
 /// from the sample; [`spread`] treats a missing endpoint as "no further progress".
 pub async fn sample(nodes: &[NodeInfo]) -> ForwardedSample {
-    let client = reqwest::Client::builder()
-        .timeout(SCRAPE_TIMEOUT)
-        .build()
-        .expect("reqwest client builds with only a timeout set");
-
-    let readings = futures::future::join_all(nodes.iter().map(|node| {
-        let client = client.clone();
-        async move {
-            match scrape_forwarded(&client, node).await {
-                Ok(count) => Some((node.address, count)),
-                Err(e) => {
-                    tracing::debug!(node = %node.address, "forwarded-metric scrape failed: {e:#}");
-                    None
-                }
+    let readings = futures::future::join_all(nodes.iter().map(|node| async move {
+        match scrape_forwarded(node).await {
+            Ok(count) => Some((node.address, count)),
+            Err(e) => {
+                tracing::debug!(node = %node.address, "forwarded-metric scrape failed: {e:#}");
+                None
             }
         }
     }))
@@ -172,18 +160,10 @@ pub fn spread(before: &ForwardedSample, after: &ForwardedSample) -> RelayerSprea
     RelayerSpread { per_relayer, total }
 }
 
-async fn scrape_forwarded(client: &reqwest::Client, node: &NodeInfo) -> anyhow::Result<u64> {
-    let mut req = client.get(format!("{}/metrics", node.api_url));
-    if let Some(token) = &node.api_token {
-        req = req.header("Authorization", format!("Bearer {token}"));
-    }
-    let response = req.send().await.context("GET /metrics")?;
-    anyhow::ensure!(
-        response.status().is_success(),
-        "/metrics returned {}",
-        response.status()
-    );
-    Ok(parse_forwarded(&response.text().await?))
+async fn scrape_forwarded(node: &NodeInfo) -> anyhow::Result<u64> {
+    Ok(parse_forwarded(
+        &crate::cluster::scrape_metrics(node).await?,
+    ))
 }
 
 /// Sum the `type="forwarded"` series of `hopr_packets_count` out of a Prometheus text

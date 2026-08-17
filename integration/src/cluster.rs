@@ -93,7 +93,7 @@ static REQUESTED_NODE_ENV: std::sync::OnceLock<Vec<(String, String)>> = std::syn
 ///
 /// These reach the nodes via the `hoprd-localcluster` process, which the nodes inherit from. First
 /// call in a test binary wins.
-pub fn request_node_env<K, V>(vars: impl IntoIterator<Item = (K, V)>) -> &'static [(String, String)]
+pub fn request_node_env<K, V>(vars: impl IntoIterator<Item = (K, V)>)
 where
     K: Into<String>,
     V: Into<String>,
@@ -102,7 +102,7 @@ where
         vars.into_iter()
             .map(|(k, v)| (k.into(), v.into()))
             .collect()
-    })
+    });
 }
 
 pub const API_PORT_BASE: u16 = 13000;
@@ -205,7 +205,7 @@ impl ClusterSummary {
     /// Path to `node`'s log file, or `None` when the log directory is not known.
     ///
     /// Node logs are named by position in the cluster, so this maps the address back to its index.
-    pub fn node_log(&self, node: Address) -> Option<PathBuf> {
+    fn node_log(&self, node: Address) -> Option<PathBuf> {
         let index = self.nodes.iter().position(|n| n.address == node)?;
         Some(self.log_dir.as_ref()?.join(format!("hoprd_{index}.log")))
     }
@@ -271,7 +271,15 @@ struct ExtraSummaryWire {
     password: String,
 }
 
-fn wire_into_summary(wire: ClusterSummaryWire) -> anyhow::Result<ClusterSummary> {
+/// `data_dir` is where the cluster keeps its state; the node logs live in `logs/` under it.
+///
+/// Taken as a parameter rather than patched onto the returned struct so that a new construction
+/// path cannot end up with a summary whose logs are unreachable — every caller has the data dir in
+/// hand before it gets here.
+fn wire_into_summary(
+    wire: ClusterSummaryWire,
+    data_dir: Option<&std::path::Path>,
+) -> anyhow::Result<ClusterSummary> {
     let blokli_url = wire
         .blokli_url
         .ok_or_else(|| anyhow::anyhow!("blokli_url missing from running cluster status"))?;
@@ -320,7 +328,7 @@ fn wire_into_summary(wire: ClusterSummaryWire) -> anyhow::Result<ClusterSummary>
         blokli_url,
         nodes,
         extras,
-        log_dir: None,
+        log_dir: data_dir.map(|d| d.join("logs")),
     })
 }
 
@@ -328,7 +336,7 @@ fn wire_into_summary(wire: ClusterSummaryWire) -> anyhow::Result<ClusterSummary>
 pub(crate) fn parse_summary_json(json: &str) -> anyhow::Result<ClusterSummary> {
     let wire: ClusterSummaryWire =
         serde_json::from_str(json).context("failed to parse cluster status JSON")?;
-    wire_into_summary(wire)
+    wire_into_summary(wire, None)
 }
 
 // ── RAII handle ───────────────────────────────────────────────────────────────
@@ -414,8 +422,7 @@ async fn attach_external(data_dir: &str) -> anyhow::Result<ClusterHandle> {
         "cluster at {data_dir} is '{:?}', not 'running'",
         wire.state
     );
-    let mut summary = wire_into_summary(wire)?;
-    summary.log_dir = Some(std::path::Path::new(data_dir).join("logs"));
+    let summary = wire_into_summary(wire, Some(std::path::Path::new(data_dir)))?;
     tracing::info!(blokli_url = %summary.blokli_url, "attached to external cluster");
     Ok(ClusterHandle {
         child: None,
@@ -541,10 +548,7 @@ async fn spawn_managed() -> anyhow::Result<ClusterHandle> {
     )
     .await
     {
-        Ok(mut s) => {
-            s.log_dir = Some(data_dir.join("logs"));
-            s
-        }
+        Ok(s) => s,
         Err(err) => {
             #[cfg(unix)]
             if let Some(pid) = child.id() {
@@ -596,7 +600,7 @@ async fn wait_status_running(
             .context("failed to run `hoprd-localcluster status`")?;
         match serde_json::from_str::<ClusterSummaryWire>(&String::from_utf8_lossy(&out.stdout)) {
             Ok(wire) => match wire.state {
-                ClusterStateWire::Running => return wire_into_summary(wire),
+                ClusterStateWire::Running => return wire_into_summary(wire, Some(data_dir)),
                 ClusterStateWire::Failed => {
                     anyhow::bail!(
                         "localcluster failed: {}",
@@ -634,6 +638,26 @@ fn auth_header() -> String {
 /// built from [`auth_header`] can be rejected by a node that has its own -- or that has none.
 fn node_auth_header(node: &NodeInfo) -> Option<String> {
     node.api_token.as_ref().map(|t| format!("Bearer {t}"))
+}
+
+/// Fetch one node's Prometheus exposition, as text.
+///
+/// Shared so that every reader of `/metrics` builds the request the same way: the readiness polling
+/// here, the relayer histogram in [`crate::relayers`], and the origination counters in
+/// [`crate::origination`] each parse different series out of the same endpoint, and had otherwise
+/// each grown their own client, timeout and auth handling.
+pub async fn scrape_metrics(node: &NodeInfo) -> anyhow::Result<String> {
+    let mut req = node_http_client().get(format!("{}/metrics", node.api_url));
+    if let Some(header) = node_auth_header(node) {
+        req = req.header("Authorization", header);
+    }
+    let response = req.send().await.context("GET /metrics")?;
+    anyhow::ensure!(
+        response.status().is_success(),
+        "/metrics returned {}",
+        response.status()
+    );
+    response.text().await.context("reading /metrics body")
 }
 
 async fn poll_cluster_until<Fut>(

@@ -131,7 +131,7 @@ async fn exit_should_keep_originating_when_a_return_path_becomes_unresolvable() 
     anyhow::ensure!(size >= 2, "need at least an exit and one peer, got {size}");
     request_node_env([
         (
-            "HOPR_INTERNAL_SURB_PSEUDONYM_LIFETIME_MS".to_string(),
+            SURB_LIFETIME_ENV.to_string(),
             SURB_PSEUDONYM_LIFETIME.as_millis().to_string(),
         ),
         // The Session-layer lines that say whether the exit's keep-alive was ever spawned and
