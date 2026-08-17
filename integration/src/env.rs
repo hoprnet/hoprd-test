@@ -26,11 +26,15 @@ use edgli::{
 
 use crate::{
     Address,
-    cluster::{self, CLUSTER_SIZE, ClusterHandle, ExtraInfo, P2P_PORT_BASE},
+    cluster::{
+        self, ClusterHandle, ClusterSummary, ExtraInfo, NodeInfo, P2P_PORT_BASE, cluster_size,
+    },
 };
 
 /// Edgli's P2P port — one slot beyond the cluster nodes.
-const EDGE_P2P_PORT: u16 = P2P_PORT_BASE + CLUSTER_SIZE as u16;
+fn edge_p2p_port() -> u16 {
+    P2P_PORT_BASE + cluster_size() as u16
+}
 
 const PEER_DISCOVERY_TIMEOUT: Duration = Duration::from_secs(120);
 const LOCAL_CHANNEL_OPEN_TIMEOUT: Duration = Duration::from_secs(120);
@@ -112,7 +116,7 @@ impl IntegrationEnv {
             &summary.blokli_url,
             &extra,
             &NetTuning::local(),
-            CLUSTER_SIZE,
+            cluster_size(),
         )
         .await?;
 
@@ -176,36 +180,107 @@ impl IntegrationEnv {
         })
     }
 
+    /// The cluster this env owns; an error for a Rotsee env, which has none.
+    pub fn cluster(&self) -> anyhow::Result<&ClusterSummary> {
+        self._cluster
+            .as_ref()
+            .map(|c| &c.summary)
+            .ok_or_else(|| anyhow::anyhow!("no local cluster (Rotsee env)"))
+    }
+
+    /// Cluster nodes that can carry a return path for a session exiting at `exit` — every
+    /// node but the exit itself. The cluster is a full mesh, so each of them has an open
+    /// channel from the exit and is a legitimate first hop back towards Edgli.
+    pub fn relayer_candidates(&self, exit: Address) -> anyhow::Result<Vec<NodeInfo>> {
+        Ok(self
+            .cluster()?
+            .nodes
+            .iter()
+            .filter(|n| n.address != exit)
+            .cloned()
+            .collect())
+    }
+
     /// Open an unreliable (`Segmentation`-only, no retransmission) session over
     /// `hops` relays to the exit node's built-in loopback service. Rate control
     /// is left ON.
     pub async fn open_unreliable_session(&self, hops: usize) -> anyhow::Result<HoprSession> {
-        let dest = self.dest_for(hops)?;
+        Ok(self.open_unreliable_session_paths(hops, hops).await?.0)
+    }
+
+    /// As [`Self::open_unreliable_session`], but with the forward and return hop counts
+    /// chosen independently; also returns the exit address.
+    ///
+    /// A 0-hop forward paired with a 1-hop return isolates the return direction: the only
+    /// packets any cluster node then forwards are replies travelling `exit → relayer →
+    /// edgli`, so per-node forwarding counters read directly as a return-relayer
+    /// histogram. The exit is selected by the forward hop count.
+    pub async fn open_unreliable_session_paths(
+        &self,
+        forward_hops: usize,
+        return_hops: usize,
+    ) -> anyhow::Result<(HoprSession, Address)> {
+        self.open_unreliable_session_paths_with(forward_hops, return_hops, true)
+            .await
+    }
+
+    /// As [`Self::open_unreliable_session_paths`], but with no entry-side SURB balancer.
+    ///
+    /// Without it the entry delivers SURBs only organically, alongside data it is actually sending,
+    /// so a session that goes quiet stops replenishing its exit. That is what makes an *abandoned*
+    /// session model an initiator that has gone away: with the balancer on, its keep-alives go on
+    /// feeding the exit SURBs long after the application has stopped, and the exit never starves —
+    /// measured, on a session abandoned for 105 s that never missed a beat.
+    pub async fn open_unreliable_session_unbalanced(
+        &self,
+        forward_hops: usize,
+        return_hops: usize,
+    ) -> anyhow::Result<(HoprSession, Address)> {
+        self.open_unreliable_session_paths_with(forward_hops, return_hops, false)
+            .await
+    }
+
+    async fn open_unreliable_session_paths_with(
+        &self,
+        forward_hops: usize,
+        return_hops: usize,
+        balance_surbs: bool,
+    ) -> anyhow::Result<(HoprSession, Address)> {
+        let dest = self.dest_for(forward_hops)?;
         let (session, _) = self
             .edgli
             .connect_to(
                 dest,
                 SessionTarget::ExitNode(0), // built-in loopback service
                 HoprSessionClientConfig {
-                    forward_path: HopRouting::try_from(hops)?,
-                    return_path: HopRouting::try_from(hops)?,
+                    forward_path: HopRouting::try_from(forward_hops)?,
+                    return_path: HopRouting::try_from(return_hops)?,
                     // Mirror gnosis_vpn-client's main (WG) data session — the real
                     // high-throughput config (gnosis_vpn-lib connection/options.rs +
                     // up/runner.rs). A too-low SURB mint ceiling starves the exit's
                     // return path under sustained downlink; provision it like production.
                     capabilities: SessionCapability::Segmentation | SessionCapability::NoDelay,
                     always_max_out_surbs: true,
-                    surb_management: Some(SurbBalancerConfig {
+                    surb_management: balance_surbs.then_some(SurbBalancerConfig {
                         // gnosis main: 10 MB response buffer, 16 Mb/s SURB upstream.
                         target_surb_buffer_size: 10_000_000 / SESSION_MTU as u64,
                         max_surbs_per_sec: 16_000_000 / (8 * SURB_SIZE as u64),
+                        // Everything else stays at the default, because that is what the client
+                        // does: `to_surb_balancer_config` in gnosis_vpn-lib sets exactly these two
+                        // fields from the same formulas and then `..Default::default()`.
+                        //
+                        // In particular `sustain_on_return_path_loss` is left off. It was set here
+                        // once, on the reasoning that a lost return relayer reads as a well-stocked
+                        // exit because consumption is only observed when a reply gets home. That may
+                        // be true, but no client sets it, so a scenario that did was measuring a
+                        // configuration nobody runs.
                         ..SurbBalancerConfig::default()
                     }),
                     ..Default::default()
                 },
             )
             .await?;
-        Ok(session)
+        Ok((session, dest))
     }
 
     /// Session tuned to expose tokio executor starvation for the profiling harness:
@@ -295,7 +370,11 @@ async fn boot_edgli(
         target_open_channels: target_channels + genesis_channels,
         ..Default::default()
     };
-    let mut strat_cfg = default_strategy_cfg(&edgli, &sizing).await?;
+    // Sync and sizing-only since edge-client#136: the strategy resolves capacities to balances
+    // each tick against the live winning probability, so nothing is read from the chain here.
+    // `channel_capacity` is left at its default deliberately -- raising it also raises the safe
+    // gate below which the node opens *zero* channels, which is not what this scenario measures.
+    let mut strat_cfg = default_strategy_cfg(&sizing)?;
     for kind in &mut strat_cfg.strategies {
         let EdgeStrategyKind::ChannelLifecycle(lc) = kind;
         lc.eligibility = EligibilityConfig {
@@ -330,11 +409,17 @@ fn edgli_config(
     module_address: &Address,
     tuning: &NetTuning,
 ) -> HoprLibConfig {
-    use edgli::hopr_lib::config::{HoprProtocolConfig, MixerConfig, TransportConfig};
+    use edgli::hopr_lib::{
+        config::{HoprPacketPipelineConfig, MixerConfig, TransportConfig},
+        exports::transport::{
+            HoprProtocolConfig,
+            config::{SurbPopOrder, SurbStoreConfig},
+        },
+    };
     HoprLibConfig {
         host: HostConfig {
             address: HostType::IPv4("0.0.0.0".to_string()),
-            port: EDGE_P2P_PORT,
+            port: edge_p2p_port(),
         },
         publish: true,
         protocol: HoprProtocolConfig {
@@ -343,6 +428,17 @@ fn edgli_config(
                 prefer_local_addresses: tuning.prefer_local,
             },
             path_planner: tuning.path_planner,
+            packet: HoprPacketPipelineConfig {
+                // Stated rather than defaulted: the library default is FIFO, which replies with the
+                // oldest SURBs first and so keeps using a return path for as long as its backlog
+                // lasts. hoprd already pins LIFO, and a cluster where the two ends disagree
+                // measures neither one.
+                surb_store: SurbStoreConfig {
+                    pop_order: SurbPopOrder::Lifo,
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
             mixer: MixerConfig {
                 min_delay: Duration::ZERO,
                 delay_range: Duration::from_millis(1),

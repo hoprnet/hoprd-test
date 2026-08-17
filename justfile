@@ -81,6 +81,19 @@ integration-binchain *scenarios: build build-chain
     [ -n '{{scenarios}}' ] && export SCENARIOS='{{scenarios}}'
     HOPRNET_SHELL='{{hoprnet}}' bash scripts/integration/run-binchain.sh
 
+# Return-path resilience (binary chain): are replies spread over distinct relayers, and
+# does the stream survive one of them dying? Runs its own 5-node cluster — see
+# integration/tests/return_path.rs. Optional args = test-name filters.
+return-path *scenarios: build build-chain
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # Named explicitly rather than left to the default filter: run-binchain.sh gives each
+    # scenario a fresh chain, and the kill scenario leaves a dead node behind it.
+    SCENARIOS='{{scenarios}}'
+    [ -n "${SCENARIOS}" ] || SCENARIOS='return_paths_should_spread_across_distinct_relayers session_should_survive_return_relayer_loss a_symmetric_session_should_survive_relayer_loss'
+    export SCENARIOS TEST_TARGET=return_path
+    HOPRNET_SHELL='{{hoprnet}}' bash scripts/integration/run-binchain.sh
+
 # Run a single test against a fresh env (e.g. `just scenario zero_hop`).
 scenario name:
     @just integration '{{name}}'

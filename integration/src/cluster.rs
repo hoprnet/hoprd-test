@@ -17,11 +17,117 @@ use anyhow::Context as _;
 
 use crate::Address;
 
-pub const CLUSTER_SIZE: usize = 3;
+/// Node count used unless `HOPRD_CLUSTER_SIZE` overrides it.
+pub const DEFAULT_CLUSTER_SIZE: usize = 3;
+/// `hoprd-localcluster` only carries this many baked-in node secrets.
+pub const MAX_CLUSTER_SIZE: usize = 5;
+/// Smallest cluster `IntegrationEnv` can actually bring up.
+///
+/// `boot_edgli` waits for at least two connected peers, so a one-node cluster is accepted by
+/// the size knob and then times out during setup -- a configuration that looks supported and
+/// is not. Two is the smallest that reaches readiness.
+pub const MIN_CLUSTER_SIZE: usize = 2;
+
+static REQUESTED_SIZE: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+
+/// Ask for a cluster of `n` nodes, before the first [`bring_up`].
+///
+/// Return-path scenarios need more relayer candidates than the throughput tests, so the
+/// size is a knob rather than a constant. First call in a test binary wins — the size is
+/// read from several places during bring-up and readiness polling, and must not change
+/// underneath them. Returns the size actually in effect.
+pub fn request_cluster_size(n: usize) -> usize {
+    let clamped = n.clamp(MIN_CLUSTER_SIZE, MAX_CLUSTER_SIZE);
+    let effective = *REQUESTED_SIZE.get_or_init(|| clamped);
+    if effective != clamped {
+        tracing::warn!(
+            requested = clamped,
+            effective,
+            "cluster size already fixed by an earlier call; keeping it"
+        );
+    }
+    effective
+}
+
+/// Number of `hoprd` nodes to run: [`request_cluster_size`] if called, else
+/// `HOPRD_CLUSTER_SIZE`, else [`DEFAULT_CLUSTER_SIZE`] — clamped to
+/// `MIN_CLUSTER_SIZE..=MAX_CLUSTER_SIZE`.
+pub fn cluster_size() -> usize {
+    REQUESTED_SIZE.get().copied().unwrap_or_else(|| {
+        std::env::var("HOPRD_CLUSTER_SIZE")
+            .ok()
+            .and_then(|s| s.parse::<usize>().ok())
+            .unwrap_or(DEFAULT_CLUSTER_SIZE)
+            .clamp(MIN_CLUSTER_SIZE, MAX_CLUSTER_SIZE)
+    })
+}
+
+static REQUESTED_LATENCY: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+/// Ask for artificial inter-node latency, before the first [`bring_up`].
+///
+/// `yaml` is a `hoprd-localcluster` latency config (`default` / `per_node` / `per_link`;
+/// see `docs/localcluster/README.md`) and is written to the cluster's data dir and passed
+/// as `--latency config:<path>`.
+///
+/// Why a test would want this: on an unshaped local cluster every relayer probes at
+/// essentially the same latency, so all path weights are equal and *any* selection
+/// strategy — weighted-random included — comes out uniform over enough draws. Giving the
+/// nodes distinct inbound delays is what creates the score spread that makes a weighted
+/// draw concentrate, which is the condition the return-path scenarios need to be able to
+/// tell selection strategies apart. First call in a test binary wins.
+pub fn request_latency_profile(yaml: impl Into<String>) -> &'static str {
+    REQUESTED_LATENCY.get_or_init(|| yaml.into())
+}
+
+static REQUESTED_NODE_ENV: std::sync::OnceLock<Vec<(String, String)>> = std::sync::OnceLock::new();
+
+/// Ask for environment variables to be set on every cluster `hoprd`, before the first
+/// [`bring_up`].
+///
+/// Some node behaviour is reachable only through `HOPR_INTERNAL_*` environment variables rather
+/// than the hoprd config file, so a scenario that needs one has nowhere else to state it. Setting
+/// them here rather than on the test process makes the request explicit and greppable — a
+/// behavioural setting that a run's node logs can be checked against, instead of ambient state
+/// inherited from whoever launched the harness.
+///
+/// These reach the nodes via the `hoprd-localcluster` process, which the nodes inherit from. First
+/// call in a test binary wins.
+pub fn request_node_env<K, V>(vars: impl IntoIterator<Item = (K, V)>)
+where
+    K: Into<String>,
+    V: Into<String>,
+{
+    REQUESTED_NODE_ENV.get_or_init(|| {
+        vars.into_iter()
+            .map(|(k, v)| (k.into(), v.into()))
+            .collect()
+    });
+}
+
 pub const API_PORT_BASE: u16 = 13000;
 pub const P2P_PORT_BASE: u16 = 19000;
 pub const API_HOST: &str = "127.0.0.1";
 pub const API_TOKEN: &str = "test-token-localcluster";
+
+/// Per-channel stake for the full-mesh channels localcluster opens over the REST API.
+///
+/// localcluster's own default has been observed to exhaust mid-run: a relayer began rejecting
+/// every ticket with "ticket value is greater than remaining unrealized balance" about three
+/// minutes into a survival phase, which throttles the path at the payment layer and is
+/// indistinguishable from the return-path failure the scenario exists to measure.
+///
+/// A flat figure rather than one derived from a data budget. The ticket arithmetic for a 1 GiB
+/// channel comes to a few microHOPR -- seven orders of magnitude below this -- so a derivation
+/// would compute a number that never applies and read as though it were load-bearing. Each node
+/// holds 1000 wxHOPR and opens at most four channels, so 100 is affordable and leaves the
+/// payment layer far from binding.
+///
+/// `log_channel_stakes` records what the channels actually hold at bootstrap, since the node DBs
+/// are deleted at teardown and the starting stake cannot be recovered afterwards.
+fn channel_funding_amount() -> String {
+    "100 wxHOPR".to_string()
+}
 
 const CLUSTER_START_TIMEOUT: Duration = Duration::from_secs(600);
 const READYZ_TIMEOUT: Duration = Duration::from_secs(120);
@@ -52,11 +158,71 @@ impl std::fmt::Debug for ExtraInfo {
     }
 }
 
+/// A running cluster node: who it is, how to query it, and how to kill it.
+#[derive(Debug, Clone)]
+pub struct NodeInfo {
+    pub address: Address,
+    /// REST API base URL (no trailing slash).
+    pub api_url: String,
+    /// Bearer token, or `None` when the node runs without authentication.
+    pub api_token: Option<String>,
+    /// OS pid of the `hoprd` process, for scenarios that take a node down mid-run.
+    pub pid: Option<u32>,
+}
+
+impl NodeInfo {
+    /// SIGKILL this node's `hoprd` process, simulating a relay that drops off the
+    /// network without closing anything down — the failure mode behind the
+    /// 2026-08-11 return-path break.
+    ///
+    /// SIGKILL rather than SIGTERM on purpose: a clean shutdown would let the node
+    /// announce its departure, which is not what a crashed or partitioned relay does.
+    #[cfg(unix)]
+    pub fn kill(&self) -> anyhow::Result<()> {
+        let pid = self
+            .pid
+            .ok_or_else(|| anyhow::anyhow!("node {} has no pid in cluster status", self.address))?;
+        nix::sys::signal::kill(
+            nix::unistd::Pid::from_raw(pid as i32),
+            nix::sys::signal::Signal::SIGKILL,
+        )
+        .with_context(|| format!("SIGKILL node {} (pid {pid})", self.address))?;
+        tracing::info!(node = %self.address, pid, "killed relay node");
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ClusterSummary {
     pub blokli_url: String,
-    pub node_addresses: Vec<Address>,
+    pub nodes: Vec<NodeInfo>,
     pub extras: Vec<ExtraInfo>,
+    /// Directory holding each node's `hoprd_<i>.log`, when the cluster's data dir is known.
+    pub log_dir: Option<PathBuf>,
+}
+
+impl ClusterSummary {
+    /// Path to `node`'s log file, or `None` when the log directory is not known.
+    ///
+    /// Node logs are named by position in the cluster, so this maps the address back to its index.
+    fn node_log(&self, node: Address) -> Option<PathBuf> {
+        let index = self.nodes.iter().position(|n| n.address == node)?;
+        Some(self.log_dir.as_ref()?.join(format!("hoprd_{index}.log")))
+    }
+
+    /// Whether `node`'s log contains `needle`.
+    ///
+    /// Reading a node's own log is the only way to check something the REST API does not expose —
+    /// notably whether a behaviour the scenario *configured* actually took effect, rather than
+    /// trusting that an environment override reached the process.
+    pub fn node_log_contains(&self, node: Address, needle: &str) -> anyhow::Result<bool> {
+        let path = self
+            .node_log(node)
+            .ok_or_else(|| anyhow::anyhow!("no log file known for node {node}"))?;
+        let log = std::fs::read_to_string(&path)
+            .with_context(|| format!("reading {}", path.display()))?;
+        Ok(log.contains(needle))
+    }
 }
 
 // ── `hoprd-localcluster status` wire types ────────────────────────────────────
@@ -90,6 +256,11 @@ struct ClusterSummaryWire {
 #[derive(Debug, serde::Deserialize)]
 struct NodeSummaryWire {
     address: Option<String>,
+    api_url: String,
+    #[serde(default)]
+    api_token: Option<String>,
+    #[serde(default)]
+    pid: Option<u32>,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -100,22 +271,38 @@ struct ExtraSummaryWire {
     password: String,
 }
 
-fn wire_into_summary(wire: ClusterSummaryWire) -> anyhow::Result<ClusterSummary> {
+/// `data_dir` is where the cluster keeps its state; the node logs live in `logs/` under it.
+///
+/// Taken as a parameter rather than patched onto the returned struct so that a new construction
+/// path cannot end up with a summary whose logs are unreachable — every caller has the data dir in
+/// hand before it gets here.
+fn wire_into_summary(
+    wire: ClusterSummaryWire,
+    data_dir: Option<&std::path::Path>,
+) -> anyhow::Result<ClusterSummary> {
     let blokli_url = wire
         .blokli_url
         .ok_or_else(|| anyhow::anyhow!("blokli_url missing from running cluster status"))?;
 
-    let node_addresses = wire
+    let nodes = wire
         .nodes
         .into_iter()
         .map(|n| {
-            n.address
-                .ok_or_else(|| anyhow::anyhow!("node address is null in running cluster status"))?
-                .parse::<Address>()
-                .context("invalid node address")
+            Ok(NodeInfo {
+                address: n
+                    .address
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("node address is null in running cluster status")
+                    })?
+                    .parse::<Address>()
+                    .context("invalid node address")?,
+                api_url: n.api_url.trim_end_matches('/').to_string(),
+                api_token: n.api_token,
+                pid: n.pid,
+            })
         })
         .collect::<anyhow::Result<Vec<_>>>()?;
-    anyhow::ensure!(!node_addresses.is_empty(), "no nodes in cluster status");
+    anyhow::ensure!(!nodes.is_empty(), "no nodes in cluster status");
 
     let extras = wire
         .extras
@@ -139,8 +326,9 @@ fn wire_into_summary(wire: ClusterSummaryWire) -> anyhow::Result<ClusterSummary>
 
     Ok(ClusterSummary {
         blokli_url,
-        node_addresses,
+        nodes,
         extras,
+        log_dir: data_dir.map(|d| d.join("logs")),
     })
 }
 
@@ -148,7 +336,7 @@ fn wire_into_summary(wire: ClusterSummaryWire) -> anyhow::Result<ClusterSummary>
 pub(crate) fn parse_summary_json(json: &str) -> anyhow::Result<ClusterSummary> {
     let wire: ClusterSummaryWire =
         serde_json::from_str(json).context("failed to parse cluster status JSON")?;
-    wire_into_summary(wire)
+    wire_into_summary(wire, None)
 }
 
 // ── RAII handle ───────────────────────────────────────────────────────────────
@@ -206,6 +394,7 @@ pub async fn bring_up() -> anyhow::Result<ClusterHandle> {
     await_cluster_peers_discovered().await?;
     tracing::info!("verifying cluster: full-mesh outgoing channels Open");
     await_intracluster_channels_open().await?;
+    log_channel_stakes(&handle.summary).await;
     Ok(handle)
 }
 
@@ -233,7 +422,7 @@ async fn attach_external(data_dir: &str) -> anyhow::Result<ClusterHandle> {
         "cluster at {data_dir} is '{:?}', not 'running'",
         wire.state
     );
-    let summary = wire_into_summary(wire)?;
+    let summary = wire_into_summary(wire, Some(std::path::Path::new(data_dir)))?;
     tracing::info!(blokli_url = %summary.blokli_url, "attached to external cluster");
     Ok(ClusterHandle {
         child: None,
@@ -292,7 +481,7 @@ async fn spawn_managed() -> anyhow::Result<ClusterHandle> {
         "--hoprd-bin",
         &hoprd_bin,
         "--size",
-        &CLUSTER_SIZE.to_string(),
+        &cluster_size().to_string(),
         "--extra-identities",
         "1",
         "--data-dir",
@@ -305,7 +494,18 @@ async fn spawn_managed() -> anyhow::Result<ClusterHandle> {
         &P2P_PORT_BASE.to_string(),
         "--api-token",
         API_TOKEN,
+        // Stated rather than defaulted: localcluster's own default has been observed to exhaust
+        // mid-run, which throttles the path at the payment layer and reads as a return-path failure.
+        "--funding-amount",
+        &channel_funding_amount(),
     ]);
+    // Written inside the data dir so it lives exactly as long as the cluster does.
+    if let Some(yaml) = REQUESTED_LATENCY.get() {
+        let path = data_dir.join("latency.yaml");
+        std::fs::write(&path, yaml).context("writing latency profile")?;
+        cmd.args(["--latency", &format!("config:{}", path.to_str().unwrap())]);
+        tracing::info!(?path, "cluster will run with an artificial latency profile");
+    }
     if let Some(url) = &chain_url {
         cmd.args(["--chain-url", url]);
     } else {
@@ -315,6 +515,18 @@ async fn spawn_managed() -> anyhow::Result<ClusterHandle> {
         cmd.args(["--container-runtime", &runtime]);
     }
     cmd.env("HOPRD_USE_OPENTELEMETRY", "false");
+    for (key, value) in REQUESTED_NODE_ENV
+        .get()
+        .map(Vec::as_slice)
+        .unwrap_or_default()
+    {
+        tracing::info!(
+            key,
+            value,
+            "cluster nodes will run with a requested env override"
+        );
+        cmd.env(key, value);
+    }
     cmd.stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::inherit());
 
@@ -351,10 +563,22 @@ async fn spawn_managed() -> anyhow::Result<ClusterHandle> {
     };
 
     tracing::info!(blokli_url = %summary.blokli_url, "cluster up");
+
+    // Node logs live inside the temp dir, which is removed when the handle drops -- so by the time
+    // a failure is worth investigating, the only per-node evidence is already gone. Leaking the
+    // handle keeps the whole cluster directory for post-mortem.
+    let tempdir = if std::env::var_os("HOPRD_KEEP_ARTIFACTS").is_some() {
+        tracing::info!(path = %tempdir.path().display(), "keeping cluster artifacts");
+        std::mem::forget(tempdir);
+        None
+    } else {
+        Some(tempdir)
+    };
+
     Ok(ClusterHandle {
         child: Some(child),
         summary,
-        _tempdir: Some(tempdir),
+        _tempdir: tempdir,
     })
 }
 
@@ -376,7 +600,7 @@ async fn wait_status_running(
             .context("failed to run `hoprd-localcluster status`")?;
         match serde_json::from_str::<ClusterSummaryWire>(&String::from_utf8_lossy(&out.stdout)) {
             Ok(wire) => match wire.state {
-                ClusterStateWire::Running => return wire_into_summary(wire),
+                ClusterStateWire::Running => return wire_into_summary(wire, Some(data_dir)),
                 ClusterStateWire::Failed => {
                     anyhow::bail!(
                         "localcluster failed: {}",
@@ -408,6 +632,34 @@ fn auth_header() -> String {
     format!("Bearer {API_TOKEN}")
 }
 
+/// Authorization header for one node, or `None` when it runs unauthenticated.
+///
+/// `NodeInfo.api_token` is optional and need not match the cluster-wide token, so a request
+/// built from [`auth_header`] can be rejected by a node that has its own -- or that has none.
+fn node_auth_header(node: &NodeInfo) -> Option<String> {
+    node.api_token.as_ref().map(|t| format!("Bearer {t}"))
+}
+
+/// Fetch one node's Prometheus exposition, as text.
+///
+/// Shared so that every reader of `/metrics` builds the request the same way: the readiness polling
+/// here, the relayer histogram in [`crate::relayers`], and the origination counters in
+/// [`crate::origination`] each parse different series out of the same endpoint, and had otherwise
+/// each grown their own client, timeout and auth handling.
+pub async fn scrape_metrics(node: &NodeInfo) -> anyhow::Result<String> {
+    let mut req = node_http_client().get(format!("{}/metrics", node.api_url));
+    if let Some(header) = node_auth_header(node) {
+        req = req.header("Authorization", header);
+    }
+    let response = req.send().await.context("GET /metrics")?;
+    anyhow::ensure!(
+        response.status().is_success(),
+        "/metrics returned {}",
+        response.status()
+    );
+    response.text().await.context("reading /metrics body")
+}
+
 async fn poll_cluster_until<Fut>(
     timeout: Duration,
     sleep: Duration,
@@ -420,7 +672,7 @@ where
     let deadline = tokio::time::Instant::now() + timeout;
     loop {
         let results = futures::future::join_all(
-            (0..CLUSTER_SIZE).map(|i| check_node(i, API_PORT_BASE + i as u16)),
+            (0..cluster_size()).map(|i| check_node(i, API_PORT_BASE + i as u16)),
         )
         .await;
         if results.into_iter().all(|ok| ok) {
@@ -454,7 +706,7 @@ async fn await_nodes_ready() -> anyhow::Result<()> {
 
 async fn await_cluster_peers_discovered() -> anyhow::Result<()> {
     let client = node_http_client();
-    let expected = CLUSTER_SIZE - 1;
+    let expected = cluster_size() - 1;
     poll_cluster_until(
         PEER_DISCOVERY_TIMEOUT,
         Duration::from_secs(3),
@@ -483,7 +735,7 @@ async fn await_cluster_peers_discovered() -> anyhow::Result<()> {
 
 async fn await_intracluster_channels_open() -> anyhow::Result<()> {
     let client = node_http_client();
-    let expected = CLUSTER_SIZE - 1;
+    let expected = cluster_size() - 1;
     poll_cluster_until(
         INTRACLUSTER_CHANNEL_TIMEOUT,
         Duration::from_secs(5),
@@ -521,6 +773,55 @@ async fn await_intracluster_channels_open() -> anyhow::Result<()> {
     .await
 }
 
+/// Records the stake actually sitting in every outgoing channel, once, after bootstrap.
+///
+/// A run has already been thrown away because a relayer exhausted its channel mid-survival, and
+/// the stake it started from could not be recovered afterwards: the node DBs are deleted at
+/// teardown even under `HOPRD_KEEP_ARTIFACTS`, and the ticket volume observed does not by itself
+/// explain the exhaustion. Reading the balances here turns that from something inferred after the
+/// fact into something the log states outright.
+pub async fn log_channel_stakes(summary: &ClusterSummary) {
+    let client = node_http_client();
+    for (id, node) in summary.nodes.iter().enumerate() {
+        let stakes = async {
+            let mut req = client.get(format!(
+                "{}/api/v4/channels?includingClosed=false",
+                node.api_url
+            ));
+            if let Some(h) = node_auth_header(node) {
+                req = req.header("Authorization", h);
+            }
+            let body: serde_json::Value = req.send().await?.json().await?;
+            anyhow::Ok(
+                body["outgoing"]
+                    .as_array()
+                    .map(|arr| {
+                        arr.iter()
+                            .map(|ch| {
+                                format!(
+                                    "{}={}",
+                                    ch["peerAddress"].as_str().unwrap_or("?"),
+                                    ch["balance"].as_str().unwrap_or("?")
+                                )
+                            })
+                            .collect::<Vec<_>>()
+                            .join(" ")
+                    })
+                    .unwrap_or_default(),
+            )
+        }
+        .await;
+
+        match stakes {
+            Ok(s) => {
+                tracing::info!(node = id, requested = %channel_funding_amount(), outgoing = %s,
+                "outgoing channel stakes at bootstrap")
+            }
+            Err(e) => tracing::warn!(node = id, error = %e, "could not read channel stakes"),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -529,9 +830,9 @@ mod tests {
   "state": "running",
   "blokli_url": "http://127.0.0.1:8545",
   "nodes": [
-    { "id": 0, "address": "0x1111111111111111111111111111111111111111" },
-    { "id": 1, "address": "0x2222222222222222222222222222222222222222" },
-    { "id": 2, "address": "0x3333333333333333333333333333333333333333" }
+    { "id": 0, "address": "0x1111111111111111111111111111111111111111", "api_url": "http://127.0.0.1:13000/", "api_token": "tok", "pid": 101 },
+    { "id": 1, "address": "0x2222222222222222222222222222222222222222", "api_url": "http://127.0.0.1:13001", "api_token": "tok", "pid": 102 },
+    { "id": 2, "address": "0x3333333333333333333333333333333333333333", "api_url": "http://127.0.0.1:13002", "api_token": null, "pid": null }
   ],
   "extras": [
     { "id": 0, "safe_address": "0x5555555555555555555555555555555555555555", "module_address": "0x6666666666666666666666666666666666666666", "keystore_path": "/tmp/c/extra_id_0.id", "password": "local-cluster" }
@@ -539,17 +840,32 @@ mod tests {
 }"#;
 
     #[test]
-    fn parses_running_snapshot() {
-        let s = parse_summary_json(RUNNING_SNAPSHOT).unwrap();
+    fn parses_running_snapshot() -> anyhow::Result<()> {
+        let s = parse_summary_json(RUNNING_SNAPSHOT)?;
         assert_eq!(s.blokli_url, "http://127.0.0.1:8545");
-        assert_eq!(s.node_addresses.len(), 3);
+        assert_eq!(s.nodes.len(), 3);
         assert_eq!(s.extras.len(), 1);
         assert_eq!(s.extras[0].password, "local-cluster");
+        Ok(())
+    }
+
+    /// The metrics scrape and the kill-a-relayer scenario both hang off these three
+    /// fields, so a status schema that stops carrying them must fail loudly here.
+    #[test]
+    fn parses_node_api_endpoint_and_pid() -> anyhow::Result<()> {
+        let s = parse_summary_json(RUNNING_SNAPSHOT)?;
+        // Trailing slash stripped so `{api_url}/metrics` never doubles it.
+        assert_eq!(s.nodes[0].api_url, "http://127.0.0.1:13000");
+        assert_eq!(s.nodes[0].api_token.as_deref(), Some("tok"));
+        assert_eq!(s.nodes[0].pid, Some(101));
+        assert_eq!(s.nodes[2].api_token, None);
+        assert_eq!(s.nodes[2].pid, None);
+        Ok(())
     }
 
     #[test]
     fn rejects_null_node_address() {
-        let json = r#"{ "state": "running", "blokli_url": "http://x", "nodes": [ { "id": 0, "address": null } ], "extras": [] }"#;
+        let json = r#"{ "state": "running", "blokli_url": "http://x", "nodes": [ { "id": 0, "address": null, "api_url": "http://x" } ], "extras": [] }"#;
         assert!(parse_summary_json(json).is_err());
     }
 }

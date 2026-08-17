@@ -19,7 +19,10 @@
 
 pub mod cluster;
 pub mod env;
+pub mod origination;
 pub mod pump;
+pub mod relayers;
+pub mod session_metrics;
 
 /// Payload size pumped through each session. Also sizes the strategy's expected
 /// packet count for channel funding (see [`env`]).
@@ -29,3 +32,7 @@ pub use env::IntegrationEnv;
 
 /// On-chain address type, re-exported so submodules share one definition.
 pub use edgli::hopr_lib::api::types::primitive::prelude::Address;
+
+/// The session type scenarios operate on, re-exported to spare callers the path through
+/// Edgli's re-export chain.
+pub use edgli::hopr_lib::exports::transport::HoprSession;
