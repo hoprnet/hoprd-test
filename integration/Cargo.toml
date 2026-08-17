@@ -9,11 +9,13 @@ publish = false
 [dependencies]
 # edgli re-exports hopr_lib, strategy, traits and BlockchainConnectorConfig, so it
 # is the single source of the hoprnet rev — no second git dep to keep in sync.
-# This `rev` is only the local-dev pin; CI ignores it — scripts/integration/run.sh
-# rewrites it to the resolved edge-client ref (EDGLI_REF, default main HEAD, or the
-# rev from a merge dispatch) and runs `cargo update -p edgli`. Keep it recent so
-# local `just` builds match what CI tests.
-edgli = { git = "https://github.com/hoprnet/edge-client", rev = "9e24e8b9177e85f1e752010c43ab792d8ed93c3f", default-features = false, features = [
+# Tracks edge-client `main`, which is what CI resolves to anyway: scripts/integration/run.sh
+# rewrites this to EDGLI_REF (default `main` HEAD, or the rev from a merge dispatch) and runs
+# `cargo update -p edgli`. A branch rather than a `rev` keeps the committed default from drifting
+# behind what CI actually tests; the lock still pins the exact commit for reproducibility.
+#
+# To test an unmerged edge-client change, override the ref rather than committing a rev here.
+edgli = { git = "https://github.com/hoprnet/edge-client", branch = "main", default-features = false, features = [
   "runtime-tokio",
   "blokli",
 ] }
@@ -21,8 +23,12 @@ edgli = { git = "https://github.com/hoprnet/edge-client", rev = "9e24e8b9177e85f
 # Pulled in only to switch on hopr-lib's `telemetry` feature, which is what compiles
 # `mod telemetry` into hopr-transport-session. Without it every per-session counter is absent
 # rather than zero, and "the session received nothing" is indistinguishable from "the metric was
-# never built". Same source and branch as the one edgli resolves, so the two unify.
-hopr-lib = { git = "https://github.com/hoprnet/hoprnet", branch = "kauki/test/transport/return-routing-origination-stall", default-features = false, features = [
+# never built". Must name the same source and branch edgli resolves — `release/4.0`, which
+# edge-client `main` pins — or the lock carries two hopr-libs and the entry runs a mixture.
+#
+# To test an unmerged hoprnet change, override this alongside `edgli` rather than committing a
+# feature branch here.
+hopr-lib = { git = "https://github.com/hoprnet/hoprnet", branch = "release/4.0", default-features = false, features = [
   "telemetry",
 ] }
 
