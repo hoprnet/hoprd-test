@@ -117,10 +117,20 @@ const MIN_CANARY_ARRIVAL_PCT: f64 = 50.0;
 async fn exit_should_keep_originating_when_a_return_path_becomes_unresolvable() -> anyhow::Result<()> {
     let size = request_cluster_size(NODES);
     anyhow::ensure!(size >= 2, "need at least an exit and one peer, got {size}");
-    request_node_env([(
-        "HOPR_INTERNAL_SURB_PSEUDONYM_LIFETIME_MS",
-        SURB_PSEUDONYM_LIFETIME.as_millis().to_string(),
-    )]);
+    request_node_env([
+        (
+            "HOPR_INTERNAL_SURB_PSEUDONYM_LIFETIME_MS".to_string(),
+            SURB_PSEUDONYM_LIFETIME.as_millis().to_string(),
+        ),
+        // The Session-layer lines that say whether the exit's keep-alive was ever spawned and
+        // whether its SURBs expired are `debug`. Without them a run that does not reproduce cannot
+        // be told apart from one where the emitter never existed — which is exactly how the first
+        // attempt was read.
+        (
+            "RUST_LOG".to_string(),
+            "info,hopr_transport_session=debug,hopr_protocol_hopr=debug".to_string(),
+        ),
+    ]);
 
     let env = IntegrationEnv::setup().await?;
 
@@ -153,7 +163,12 @@ async fn exit_should_keep_originating_when_a_return_path_becomes_unresolvable() 
 
     // A second session to the same exit, pumped once so the exit holds SURBs for its pseudonym and
     // has a live Session slot with a keep-alive stream attached to it.
-    let (victim, victim_exit) = env.open_unreliable_session_paths(0, 0).await?;
+    //
+    // Opened without an entry-side SURB balancer, because with one the abandonment does not
+    // actually abandon anything: the balancer's keep-alives go on delivering SURBs to the exit
+    // after the application has stopped, so the exit's pool never expires. Measured — a session
+    // abandoned for 105 s with the balancer on kept originating throughout.
+    let (victim, victim_exit) = env.open_unreliable_session_unbalanced(0, 0).await?;
     anyhow::ensure!(
         victim_exit == exit_addr,
         "victim and canary must share an exit for the victim's fault to be able to affect the \

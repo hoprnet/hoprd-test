@@ -220,6 +220,32 @@ impl IntegrationEnv {
         forward_hops: usize,
         return_hops: usize,
     ) -> anyhow::Result<(HoprSession, Address)> {
+        self.open_unreliable_session_paths_with(forward_hops, return_hops, true)
+            .await
+    }
+
+    /// As [`Self::open_unreliable_session_paths`], but with no entry-side SURB balancer.
+    ///
+    /// Without it the entry delivers SURBs only organically, alongside data it is actually sending,
+    /// so a session that goes quiet stops replenishing its exit. That is what makes an *abandoned*
+    /// session model an initiator that has gone away: with the balancer on, its keep-alives go on
+    /// feeding the exit SURBs long after the application has stopped, and the exit never starves —
+    /// measured, on a session abandoned for 105 s that never missed a beat.
+    pub async fn open_unreliable_session_unbalanced(
+        &self,
+        forward_hops: usize,
+        return_hops: usize,
+    ) -> anyhow::Result<(HoprSession, Address)> {
+        self.open_unreliable_session_paths_with(forward_hops, return_hops, false)
+            .await
+    }
+
+    async fn open_unreliable_session_paths_with(
+        &self,
+        forward_hops: usize,
+        return_hops: usize,
+        balance_surbs: bool,
+    ) -> anyhow::Result<(HoprSession, Address)> {
         let dest = self.dest_for(forward_hops)?;
         let (session, _) = self
             .edgli
@@ -235,7 +261,7 @@ impl IntegrationEnv {
                     // return path under sustained downlink; provision it like production.
                     capabilities: SessionCapability::Segmentation | SessionCapability::NoDelay,
                     always_max_out_surbs: true,
-                    surb_management: Some(SurbBalancerConfig {
+                    surb_management: balance_surbs.then_some(SurbBalancerConfig {
                         // gnosis main: 10 MB response buffer, 16 Mb/s SURB upstream.
                         target_surb_buffer_size: 10_000_000 / SESSION_MTU as u64,
                         max_surbs_per_sec: 16_000_000 / (8 * SURB_SIZE as u64),
