@@ -65,7 +65,9 @@ impl OriginationVerdict {
     /// This is the control for [`Self::originated`]: without it, a frozen `sent` is
     /// indistinguishable from a node with nothing to do.
     pub fn processed_inbound(&self) -> bool {
-        self.advanced(|s| s.forwarded) || self.advanced(|s| s.received) || self.advanced(|s| s.acks_sent)
+        self.advanced(|s| s.forwarded)
+            || self.advanced(|s| s.received)
+            || self.advanced(|s| s.acks_sent)
     }
 
     fn advanced(&self, field: impl Fn(&OriginationSample) -> u64) -> bool {
@@ -122,8 +124,15 @@ pub async fn sample(node: &NodeInfo) -> anyhow::Result<OriginationSample> {
 /// A single pair of samples cannot distinguish a stalled node from one that happened to be quiet
 /// between two instants, so scenarios take several spanning a window long enough to cover the
 /// node's own periodic traffic.
-pub async fn watch(node: &NodeInfo, count: usize, interval: Duration) -> anyhow::Result<OriginationVerdict> {
-    anyhow::ensure!(count >= 2, "a verdict needs at least two samples, got {count}");
+pub async fn watch(
+    node: &NodeInfo,
+    count: usize,
+    interval: Duration,
+) -> anyhow::Result<OriginationVerdict> {
+    anyhow::ensure!(
+        count >= 2,
+        "a verdict needs at least two samples, got {count}"
+    );
 
     let mut samples = Vec::with_capacity(count);
     for i in 0..count {
@@ -238,20 +247,33 @@ hopr_packet_rejected_count{reason="timeout"} 3
 
     #[test]
     fn parser_should_return_zero_when_the_series_is_absent() {
-        assert_eq!(0, packets_of_type("hopr_packets_count{type=\"sent\"} 5", "forwarded"));
+        assert_eq!(
+            0,
+            packets_of_type("hopr_packets_count{type=\"sent\"} 5", "forwarded")
+        );
     }
 
     #[test]
     fn parser_should_accept_float_rendered_counters() {
-        assert_eq!(42, packets_of_type("hopr_packets_count{type=\"sent\"} 42.0", "sent"));
+        assert_eq!(
+            42,
+            packets_of_type("hopr_packets_count{type=\"sent\"} 42.0", "sent")
+        );
     }
 
     /// The wedge: origination frozen while the ingress side keeps moving.
     #[test]
     fn a_frozen_sent_counter_beside_a_moving_forwarded_one_should_read_as_stalled() {
-        let v = verdict(&[(460_497, 2_314_830), (460_497, 2_315_400), (460_497, 2_315_762)]);
+        let v = verdict(&[
+            (460_497, 2_314_830),
+            (460_497, 2_315_400),
+            (460_497, 2_315_762),
+        ]);
         assert!(!v.originated(), "sent never advanced");
-        assert!(v.processed_inbound(), "forwarded advanced, so the node was demonstrably busy");
+        assert!(
+            v.processed_inbound(),
+            "forwarded advanced, so the node was demonstrably busy"
+        );
     }
 
     /// A quiet node is not a stalled one, and the pair is what tells them apart.

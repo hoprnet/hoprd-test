@@ -98,7 +98,11 @@ where
     K: Into<String>,
     V: Into<String>,
 {
-    REQUESTED_NODE_ENV.get_or_init(|| vars.into_iter().map(|(k, v)| (k.into(), v.into())).collect())
+    REQUESTED_NODE_ENV.get_or_init(|| {
+        vars.into_iter()
+            .map(|(k, v)| (k.into(), v.into()))
+            .collect()
+    })
 }
 
 pub const API_PORT_BASE: u16 = 13000;
@@ -215,7 +219,8 @@ impl ClusterSummary {
         let path = self
             .node_log(node)
             .ok_or_else(|| anyhow::anyhow!("no log file known for node {node}"))?;
-        let log = std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
+        let log = std::fs::read_to_string(&path)
+            .with_context(|| format!("reading {}", path.display()))?;
         Ok(log.contains(needle))
     }
 }
@@ -503,8 +508,16 @@ async fn spawn_managed() -> anyhow::Result<ClusterHandle> {
         cmd.args(["--container-runtime", &runtime]);
     }
     cmd.env("HOPRD_USE_OPENTELEMETRY", "false");
-    for (key, value) in REQUESTED_NODE_ENV.get().map(Vec::as_slice).unwrap_or_default() {
-        tracing::info!(key, value, "cluster nodes will run with a requested env override");
+    for (key, value) in REQUESTED_NODE_ENV
+        .get()
+        .map(Vec::as_slice)
+        .unwrap_or_default()
+    {
+        tracing::info!(
+            key,
+            value,
+            "cluster nodes will run with a requested env override"
+        );
         cmd.env(key, value);
     }
     cmd.stdout(std::process::Stdio::piped())
