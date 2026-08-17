@@ -25,7 +25,6 @@ use anyhow::Context as _;
 use crate::{Address, cluster::NodeInfo};
 
 /// The metric and label the histogram is read from.
-const FORWARDED_METRIC: &str = "hopr_packets_count";
 const FORWARDED_TYPE: &str = "forwarded";
 
 const SCRAPE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -187,22 +186,14 @@ async fn scrape_forwarded(client: &reqwest::Client, node: &NodeInfo) -> anyhow::
     Ok(parse_forwarded(&response.text().await?))
 }
 
-/// Sum the `type="forwarded"` series of [`FORWARDED_METRIC`] out of a Prometheus text
+/// Sum the `type="forwarded"` series of `hopr_packets_count` out of a Prometheus text
 /// exposition. Returns 0 when the series is absent — a node that has forwarded nothing
 /// yet may not have created the counter.
+///
+/// Shares [`crate::origination`]'s parser rather than keeping a second copy: that one additionally
+/// guards against a longer metric name with the same prefix being summed in.
 fn parse_forwarded(body: &str) -> u64 {
-    body.lines()
-        .filter(|line| !line.starts_with('#'))
-        .filter(|line| line.starts_with(FORWARDED_METRIC))
-        .filter(|line| {
-            // Match the label value, not a substring of some other label.
-            line.contains(&format!("\"{FORWARDED_TYPE}\""))
-        })
-        .filter_map(|line| line.rsplit_once(' '))
-        // Counters render as floats in the Prometheus text format ("42" or "42.0").
-        .filter_map(|(_, value)| value.trim().parse::<f64>().ok())
-        .map(|value| value as u64)
-        .sum()
+    crate::origination::packets_of_type(body, FORWARDED_TYPE)
 }
 
 #[cfg(test)]

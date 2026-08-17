@@ -72,6 +72,17 @@ const NODES: usize = 3;
 /// config file could ask for.
 const SURB_PSEUDONYM_LIFETIME: Duration = Duration::from_secs(30);
 
+const SURB_LIFETIME_ENV: &str = "HOPR_INTERNAL_SURB_PSEUDONYM_LIFETIME_MS";
+
+/// What the exit logs when a return route had no SURB for the whole resolution wait.
+///
+/// Its presence is the proof that the fault this scenario builds actually reached the code under
+/// test. Without it, a green run is equally consistent with a fault that never armed.
+///
+/// Matches `hopr_transport::path::resolve`; a substring rather than the whole line, so field order
+/// and formatting can change without silently disarming the check.
+const STARVATION_EVIDENCE: &str = "no SURB for its return path within the wait";
+
 /// How long to wait for the exit to notice the SURBs are gone and emit a keep-alive into the void.
 ///
 /// The exit notifies its SURB level on `surb_balance_notify_period`, 60 s by default, so the first
@@ -247,6 +258,20 @@ async fn exit_should_keep_originating_when_a_return_path_becomes_unresolvable() 
         "the exit was still originating, but the canary session stopped delivering: {:.1}% before \
          the fault, {recovery_arrival:.1}% after — {}",
         baseline.arrival_pct(),
+        verdict.summary(),
+    );
+
+    // Everything above passes just as well on a run where the fault was never armed: if the
+    // pseudonym-lifetime override did not reach the nodes, the victim's SURBs never expire, no
+    // return route ever goes unresolvable, and a node that was never under test reports healthy.
+    // That is the failure mode the RUNBOOK exists to prevent, so require positive evidence that
+    // the exit actually hit — and survived — a starved return route.
+    anyhow::ensure!(
+        env.cluster()?.node_log_contains(exit_addr, STARVATION_EVIDENCE)?,
+        "the exit never reported a starved return route, so the fault was not armed and this run \
+         says nothing about the stall. Check that {SURB_LIFETIME_ENV} reached the hoprd processes \
+         (expected {:?}) — {}",
+        SURB_PSEUDONYM_LIFETIME,
         verdict.summary(),
     );
 

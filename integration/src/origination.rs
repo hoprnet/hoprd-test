@@ -145,7 +145,7 @@ pub async fn watch(node: &NodeInfo, count: usize, interval: Duration) -> anyhow:
 ///
 /// Returns 0 when the series is absent: a node that has not yet done a thing may not have created
 /// the counter at all.
-fn packets_of_type(body: &str, packet_type: &str) -> u64 {
+pub(crate) fn packets_of_type(body: &str, packet_type: &str) -> u64 {
     let label = format!("\"{packet_type}\"");
     series(body, PACKETS_METRIC, |line| line.contains(&label))
 }
@@ -222,11 +222,18 @@ hopr_packet_rejected_count{reason="timeout"} 3
         );
     }
 
-    /// `hopr_packets_count_total` starts with the metric name and would otherwise be summed into
-    /// every type, making a frozen counter look like it was still moving.
+    /// A longer metric name starting with this one must not be summed into it, or a frozen counter
+    /// reads as still moving and the scenario reports a stalled node as healthy.
+    ///
+    /// The series has to carry a *matching* label, otherwise the label filter excludes it on its own
+    /// and the name-boundary guard this is here to protect goes untested — an earlier version of
+    /// this test used `hopr_packets_count_total 99999`, which passes with the guard deleted.
     #[test]
     fn parser_should_not_match_a_longer_metric_with_the_same_prefix() {
-        assert_eq!(0, packets_of_type("hopr_packets_count_total 99999", "sent"));
+        assert_eq!(
+            0,
+            packets_of_type("hopr_packets_count_v2{type=\"sent\"} 99999", "sent")
+        );
     }
 
     #[test]

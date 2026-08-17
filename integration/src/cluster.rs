@@ -193,6 +193,31 @@ pub struct ClusterSummary {
     pub blokli_url: String,
     pub nodes: Vec<NodeInfo>,
     pub extras: Vec<ExtraInfo>,
+    /// Directory holding each node's `hoprd_<i>.log`, when the cluster's data dir is known.
+    pub log_dir: Option<PathBuf>,
+}
+
+impl ClusterSummary {
+    /// Path to `node`'s log file, or `None` when the log directory is not known.
+    ///
+    /// Node logs are named by position in the cluster, so this maps the address back to its index.
+    pub fn node_log(&self, node: Address) -> Option<PathBuf> {
+        let index = self.nodes.iter().position(|n| n.address == node)?;
+        Some(self.log_dir.as_ref()?.join(format!("hoprd_{index}.log")))
+    }
+
+    /// Whether `node`'s log contains `needle`.
+    ///
+    /// Reading a node's own log is the only way to check something the REST API does not expose —
+    /// notably whether a behaviour the scenario *configured* actually took effect, rather than
+    /// trusting that an environment override reached the process.
+    pub fn node_log_contains(&self, node: Address, needle: &str) -> anyhow::Result<bool> {
+        let path = self
+            .node_log(node)
+            .ok_or_else(|| anyhow::anyhow!("no log file known for node {node}"))?;
+        let log = std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
+        Ok(log.contains(needle))
+    }
 }
 
 // ── `hoprd-localcluster status` wire types ────────────────────────────────────
@@ -290,6 +315,7 @@ fn wire_into_summary(wire: ClusterSummaryWire) -> anyhow::Result<ClusterSummary>
         blokli_url,
         nodes,
         extras,
+        log_dir: None,
     })
 }
 
@@ -383,7 +409,8 @@ async fn attach_external(data_dir: &str) -> anyhow::Result<ClusterHandle> {
         "cluster at {data_dir} is '{:?}', not 'running'",
         wire.state
     );
-    let summary = wire_into_summary(wire)?;
+    let mut summary = wire_into_summary(wire)?;
+    summary.log_dir = Some(std::path::Path::new(data_dir).join("logs"));
     tracing::info!(blokli_url = %summary.blokli_url, "attached to external cluster");
     Ok(ClusterHandle {
         child: None,
@@ -501,7 +528,10 @@ async fn spawn_managed() -> anyhow::Result<ClusterHandle> {
     )
     .await
     {
-        Ok(s) => s,
+        Ok(mut s) => {
+            s.log_dir = Some(data_dir.join("logs"));
+            s
+        }
         Err(err) => {
             #[cfg(unix)]
             if let Some(pid) = child.id() {
