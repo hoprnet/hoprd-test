@@ -190,6 +190,43 @@ impl NodeInfo {
         tracing::info!(node = %self.address, pid, "killed relay node");
         Ok(())
     }
+
+    /// SIGSTOP this node's `hoprd` process, freezing it so it forwards nothing while its
+    /// sockets stay open — a transient outage the node later comes back from, unlike
+    /// [`kill`](Self::kill). Used to reproduce a *common-mode* return-path fault (all return
+    /// relayers frozen at once, as when a client's own uplink degrades) that then recovers.
+    ///
+    /// SIGSTOP rather than a clean pause: a frozen process neither announces nor tears anything
+    /// down, which is what a partitioned relay looks like from the rest of the network.
+    #[cfg(unix)]
+    pub fn pause(&self) -> anyhow::Result<()> {
+        let pid = self
+            .pid
+            .ok_or_else(|| anyhow::anyhow!("node {} has no pid in cluster status", self.address))?;
+        nix::sys::signal::kill(
+            nix::unistd::Pid::from_raw(pid as i32),
+            nix::sys::signal::Signal::SIGSTOP,
+        )
+        .with_context(|| format!("SIGSTOP node {} (pid {pid})", self.address))?;
+        tracing::info!(node = %self.address, pid, "paused relay node");
+        Ok(())
+    }
+
+    /// SIGCONT this node's `hoprd` process, resuming a relay previously frozen with
+    /// [`pause`](Self::pause) so the return path it carries can recover.
+    #[cfg(unix)]
+    pub fn resume(&self) -> anyhow::Result<()> {
+        let pid = self
+            .pid
+            .ok_or_else(|| anyhow::anyhow!("node {} has no pid in cluster status", self.address))?;
+        nix::sys::signal::kill(
+            nix::unistd::Pid::from_raw(pid as i32),
+            nix::sys::signal::Signal::SIGCONT,
+        )
+        .with_context(|| format!("SIGCONT node {} (pid {pid})", self.address))?;
+        tracing::info!(node = %self.address, pid, "resumed relay node");
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone)]

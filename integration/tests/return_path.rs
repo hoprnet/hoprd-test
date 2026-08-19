@@ -688,6 +688,180 @@ async fn session_should_survive_forward_relayer_loss() -> anyhow::Result<()> {
     session_should_survive_relayer_loss(FORWARD_PATH).await
 }
 
+/// Phase tag for the payload offered *while the outage is in effect*.
+///
+/// A third tag, distinct from [`SURVIVAL_PHASE`], so the bytes offered into the frozen return path
+/// cannot be counted as recovery-phase arrival — the same phase-separation the warm-up drain gives
+/// the other scenarios, applied to the outage/recovery boundary here.
+const OUTAGE_PHASE: u8 = 3;
+
+/// How long every return relayer stays frozen before being thawed.
+///
+/// Long enough to outlast detection (~9 s, per [`KILL_SETTLE`]) and a re-plan attempt, so the
+/// session is demonstrably *in* the outage — not merely mid-detection — when recovery is triggered.
+/// A re-plan cannot help here (every candidate is down at once), so this only has to be long enough
+/// that the degradation is unambiguous.
+const OUTAGE_DURATION: Duration = Duration::from_secs(20);
+
+/// The 2026-07-28 incident: a *common-mode* return-path outage.
+///
+/// Every return relayer freezes at once (SIGSTOP) — the shape of a client whose own uplink degrades,
+/// where all exits lose their return path together while SURB supply stays healthy — and then thaws
+/// (SIGCONT). The established session must **degrade gracefully** through the outage (stay alive, no
+/// per-packet ERROR storm, no flap-thrash) and **recover** once the return path is restored.
+///
+/// This is deliberately *not* [`session_should_survive_return_relayer_loss`]. That kills one relayer
+/// permanently and the session re-plans around it; here there is nothing to re-plan to — every
+/// candidate is down simultaneously — so the only recovery is the outage lifting. Killing all
+/// relayers would be a permanent outage with no recovery to measure, which is why this freezes and
+/// thaws them instead.
+///
+/// Thresholds are **predicted, not yet measured** (as with the sibling scenarios): SIGSTOP/SIGCONT
+/// leaves TCP sessions open but unserviced, so recovery may need a reconnect on thaw and could run
+/// closer to [`RECOVERY_DEADLINE`] than the single-relayer case. Re-derive from a measured run
+/// before trusting a pass.
+///
+/// # ERROR-storm check (manual, per the run checklist)
+///
+/// The "no per-packet ERROR storm" half of the incident is asserted by the `hopr-transport-session`
+/// unit tests (`dispatching_to_a_session_whose_sink_closed_should_be_a_quiet_counted_drop` et al.).
+/// End-to-end here it requires the entry **and** the nodes to run the dispatch-drop fix; with the
+/// entry pinned to that build, `sending on a disconnected channel` / `received data for an
+/// unregistered session` must not recur once per packet during the outage. Grep the kept artifacts:
+/// `sed -E 's/\x1b\[[0-9;]*m//g' <run.log> | grep -cE 'disconnected channel|unregistered session'`.
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+#[ignore = "requires hoprd/hoprd-localcluster binaries + a chain"]
+async fn session_should_survive_common_mode_return_outage() -> anyhow::Result<()> {
+    // 0-hop out / 1-hop back: every reply traverses a cluster relayer, so freezing the relayer set
+    // takes the whole return path down while requests still reach the exit directly.
+    let (_env, session, candidates) = setup_env_with_hops(0, 1).await?;
+    let (mut rx, mut tx) = tokio::io::split(session);
+
+    // Phase 1 — warm up: baseline rate, and confirm replies actually traverse the relayers we are
+    // about to freeze (otherwise the outage would be a no-op and the test would measure nothing).
+    let warmup = tagged_payload(WARMUP_PHASE, WARMUP_BYTES);
+    let (before, spread) = pump_and_measure(
+        &mut rx,
+        &mut tx,
+        &candidates,
+        &warmup,
+        "common-mode-before",
+        PumpOpts {
+            phase: Some(WARMUP_PHASE),
+            ..PumpOpts::default()
+        },
+    )
+    .await?;
+    anyhow::ensure!(
+        before.arrival_pct() > 50.0,
+        "baseline pump only returned {:.1}% — the path was already broken before the outage",
+        before.arrival_pct(),
+    );
+    anyhow::ensure!(
+        spread.total > 0,
+        "no replies traversed the cluster relayers — the return path was not 1-hop, so freezing \
+         the relayer set would take nothing down and the test would measure nothing",
+    );
+
+    // Phase 2 — quiesce: warm-up traffic must land before the outage, or it is counted against a
+    // later phase and a backlog draining reads as the session working through the outage.
+    let leftover = drain_until_quiet(&mut rx, DRAIN_QUIET, "warm-up").await;
+    anyhow::ensure!(
+        leftover <= MAX_LEFTOVER_BYTES,
+        "{leftover} B of warm-up traffic still arriving after drain (limit {MAX_LEFTOVER_BYTES} B); \
+         the phases cannot be told apart",
+    );
+
+    // Phase 3 — freeze EVERY return relayer at once: the common-mode outage.
+    tracing::info!(
+        frozen = candidates.len(),
+        max_share_pct = spread.max_share() * 100.0,
+        "freezing all return relayers — common-mode outage begins",
+    );
+    for node in &candidates {
+        node.pause()?;
+    }
+
+    // Phase 4 — offer load into the outage. The return path is fully down, so an unreliable session
+    // legitimately delivers little; the point is that it degrades *cleanly* — the pump completes
+    // rather than the session panicking, thrashing, or wedging the writer permanently.
+    let offered_mbps = before.mbps * SURVIVAL_LOAD_FRACTION;
+    let outage_bytes = (offered_mbps * 1_000_000.0 * OUTAGE_DURATION.as_secs_f64()) as usize;
+    let counters_before = session_metrics::sample();
+    let outage_payload = tagged_payload(OUTAGE_PHASE, outage_bytes);
+    // Pump directly, without `pump_and_measure`: the relayer histogram is sampled over each node's
+    // REST API, and those nodes are SIGSTOPped right now, so sampling them would hang. The entry's
+    // own in-process counters (`session_metrics`, below) are the readable signal during the outage.
+    let during = pump_halves(
+        &mut rx,
+        &mut tx,
+        &outage_payload,
+        "common-mode-during-outage",
+        PUMP_TIMEOUT,
+        PumpOpts {
+            pace: pace_for_rate(offered_mbps),
+            phase: Some(OUTAGE_PHASE),
+            idle_budget: Some(SURVIVAL_IDLE_BUDGET),
+            tail_grace: Some(SURVIVAL_TAIL_GRACE),
+        },
+    )
+    .await?;
+    tracing::info!(
+        arrival_pct = during.arrival_pct(),
+        "offered load through the outage (low arrival expected; the assertion is clean degradation)",
+    );
+    // Clean degradation, not collapse: the session must not have died on the exit side while the
+    // relayers were merely frozen. `exit_stopped_serving` here would mean the outage tore the
+    // session down rather than degrading it, which is the flap-thrash the fix is meant to prevent.
+    anyhow::ensure!(
+        !during.outcome.exit_stopped_serving(),
+        "the session was torn down during the outage ({:?}) instead of degrading — this is the \
+         ungraceful collapse the fix must prevent",
+        during.outcome,
+    );
+    let during_counters = counters_before.delta(&session_metrics::sample());
+    tracing::info!(
+        "during-outage session families that moved: {}",
+        during_counters.nonzero()
+    );
+
+    // Phase 5 — thaw every relayer: the outage lifts and the return path is restored.
+    for node in &candidates {
+        node.resume()?;
+    }
+    let settle = kill_settle();
+    tracing::info!(
+        ?settle,
+        frozen = candidates.len(),
+        "thawed all return relayers — letting recovery settle"
+    );
+    drain_until_quiet(&mut rx, DRAIN_QUIET, "outage").await;
+    tokio::time::sleep(settle).await;
+
+    // Phase 6 — recovery: with the path restored, a fresh survival load must come back to a usable
+    // rate within the deadline. Reuses the shared recovery assertion so this scenario is held to the
+    // same bar as the single-relayer one.
+    let survival_bytes =
+        (offered_mbps * 1_000_000.0 * SURVIVAL_LOAD_DURATION.as_secs_f64()) as usize;
+    let recovery_payload = tagged_payload(SURVIVAL_PHASE, survival_bytes);
+    let (after, spread_after) = pump_and_measure(
+        &mut rx,
+        &mut tx,
+        &candidates,
+        &recovery_payload,
+        "common-mode-after-recovery",
+        PumpOpts {
+            pace: pace_for_rate(offered_mbps),
+            phase: Some(SURVIVAL_PHASE),
+            idle_budget: Some(SURVIVAL_IDLE_BUDGET),
+            tail_grace: Some(SURVIVAL_TAIL_GRACE),
+        },
+    )
+    .await?;
+
+    assert_recovered(&before, &after, &spread, &spread_after, settle)
+}
+
 /// Report every measurement, then assert on them in combination.
 ///
 /// Each statistic alone has a way of being satisfied by a stream that is dead. `time_to_sustain`
