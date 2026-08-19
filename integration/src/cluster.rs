@@ -171,6 +171,19 @@ pub struct NodeInfo {
 }
 
 impl NodeInfo {
+    /// Sends `signal` to this node's `hoprd` process. Shared by [`kill`](Self::kill),
+    /// [`pause`](Self::pause) and [`resume`](Self::resume); `verb` names the action in the log line.
+    #[cfg(unix)]
+    fn signal(&self, signal: nix::sys::signal::Signal, verb: &str) -> anyhow::Result<()> {
+        let pid = self
+            .pid
+            .ok_or_else(|| anyhow::anyhow!("node {} has no pid in cluster status", self.address))?;
+        nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid as i32), signal)
+            .with_context(|| format!("{signal:?} node {} (pid {pid})", self.address))?;
+        tracing::info!(node = %self.address, pid, "{verb} relay node");
+        Ok(())
+    }
+
     /// SIGKILL this node's `hoprd` process, simulating a relay that drops off the
     /// network without closing anything down — the failure mode behind the
     /// 2026-08-11 return-path break.
@@ -179,16 +192,7 @@ impl NodeInfo {
     /// announce its departure, which is not what a crashed or partitioned relay does.
     #[cfg(unix)]
     pub fn kill(&self) -> anyhow::Result<()> {
-        let pid = self
-            .pid
-            .ok_or_else(|| anyhow::anyhow!("node {} has no pid in cluster status", self.address))?;
-        nix::sys::signal::kill(
-            nix::unistd::Pid::from_raw(pid as i32),
-            nix::sys::signal::Signal::SIGKILL,
-        )
-        .with_context(|| format!("SIGKILL node {} (pid {pid})", self.address))?;
-        tracing::info!(node = %self.address, pid, "killed relay node");
-        Ok(())
+        self.signal(nix::sys::signal::Signal::SIGKILL, "killed")
     }
 
     /// SIGSTOP this node's `hoprd` process, freezing it so it forwards nothing while its
@@ -200,32 +204,14 @@ impl NodeInfo {
     /// down, which is what a partitioned relay looks like from the rest of the network.
     #[cfg(unix)]
     pub fn pause(&self) -> anyhow::Result<()> {
-        let pid = self
-            .pid
-            .ok_or_else(|| anyhow::anyhow!("node {} has no pid in cluster status", self.address))?;
-        nix::sys::signal::kill(
-            nix::unistd::Pid::from_raw(pid as i32),
-            nix::sys::signal::Signal::SIGSTOP,
-        )
-        .with_context(|| format!("SIGSTOP node {} (pid {pid})", self.address))?;
-        tracing::info!(node = %self.address, pid, "paused relay node");
-        Ok(())
+        self.signal(nix::sys::signal::Signal::SIGSTOP, "paused")
     }
 
     /// SIGCONT this node's `hoprd` process, resuming a relay previously frozen with
     /// [`pause`](Self::pause) so the return path it carries can recover.
     #[cfg(unix)]
     pub fn resume(&self) -> anyhow::Result<()> {
-        let pid = self
-            .pid
-            .ok_or_else(|| anyhow::anyhow!("node {} has no pid in cluster status", self.address))?;
-        nix::sys::signal::kill(
-            nix::unistd::Pid::from_raw(pid as i32),
-            nix::sys::signal::Signal::SIGCONT,
-        )
-        .with_context(|| format!("SIGCONT node {} (pid {pid})", self.address))?;
-        tracing::info!(node = %self.address, pid, "resumed relay node");
-        Ok(())
+        self.signal(nix::sys::signal::Signal::SIGCONT, "resumed")
     }
 }
 

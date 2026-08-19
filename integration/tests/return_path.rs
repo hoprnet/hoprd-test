@@ -97,7 +97,10 @@ use std::time::Duration;
 use hoprd_integration_test::{
     HoprSession, IntegrationEnv,
     cluster::{NodeInfo, request_cluster_size, request_latency_profile},
-    pump::{PumpOpts, Transfer, drain_until_quiet, pace_for_rate, pump_halves, tagged_payload},
+    pump::{
+        PumpOpts, PumpOutcome, Transfer, drain_until_quiet, pace_for_rate, pump_halves,
+        tagged_payload,
+    },
     relayers::{self, RelayerSpread},
     session_metrics,
 };
@@ -703,6 +706,22 @@ const OUTAGE_PHASE: u8 = 3;
 /// that the degradation is unambiguous.
 const OUTAGE_DURATION: Duration = Duration::from_secs(20);
 
+/// Resumes every paused relayer when it drops, so an early return between the freeze and the
+/// explicit thaw — a pump error or a failed outage assertion — cannot leave `SIGSTOP`ped `hoprd`
+/// processes behind. A stopped process ignores `SIGTERM` until it is continued, so orphans would
+/// hold their ports and block the next run's cluster.
+struct Thawed<'a>(&'a [NodeInfo]);
+
+impl Drop for Thawed<'_> {
+    fn drop(&mut self) {
+        for node in self.0 {
+            if let Err(e) = node.resume() {
+                tracing::warn!(%e, "failed to resume relayer during cleanup");
+            }
+        }
+    }
+}
+
 /// The 2026-07-28 incident: a *common-mode* return-path outage.
 ///
 /// Every return relayer freezes at once (SIGSTOP) — the shape of a client whose own uplink degrades,
@@ -781,6 +800,9 @@ async fn session_should_survive_common_mode_return_outage() -> anyhow::Result<()
     for node in &candidates {
         node.pause()?;
     }
+    // Guarantee every frozen relayer is resumed even if the outage phase returns early: a stopped
+    // process would otherwise ignore cluster teardown's SIGTERM and orphan itself on its ports.
+    let thawed = Thawed(&candidates);
 
     // Phase 4 — offer load into the outage. The return path is fully down, so an unreliable session
     // legitimately delivers little; the point is that it degrades *cleanly* — the pump completes
@@ -792,6 +814,11 @@ async fn session_should_survive_common_mode_return_outage() -> anyhow::Result<()
     // Pump directly, without `pump_and_measure`: the relayer histogram is sampled over each node's
     // REST API, and those nodes are SIGSTOPped right now, so sampling them would hang. The entry's
     // own in-process counters (`session_metrics`, below) are the readable signal during the outage.
+    //
+    // `idle_budget = OUTAGE_DURATION` is what actually bounds the freeze: with the return path down
+    // nothing comes back, so the pump is idle from the first byte and stops one budget later. That
+    // keeps the real outage ~`OUTAGE_DURATION` instead of running to the default idle budget or the
+    // pump timeout, so recovery figures stay comparable with the relayer-loss scenario.
     let during = pump_halves(
         &mut rx,
         &mut tx,
@@ -801,20 +828,22 @@ async fn session_should_survive_common_mode_return_outage() -> anyhow::Result<()
         PumpOpts {
             pace: pace_for_rate(offered_mbps),
             phase: Some(OUTAGE_PHASE),
-            idle_budget: Some(SURVIVAL_IDLE_BUDGET),
-            tail_grace: Some(SURVIVAL_TAIL_GRACE),
+            idle_budget: Some(OUTAGE_DURATION),
+            tail_grace: Some(OUTAGE_DURATION),
         },
     )
     .await?;
     tracing::info!(
         arrival_pct = during.arrival_pct(),
+        outcome = ?during.outcome,
         "offered load through the outage (low arrival expected; the assertion is clean degradation)",
     );
-    // Clean degradation, not collapse: the session must not have died on the exit side while the
-    // relayers were merely frozen. `exit_stopped_serving` here would mean the outage tore the
-    // session down rather than degrading it, which is the flap-thrash the fix is meant to prevent.
+    // Clean degradation, not collapse: the session must not have been *torn down* while the relayers
+    // were merely frozen. Only `SessionClosed` means that — `NeverStarted` is the expected outcome of
+    // a full outage (zero bytes attributed), so `exit_stopped_serving()` cannot be used here; it
+    // conflates the two and would fail a healthy degrade.
     anyhow::ensure!(
-        !during.outcome.exit_stopped_serving(),
+        during.outcome != PumpOutcome::SessionClosed,
         "the session was torn down during the outage ({:?}) instead of degrading — this is the \
          ungraceful collapse the fix must prevent",
         during.outcome,
@@ -825,10 +854,9 @@ async fn session_should_survive_common_mode_return_outage() -> anyhow::Result<()
         during_counters.nonzero()
     );
 
-    // Phase 5 — thaw every relayer: the outage lifts and the return path is restored.
-    for node in &candidates {
-        node.resume()?;
-    }
+    // Phase 5 — thaw every relayer: the outage lifts and the return path is restored. Dropping the
+    // guard resumes them exactly once here on the normal path (and is the safety net on early exit).
+    drop(thawed);
     let settle = kill_settle();
     tracing::info!(
         ?settle,
