@@ -178,6 +178,15 @@ impl NodeInfo {
         let pid = self
             .pid
             .ok_or_else(|| anyhow::anyhow!("node {} has no pid in cluster status", self.address))?;
+        // Guard against `kill`'s process-group semantics: `Pid::from_raw(0)` targets the caller's
+        // whole process group, and a pid above `i32::MAX` wraps to a negative raw pid that does the
+        // same. A cluster node's pid is neither, so treat either as a bad status rather than signal
+        // the test runner's own group.
+        anyhow::ensure!(
+            pid != 0 && pid <= i32::MAX as u32,
+            "node {} has an out-of-range pid {pid} in cluster status; refusing to signal",
+            self.address
+        );
         nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid as i32), signal)
             .with_context(|| format!("{signal:?} node {} (pid {pid})", self.address))?;
         tracing::info!(node = %self.address, pid, "{verb} relay node");
