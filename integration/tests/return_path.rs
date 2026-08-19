@@ -797,12 +797,14 @@ async fn session_should_survive_common_mode_return_outage() -> anyhow::Result<()
         max_share_pct = spread.max_share() * 100.0,
         "freezing all return relayers — common-mode outage begins",
     );
+    // Bind the cleanup guard BEFORE pausing anything, so a failure partway through the pause loop
+    // still resumes whatever was already frozen. Its Drop also covers an early return from the
+    // outage phase — a stopped process would otherwise ignore cluster teardown's SIGTERM and orphan
+    // itself on its ports.
+    let thawed = Thawed(&candidates);
     for node in &candidates {
         node.pause()?;
     }
-    // Guarantee every frozen relayer is resumed even if the outage phase returns early: a stopped
-    // process would otherwise ignore cluster teardown's SIGTERM and orphan itself on its ports.
-    let thawed = Thawed(&candidates);
 
     // Phase 4 — offer load into the outage. The return path is fully down, so an unreliable session
     // legitimately delivers little; the point is that it degrades *cleanly* — the pump completes
