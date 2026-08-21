@@ -15,7 +15,11 @@ publish = false
 # behind what CI actually tests; the lock still pins the exact commit for reproducibility.
 #
 # To test an unmerged edge-client change, override the ref rather than committing a rev here.
-edgli = { git = "https://github.com/hoprnet/edge-client", branch = "main", default-features = false, features = [
+#
+# On `lukas/pix` rather than `main` until edge-client#151 lands: PIX is the whole point of
+# `tests/pix.rs`, and `main` has none of it. Move back to `main` once it merges — the two pins
+# below have to move together, see the hopr-lib comment.
+edgli = { git = "https://github.com/hoprnet/edge-client", branch = "lukas/pix", default-features = false, features = [
   "runtime-tokio",
   "blokli",
 ] }
@@ -23,12 +27,17 @@ edgli = { git = "https://github.com/hoprnet/edge-client", branch = "main", defau
 # Pulled in only to switch on hopr-lib's `telemetry` feature, which is what compiles
 # `mod telemetry` into hopr-transport-session. Without it every per-session counter is absent
 # rather than zero, and "the session received nothing" is indistinguishable from "the metric was
-# never built". Must name the same source and branch edgli resolves — `release/4.0`, which
-# edge-client `main` pins — or the lock carries two hopr-libs and the entry runs a mixture.
+# never built". Must name the same source and rev edgli resolves, or the lock carries two
+# hopr-libs and the entry runs a mixture of the two.
+#
+# That is why this is a `rev` and no longer `branch = "release/4.0"`: edge-client#151 moved edgli
+# onto this master rev because PIX exists only there — `release/4.0` carries no PIX file at all —
+# so tracking the release branch here would silently split the graph. The rev is edge-client's own
+# pin, copied verbatim; update the two together or not at all.
 #
 # To test an unmerged hoprnet change, override this alongside `edgli` rather than committing a
 # feature branch here.
-hopr-lib = { git = "https://github.com/hoprnet/hoprnet", branch = "release/4.0", default-features = false, features = [
+hopr-lib = { git = "https://github.com/hoprnet/hoprnet", rev = "7b46149bc32f0cdca76fd84e52c598b881c7d643", default-features = false, features = [
   "telemetry",
 ] }
 

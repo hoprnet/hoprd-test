@@ -375,14 +375,18 @@ async fn boot_edgli(
     // `channel_capacity` is left at its default deliberately -- raising it also raises the safe
     // gate below which the node opens *zero* channels, which is not what this scenario measures.
     let mut strat_cfg = default_strategy_cfg(&sizing)?;
+    // An `if let` rather than the irrefutable `let` this used to be: `EdgeStrategyKind` is
+    // `#[non_exhaustive]` since edge-client#151, so from a downstream crate the pattern is
+    // refutable even while `default_strategy_cfg` still yields only this one variant.
     for kind in &mut strat_cfg.strategies {
-        let EdgeStrategyKind::ChannelLifecycle(lc) = kind;
-        lc.eligibility = EligibilityConfig {
-            min_peer_quality_score: 0.0,
-            require_observed_since_start: false,
-            ..Default::default()
-        };
-        lc.tick_interval = tuning.strategy_tick;
+        if let EdgeStrategyKind::ChannelLifecycle(lc) = kind {
+            lc.eligibility = EligibilityConfig {
+                min_peer_quality_score: 0.0,
+                require_observed_since_start: false,
+                ..Default::default()
+            };
+            lc.tick_interval = tuning.strategy_tick;
+        }
     }
     let reactor = edgli.run_reactor_from_cfg(strat_cfg)?;
 
