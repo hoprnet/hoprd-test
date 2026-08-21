@@ -88,10 +88,14 @@ python3 - "$CRATE_CARGO" "$EDGLI_SHA" <<'PY'
 import re, sys
 path, rev = sys.argv[1], sys.argv[2]
 src = open(path).read()
-new, n = re.subn(r'(edgli\s*=\s*\{[^}]*?\brev\s*=\s*")[0-9a-f]{7,40}(")',
-                 rf'\g<1>{rev}\g<2>', src, count=1)
+# Replaces whichever ref the manifest carries with `rev = "<sha>"`. Both forms have to be handled:
+# CI always pins a concrete sha, for reproducibility and because a dispatch supplies one, but the
+# committed manifest tracks a branch so the default does not drift behind what CI tests. Matching
+# only `rev` meant this exited on every run once the manifest moved to `branch`.
+new, n = re.subn(r'(edgli\s*=\s*\{[^}]*?\b)(?:rev|branch)(\s*=\s*")[^"]*(")',
+                 rf'\g<1>rev\g<2>{rev}\g<3>', src, count=1)
 if n == 0:
-    sys.exit(f"run.sh: no edgli rev entry matched in {path} — the dependency "
+    sys.exit(f"run.sh: no edgli rev/branch entry matched in {path} — the dependency "
              "stanza changed shape; refusing to run against a stale pin")
 open(path, 'w').write(new)
 PY
