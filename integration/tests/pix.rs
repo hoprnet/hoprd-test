@@ -1,0 +1,342 @@
+//! End-to-end PIX with **edgli as the paying Entry** (manual; NOT run in CI).
+//!
+//! hoprd's own `session_pix` covers hoprd-Entry ↔ hoprd-Exit over the REST API. This covers the
+//! configuration that actually ships: `gnosis_vpn-client` embeds edgli, so in production the node
+//! that opens a Session and pays for it is the edge client, linked in-process here.
+//!
+//! The happy path being asserted:
+//!
+//!   1. edgli opens a PIX Session to a cluster Exit through one relay.
+//!   2. edgli's strategy deposits `price_per_byte × quota` to the SSA stealth address.
+//!   3. The Exit observes the deposit and defuses its PIX kill switch, so the Session survives.
+//!   4. Bidirectional traffic carries SSA shares on the return-path SURBs until the Exit
+//!      reconstructs the stealth address private key.
+//!   5. The Exit sweeps the deposit into its Safe.
+//!   6. Repeated across several SSA cycles.
+//!
+//! # Prerequisites
+//!
+//! Both cluster binaries must come from a tree that carries PIX (hoprd#91), built in **release**
+//! with the secp256k1 deposit pool. Release is not a preference: debug builds slow packet
+//! processing enough to distort the cycle pacing this rests on. The pool is a *build-time* choice,
+//! and a binary carrying the other one bootstraps normally and then never deposits — so
+//! [`just pix`](../../justfile) greps the binary for its pool marker before starting anything.
+//!
+//! ```bash
+//! nix develop -c cargo build --release -p hoprd -p hoprd-localcluster \
+//!   --features strategy-pix-secp256k1
+//! ```
+//!
+//! # Running
+//!
+//! ```bash
+//! HOPRD_SRC=../hoprd HOPRD_KEEP_ARTIFACTS=1 just pix
+//! ```
+//!
+//! One scenario at a time — the cluster binds fixed ports. `HOPRD_KEEP_ARTIFACTS=1` always, or the
+//! node logs are deleted at teardown and a failed run leaves nothing to read. Redirect with `>`
+//! rather than piping into `tail`: a pipeline's exit status is the last command's, so a failed run
+//! reports success.
+//!
+//! # Which build each participant runs
+//!
+//! | participant | role | comes from |
+//! | ----------- | ---- | ---------- |
+//! | entry (`edgli`, in-process) | opens the Session, mints SURBs, **pays the deposits** | the `edgli` git dependency, compiled into this binary |
+//! | relay + Exit | forward packets, reply, recover keys, **sweep** | `$HOPRD_BIN` at runtime |
+//!
+//! Compile-time on one side and runtime on the other, so the two can silently disagree — and both
+//! must carry PIX for anything here to mean what it says. The pool marker check covers the Exit;
+//! this binary not compiling without `--features pix` covers the entry.
+#![cfg(feature = "pix")]
+
+use std::time::Duration;
+
+use hoprd_integration_test::{
+    Address, IntegrationEnv,
+    cluster::{NodeInfo, request_cluster_size},
+    pix::{self, PixCounters},
+    pump::{PumpOpts, pump_halves},
+};
+use rand::RngExt as _;
+
+/// Three nodes: edgli → relay → Exit. PIX needs at least one relay on each path, and a third node
+/// gives the path planner an alternative rather than a single forced route.
+const NODES: usize = 3;
+
+/// Relays on each path. **Must be ≥ 1**: the share encryption key is derived from the first
+/// relayer's acknowledgement, so a zero-hop path has nothing to derive it from and the Session is
+/// refused outright.
+const HOPS: usize = 1;
+
+/// SSA cycles that must fully complete — deposited, recovered, swept.
+const TARGET_CYCLES: u64 = 4;
+
+/// How far the entry's deposits may legitimately run ahead of the Exit's recoveries.
+///
+/// The Exit requests the next SSA once the current one passes its early-recovery threshold, and the
+/// entry deposits for it immediately, so at any instant one SSA is normally funded but not yet
+/// recovered. Two allows for the sample landing mid-handover.
+const MAX_SSAS_IN_FLIGHT: u64 = 2;
+
+/// Shares one SSA emits: every polynomial leaves the generator's queue having emitted the threshold
+/// *plus* the surplus, whether or not any share was lost.
+const EMISSIONS_PER_SSA: u64 =
+    (pix::PIX_POLYS * (pix::PIX_SHARES + pix::PIX_ADDITIONAL_SHARES)) as u64;
+
+/// Payload per datagram, comfortably under `SESSION_MTU` so one write is one packet.
+const SEND_CHUNK: usize = 512;
+
+/// Delay between datagrams, matching `session_pix`'s validated value.
+///
+/// This paces the Exit → Entry packet rate, which is what drives share delivery: the Exit consumes
+/// one return-path SURB per reply and each SURB carries one share. So a cycle takes roughly
+/// `EMISSIONS_PER_SSA × SEND_INTERVAL` ≈ 13 s.
+///
+/// The pacing is load-bearing rather than cosmetic. Share collection and the deposit run
+/// *concurrently* — the Exit serves data on credit and only the kill switch enforces payment — so a
+/// cycle that finished before its deposit transaction was mined would leave the Exit recovering a
+/// key against a zero balance, logging "already swept", and the funds stranded at the stealth
+/// address. 400 ms keeps a cycle comfortably longer than an Anvil transaction.
+const SEND_INTERVAL: Duration = Duration::from_millis(400);
+
+/// Datagrams offered per cycle, over the emission count.
+///
+/// One write *should* be one packet is one reply is one SURB is one share, but nothing in the
+/// session API guarantees a write is not coalesced. Offering twice the arithmetic costs wall-clock
+/// and cannot cause a false pass — the assertions are all `>=` against cycles actually observed —
+/// whereas offering exactly the arithmetic and being wrong reads as a broken strategy.
+const REPLY_MARGIN: u64 = 2;
+
+/// Cycles the happy path leaves the entry able to afford.
+///
+/// Far above what the traffic can consume, deliberately: an entry that runs dry mid-run trips the
+/// Exit's kill switch, and this scenario would then be measuring the *other* one.
+const FUNDED_CYCLES: u64 = 20;
+
+/// Budget for offering the whole payload. Bounds the writer, which is otherwise capped only by the
+/// session accepting writes.
+const PUMP_TIMEOUT: Duration = Duration::from_secs(600);
+
+/// How long to keep watching the Exit after the traffic stops.
+///
+/// The last cycle's recovery and sweep are two on-chain round trips behind the reply that completed
+/// it, so reading balances the instant the pump returns undercounts by a cycle or more.
+const SETTLE_TIMEOUT: Duration = Duration::from_secs(180);
+const SETTLE_POLL: Duration = Duration::from_secs(3);
+
+/// A cluster node by address.
+fn node_for(env: &IntegrationEnv, address: Address) -> anyhow::Result<NodeInfo> {
+    env.cluster()?
+        .nodes
+        .iter()
+        .find(|n| n.address == address)
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("no cluster node at {address}"))
+}
+
+/// Random bytes sized to drive `cycles` SSA cycles.
+///
+/// Random rather than patterned so each run's packet ciphertexts are unique and replay tags do not
+/// collide, the same reason `tests/integration.rs` randomises its payload.
+fn payload_for(cycles: u64) -> Vec<u8> {
+    let datagrams = cycles * EMISSIONS_PER_SSA * REPLY_MARGIN;
+    let mut payload = vec![0u8; datagrams as usize * SEND_CHUNK];
+    rand::rng().fill(&mut payload[..]);
+    payload
+}
+
+/// `PumpOpts` for a PIX session: a small chunk paced slowly.
+///
+/// The chunk size is the point. `pace` alone fixes the average rate while leaving the shape a
+/// 64 KiB burst followed by silence — fine when the average is the measurement, wrong here, where
+/// what is being paced is the reply rate that advances a cycle.
+fn pix_pump_opts() -> PumpOpts {
+    PumpOpts {
+        pace: Some(SEND_INTERVAL),
+        chunk: Some(SEND_CHUNK),
+        ..PumpOpts::default()
+    }
+}
+
+/// Poll the Exit until it has swept `target` cycles, or the deadline expires.
+///
+/// Returns the counters as of the last poll either way — a timeout here is not itself the verdict,
+/// since the assertions downstream say more about *why* than "it did not happen".
+async fn await_sweeps(
+    exit: &NodeInfo,
+    before: &PixCounters,
+    target: u64,
+    timeout: Duration,
+) -> anyhow::Result<PixCounters> {
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        let delta = before.delta(&pix::sample_exit(exit).await?);
+        tracing::info!("exit PIX counters: {}", delta.summary());
+        if delta.sweeps().unwrap_or(0) >= target || tokio::time::Instant::now() >= deadline {
+            return Ok(delta);
+        }
+        tokio::time::sleep(SETTLE_POLL).await;
+    }
+}
+
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+#[ignore = "requires PIX-enabled hoprd/hoprd-localcluster binaries and a chain"]
+async fn edgli_entry_deposits_should_be_swept_into_the_exit_safe() -> anyhow::Result<()> {
+    request_cluster_size(NODES);
+    let t0 = std::time::Instant::now();
+
+    let per_cycle = pix::per_cycle()?;
+    let quota = pix::quota_per_ssa()?;
+    let float = per_cycle * FUNDED_CYCLES;
+    tracing::info!(
+        %per_cycle, quota, %float, TARGET_CYCLES,
+        "PIX accounting: one SSA cycle costs price_per_byte x quota"
+    );
+
+    let env = IntegrationEnv::setup_pix(float).await?;
+    let (session, exit_addr) = env.open_pix_session(HOPS, HOPS).await?;
+    let exit = node_for(&env, exit_addr)?;
+    tracing::info!(exit = %exit_addr, elapsed = ?t0.elapsed(), "PIX session open");
+
+    // Snapshot after the channels are funded, so the stakes are already out of the Safes and the
+    // only subsequent movement is PIX. The two sides read *different accounts*: the entry pays
+    // deposits from its own, the Exit receives sweeps into its Safe.
+    let exit_before = pix::node_balances(&exit).await?;
+    let exit_counters_before = pix::sample_exit(&exit).await?;
+    let entry_before = env.entry_node_balance().await?;
+    let entry_counters_before = pix::sample_entry();
+    tracing::info!(
+        entry_node = %entry_before, exit_safe = %exit_before.safe,
+        "balances before the session"
+    );
+
+    let payload = payload_for(TARGET_CYCLES);
+    let (mut rx, mut tx) = tokio::io::split(session);
+    let transfer = pump_halves(
+        &mut rx,
+        &mut tx,
+        &payload,
+        "pix",
+        PUMP_TIMEOUT,
+        pix_pump_opts(),
+    )
+    .await?;
+
+    let exit_counters =
+        await_sweeps(&exit, &exit_counters_before, TARGET_CYCLES, SETTLE_TIMEOUT).await?;
+    let entry_counters = entry_counters_before.delta(&pix::sample_entry());
+    let exit_after = pix::node_balances(&exit).await?;
+    let entry_after = env.entry_node_balance().await?;
+    let recovered = exit_after.safe - exit_before.safe;
+    let spent = entry_before - entry_after;
+
+    tracing::info!(
+        %recovered, %spent, elapsed = ?t0.elapsed(),
+        "entry counters: {} | exit counters: {}",
+        entry_counters.summary(), exit_counters.summary()
+    );
+
+    // ── Assertions, ordered so a failure names its own cause ─────────────────
+
+    // Nothing below means anything about a session with no counterparty.
+    assert!(
+        transfer.arrival_pct() > 0.0,
+        "no byte completed the entry -> exit -> loopback -> entry round trip, so the PIX session \
+         never carried traffic (outcome {:?}; entry {}; exit {})",
+        transfer.outcome,
+        entry_counters.summary(),
+        exit_counters.summary(),
+    );
+
+    // The counters are what every assertion after this reads. Absent means the Exit was built
+    // without `hopr-strategy/telemetry`, and reporting that as zero would blame the entry.
+    assert!(
+        exit_counters.observable(),
+        "the Exit exposed no hopr_strategy_pix_* series at all — it was built without PIX \
+         strategy telemetry, so nothing here was measured"
+    );
+
+    // "The Exit sees the deposit and does not kill the session": the deposit awaiter counts one
+    // confirmation per SSA when it defuses the kill switch, and a timeout when it lets it fire.
+    assert_eq!(
+        exit_counters.deposits_timed_out(),
+        Some(0),
+        "the Exit gave up waiting for {:?} deposit(s) and let the PIX kill switch close the \
+         session (it confirmed {:?}). Either the entry never deposited — it pays from its own \
+         account, which starts empty — or the deposit landed outside the \
+         max_deposit_wait + max_ssa_delivery_time window.",
+        exit_counters.deposits_timed_out(),
+        exit_counters.deposits_confirmed(),
+    );
+    assert!(
+        exit_counters.deposits_confirmed().unwrap_or(0) >= TARGET_CYCLES,
+        "the Exit confirmed only {:?} deposits, expected at least {TARGET_CYCLES} (entry: {})",
+        exit_counters.deposits_confirmed(),
+        entry_counters.summary(),
+    );
+    assert!(
+        exit_counters.keys_recovered().unwrap_or(0) >= TARGET_CYCLES
+            && exit_counters.sweeps().unwrap_or(0) >= TARGET_CYCLES,
+        "the Exit recovered {:?} keys and swept {:?} of them, expected at least {TARGET_CYCLES} \
+         each. Recoveries without sweeps means the funds are reachable and were not collected; \
+         neither means shares never completed an SSA.",
+        exit_counters.keys_recovered(),
+        exit_counters.sweeps(),
+    );
+
+    // The real verdict. With auto-redeeming off, PIX sweeps are the only thing that credits the
+    // Exit's Safe in wxHOPR, so an exact whole multiple says every wxHOPR that arrived did so as a
+    // complete SSA deposit — which is the statement that recovered funds correspond to the data
+    // quota delivered back to the entry.
+    let cycles = pix::completed_cycles(recovered, per_cycle).unwrap_or_else(|| {
+        panic!(
+            "the Exit's Safe gained {recovered}, which is not a whole multiple of the {per_cycle} \
+             per-SSA deposit — something other than PIX sweeps moved the balance (exit: {})",
+            exit_counters.summary()
+        )
+    });
+    assert!(
+        cycles >= TARGET_CYCLES,
+        "expected at least {TARGET_CYCLES} completed SSA cycles, got {cycles} ({recovered} of the \
+         {} target) after {:?}. A recovered-key count above the cycle count means keys were \
+         reconstructed before their deposits were mined and the funds are stranded at the stealth \
+         addresses — slow SEND_INTERVAL down. (exit: {})",
+        per_cycle * TARGET_CYCLES,
+        t0.elapsed(),
+        exit_counters.summary(),
+    );
+
+    // The entry funded every one of those out of its own account, and nothing else came off it.
+    // Not an equality: early-recovery pipelining legitimately funds SSAs still in flight.
+    let deposited = pix::completed_cycles(spent, per_cycle).unwrap_or_else(|| {
+        panic!(
+            "the entry's own account paid out {spent}, which is not a whole multiple of the \
+             {per_cycle} per-SSA deposit — something other than PIX deposits moved it"
+        )
+    });
+    assert!(
+        (cycles..=cycles + MAX_SSAS_IN_FLIGHT).contains(&deposited),
+        "the entry deposited for {deposited} SSAs but only {cycles} were recovered and swept. Up \
+         to {MAX_SSAS_IN_FLIGHT} may legitimately be in flight thanks to early-recovery \
+         pipelining; more than that means deposits are being made for SSAs that never complete."
+    );
+
+    // A failed deposit is the entry's own account running out, which the float above rules out —
+    // so a non-zero count here means something else, and the cycle counts above understate.
+    assert_eq!(
+        entry_counters.deposits_failed().unwrap_or(0),
+        0,
+        "the entry failed {:?} deposit(s) despite being funded for {FUNDED_CYCLES} cycles \
+         ({}); its remaining float is {}",
+        entry_counters.deposits_failed(),
+        entry_counters.summary(),
+        entry_after,
+    );
+
+    tracing::info!(
+        cycles, %recovered, %spent,
+        "edgli PIX entry test PASSED in {:?}", t0.elapsed()
+    );
+    Ok(())
+}
