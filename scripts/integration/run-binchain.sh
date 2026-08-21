@@ -13,6 +13,9 @@
 #               the return-path resilience scenarios)
 #   TEST_ARGS   extra libtest args, e.g. "--nocapture" to see a passing scenario's own
 #               measurements (libtest swallows them otherwise)
+#   CARGO_FEATURES  extra cargo flags selecting features, e.g. "--features pix". Test targets
+#               behind a non-default feature compile to nothing without it, and cargo reports
+#               that as "no test target named X" rather than as a missing feature.
 #   others      forwarded to the test (RUST_LOG, HOPRD_PUMP_MBPS, ...) with defaults below
 set -euo pipefail
 
@@ -31,6 +34,7 @@ TEST_TARGET="${TEST_TARGET:-integration}"
 # Split once into an array. An unquoted ${TEST_ARGS} would be pathname-expanded, so a value
 # containing `*` would reach libtest as a list of repository filenames.
 read -r -a TEST_ARGS_ARR <<< "${TEST_ARGS:-}"
+read -r -a CARGO_FEATURES_ARR <<< "${CARGO_FEATURES:-}"
 BLOKLI_API_PORT="${BLOKLI_API_PORT:-8080}"
 
 CHAIN_PID=""
@@ -48,11 +52,15 @@ trap stop_chain EXIT INT TERM
 # SIGINT→hoprd reaping is async and can lag. Stray nodes from a finished scenario
 # steal CPU from the next one — on the crypto-heavy 1-hop path that alone tanks
 # arrival. Force-reap and let the machine idle before the next cluster starts.
+# Matched against ${HOPRD_BIN} rather than a hardcoded `result-hoprd/bin/hoprd`, because not every
+# caller builds through nix: `just pix` needs a PIX-enabled binary, which the flake does not
+# produce, so it points HOPRD_BIN at a cargo target directory. A pattern that misses leaves the
+# previous scenario's nodes running and stealing CPU from the next one.
 reap_nodes_and_settle() {
   pkill -f "hoprd-localcluster" 2>/dev/null || true
-  pkill -f "result-hoprd/bin/hoprd" 2>/dev/null || true
+  pkill -f "${HOPRD_BIN}" 2>/dev/null || true
   for _ in $(seq 1 30); do
-    pgrep -f "result-hoprd/bin/hoprd|hoprd-localcluster" >/dev/null 2>&1 || break
+    pgrep -f "${HOPRD_BIN}|hoprd-localcluster" >/dev/null 2>&1 || break
     sleep 1
   done
   sleep 5
@@ -76,7 +84,8 @@ for scenario in ${SCENARIOS}; do
   echo "═══ ${scenario}: fresh chain ═══"
   start_chain
   if ! nix develop "${HOPRNET_SHELL:-github:hoprnet/hoprnet}" -c \
-    cargo test --manifest-path integration/Cargo.toml --test "${TEST_TARGET}" "${scenario}" \
+    cargo test --manifest-path integration/Cargo.toml "${CARGO_FEATURES_ARR[@]}" \
+    --test "${TEST_TARGET}" "${scenario}" \
     --no-fail-fast -- --include-ignored --test-threads=1 "${TEST_ARGS_ARR[@]}"; then
     rc=1
   fi

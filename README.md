@@ -53,6 +53,7 @@ does not provide, so they live in their **own** test targets — CI only runs
 | Binary                    | What it needs                                    | Run with     |
 | ------------------------- | ------------------------------------------------ | ------------ |
 | `tests/return_path.rs`    | a 5-node cluster (more CPU than the throughput tests) | `just return-path` |
+| `tests/pix.rs`            | `--features pix` + a PIX-enabled `hoprd` built from source | `just pix` |
 | `tests/rotsee.rs`         | a funded Gnosis identity + exit node (`EDGLI_ROTSEE_*`) | `just rotsee` |
 | `tests/profiling.rs`      | `--features prof` + `--profile tracer` + `tokio_unstable` | `just profile` |
 
@@ -64,6 +65,18 @@ does not provide, so they live in their **own** test targets — CI only runs
   and requires the stream to keep flowing. Needs more relayer candidates than the
   throughput tests, so it asks for a 5-node cluster via `cluster::request_cluster_size`
   (`HOPRD_CLUSTER_SIZE` sets the default elsewhere; `hoprd-localcluster` caps at 5).
+- **PIX** runs the settlement protocol end to end with **`edgli` as the paying Entry**, which is
+  the configuration that ships (`gnosis_vpn-client` embeds `edgli`) and which hoprd's own
+  `session_pix` does not cover — that one is hoprd-Entry ↔ hoprd-Exit over the REST API. One
+  scenario asserts the money reconciles: the Exit's Safe gains an exact whole multiple of
+  `price_per_byte × quota`, and the entry's own account pays out the same multiple. The other
+  asserts the documented failure mode — an entry that runs out of float stops depositing and the
+  Exit **closes** the Session rather than quietly degrading, which is the only signal an embedder
+  gets. Both need a `hoprd` carrying a deposit pool, which is a non-default cargo feature the nix
+  flake does not build, so `just pix` compiles it from `HOPRD_SRC` (default `../hoprd`) and checks
+  the resulting binary for its pool marker before starting a cluster. See
+  [`integration/tests/pix.rs`](integration/tests/pix.rs) for the pacing constants, which are
+  load-bearing.
 - **Rotsee** (`IntegrationEnv::setup_rotsee`) boots `edgli` on a pre-funded, on-chain
   identity read from `EDGLI_ROTSEE_*` — no cluster is started — and pumps 0-hop/1-hop
   loopback sessions to a configured exit node. See the header of `tests/rotsee.rs` for the
@@ -157,6 +170,7 @@ The test is `#[ignore]` — it needs external binaries + a container runtime.
 | `HOPRD_CONTAINER_RUNTIME` | no            | `docker` (default), `container`, `podman` |
 | `HOPRD_CLUSTER_DATA_DIR`  | external mode | data-dir of an already-running cluster    |
 | `HOPRD_CHAIN_URL`         | binary chain  | attach to an external blokli (e.g. `http://localhost:8080`); skips the container, replaces `HOPRD_CHAIN_IMAGE` |
+| `HOPRD_SRC`               | `just pix`    | hoprd checkout carrying PIX (default `../hoprd`); built from source since the flake has no PIX binary |
 
 Docker is the only external service: the chain (anvil + blokli + contracts) runs
 as a single `bloklid-anvil` container on the host daemon — `localcluster` launches
@@ -253,6 +267,11 @@ checks the integration crate — `cargo fmt --check`, `cargo clippy -D warnings`
 and `cargo test --lib` (fast unit tests; the `#[ignore]` e2e is **not**
 run here). It builds in the hoprnet dev shell on a hosted `depot` runner. Locally:
 `just lint` + `just unit`.
+
+Both run on the **default** feature set, so the PIX-only parts of `src/pix.rs` and the whole of
+`tests/pix.rs` are neither compiled nor linted there. The parsers and the balance reconciliation
+are deliberately left ungated so `cargo test --lib` still covers them; for the rest, add
+`--features pix` when touching PIX code.
 
 `integration.yaml` runs on `repository_dispatch[integration]` (fired by `hoprd` /
 `edge-client` on merge), on manual `workflow_dispatch`, and on a hoprd-test PR
