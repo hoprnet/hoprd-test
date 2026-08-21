@@ -149,10 +149,13 @@ pub async fn fund_node_eoa(
     let deployer = edgli::ChainKeypair::from_secret(&secret)
         .map_err(|e| anyhow::anyhow!("anvil deployer keypair: {e}"))?;
 
+    // The same connector budget the node itself runs with. At the default this submits the
+    // transfer, waits for a confirmation blokli has not indexed yet, and reports "operation timed
+    // out at the client" — for a transaction that was in fact mined.
     let ops = edgli::make_incentive_operations(
         edgli::BlokliEndpoint::from_optional_url(Some(blokli_url))?,
         &deployer,
-        None,
+        Some(crate::env::connector_cfg()),
     )
     .await
     .context("connecting to blokli as the deployer")?;
@@ -274,6 +277,12 @@ impl PixCounters {
     }
 
     /// A `deposit_tracking` outcome: `"confirmed"` or `"timeout"`.
+    ///
+    /// Absent means something different here than for the unlabelled families. A label set on a
+    /// `MultiCounter` materialises only when it is first incremented, so a run in which no deposit
+    /// timed out has no `{result="timeout"}` series at all — `None` is "it never happened", not
+    /// "nothing was measuring". Read this with `unwrap_or(0)` once [`Self::observable`] has ruled
+    /// out the missing-telemetry case; demanding `Some(0)` fails every healthy run.
     pub fn deposit_tracking(&self, result: &str) -> Option<u64> {
         self.get(&format!("{DEPOSIT_TRACKING}/{result}"))
     }
@@ -453,6 +462,21 @@ hopr_packets_count{type="forwarded"} 99999
         let c = parse(EXPOSITION);
         assert_eq!(c.deposits_confirmed(), Some(5));
         assert_eq!(c.deposits_timed_out(), Some(2));
+    }
+
+    /// A healthy run has no `{result="timeout"}` series at all, because a `MultiCounter` label set
+    /// materialises only on first increment. An assertion demanding `Some(0)` there fails every
+    /// passing run — which is how the first end-to-end run of `tests/pix.rs` failed, after the
+    /// protocol had in fact completed six full cycles.
+    #[test]
+    fn an_outcome_that_never_occurred_should_read_as_absent_not_zero() {
+        let healthy = parse(&format!("{DEPOSIT_TRACKING}{{result=\"confirmed\"}} 7\n"));
+        assert_eq!(healthy.deposits_confirmed(), Some(7));
+        assert_eq!(healthy.deposits_timed_out(), None);
+        assert!(
+            healthy.observable(),
+            "the family exists, so the build does have telemetry — only that one label is unused"
+        );
     }
 
     /// A registered family at zero is a different statement from an absent one: the first says the

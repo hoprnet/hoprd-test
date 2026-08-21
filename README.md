@@ -70,9 +70,12 @@ does not provide, so they live in their **own** test targets — CI only runs
   `session_pix` does not cover — that one is hoprd-Entry ↔ hoprd-Exit over the REST API. One
   scenario asserts the money reconciles: the Exit's Safe gains an exact whole multiple of
   `price_per_byte × quota`, and the entry's own account pays out the same multiple. The other
-  asserts the documented failure mode — an entry that runs out of float stops depositing and the
-  Exit **closes** the Session rather than quietly degrading, which is the only signal an embedder
-  gets. Both need a `hoprd` carrying a deposit pool, which is a non-default cargo feature the nix
+  pins the documented failure mode — an entry that runs out of float stops depositing, the Exit's
+  kill switch fires, and it sweeps only the cycles it was paid for. Measured, the entry gets **no
+  event at all** when that happens: an unreliable session carries no end-of-stream, so the closure
+  arrives as replies ceasing. An embedder that wants to react has to watch its own float
+  (`IntegrationEnv::entry_node_balance`), not the session. Both need a `hoprd` carrying a deposit
+  pool, which is a non-default cargo feature the nix
   flake does not build, so `just pix` compiles it from `HOPRD_SRC` (default `../hoprd`) and checks
   the resulting binary for its pool marker before starting a cluster. See
   [`integration/tests/pix.rs`](integration/tests/pix.rs) for the pacing constants, which are

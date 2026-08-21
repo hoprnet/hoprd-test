@@ -56,7 +56,7 @@ use hoprd_integration_test::{
     Address, IntegrationEnv,
     cluster::{NodeInfo, request_cluster_size},
     pix::{self, PixCounters},
-    pump::{PumpOpts, pump_halves},
+    pump::{PumpOpts, PumpOutcome, pump_halves},
 };
 use rand::RngExt as _;
 
@@ -269,9 +269,15 @@ async fn edgli_entry_deposits_should_be_swept_into_the_exit_safe() -> anyhow::Re
 
     // "The Exit sees the deposit and does not kill the session": the deposit awaiter counts one
     // confirmation per SSA when it defuses the kill switch, and a timeout when it lets it fire.
+    //
+    // `unwrap_or(0)` and not `== Some(0)`, which is the opposite of how the unlabelled families are
+    // read here. `deposit_tracking` is a *labelled* counter and a label set materialises only once
+    // it is first incremented, so a run where nothing timed out has no `{result="timeout"}` series
+    // at all. Absent therefore means the event never happened — the build-has-no-telemetry reading
+    // of absent is already ruled out by `observable()` above.
     assert_eq!(
-        exit_counters.deposits_timed_out(),
-        Some(0),
+        exit_counters.deposits_timed_out().unwrap_or(0),
+        0,
         "the Exit gave up waiting for {:?} deposit(s) and let the PIX kill switch close the \
          session (it confirmed {:?}). Either the entry never deposited — it pays from its own \
          account, which starts empty — or the deposit landed outside the \
@@ -354,15 +360,19 @@ async fn edgli_entry_deposits_should_be_swept_into_the_exit_safe() -> anyhow::Re
 /// The failure mode edge-client documents as its known limitation, made falsifiable.
 ///
 /// PIX deposits come off the entry's own account rather than its Safe, so an operator has to leave
-/// a float there and size it themselves. The README's warning about running dry is that the Exit
-/// closes the Session on its deposit deadline "with nothing logged as an error at this end" — so
-/// the *only* way an embedder learns about it is the Session ending. That is what this asserts:
-/// funded for exactly [`EXHAUSTION_FUNDED_CYCLES`], offered several times that much traffic, the
-/// stream must stop because the counterparty closed it and not merely degrade.
+/// a float there and size it themselves. edge-client's README warns that a node which runs dry
+/// stops depositing and the Exit closes the Session on its deposit deadline, "with nothing logged
+/// as an error at this end". This funds exactly [`EXHAUSTION_FUNDED_CYCLES`], offers several times
+/// that much traffic, and pins what actually happens.
 ///
-/// The distinction matters. A session that quietly delivers less is a performance problem an
-/// embedder might ride out; one that closes is a signal it can act on. Asserting `SessionClosed`
-/// rather than "throughput fell" is asserting that the signal exists.
+/// Measured, that last clause is stronger than it sounds. The entry does not merely miss a log
+/// line — it gets no event at all. An unreliable session carries no end-of-stream, so the Exit's
+/// closure arrives as replies ceasing, and the pump ends `Idle` rather than `SessionClosed`. The
+/// only thing distinguishing "the counterparty stopped paying attention" from "the network went
+/// quiet" is on the *Exit's* side, in a counter the entry cannot see. An embedder that wants to
+/// react to running dry has to watch its own float, which is why
+/// [`IntegrationEnv::entry_node_balance`](hoprd_integration_test::IntegrationEnv::entry_node_balance)
+/// exists.
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 #[ignore = "requires PIX-enabled hoprd/hoprd-localcluster binaries and a chain"]
 async fn a_session_should_close_when_the_entry_can_no_longer_deposit() -> anyhow::Result<()> {
@@ -441,12 +451,23 @@ async fn a_session_should_close_when_the_entry_can_no_longer_deposit() -> anyhow
         entry_counters.summary(),
     );
 
-    // The signal itself: the counterparty ended it.
+    // The stream stopped carrying the payload. Note what this does *not* assert.
+    //
+    // `SessionClosed` would be the natural expectation and it does not happen: measured, this ends
+    // as `Idle` — the reply stream simply goes quiet. An unreliable session has no end-of-stream to
+    // deliver, so a read never returns 0 and the Exit's closure reaches the entry as the absence of
+    // replies rather than as an event. That sharpens what edge-client documents ("with nothing
+    // logged as an error at this end") instead of contradicting it: there is no signal, only its
+    // absence, and an embedder learns about it by noticing the silence.
+    //
+    // So the honest assertion is that delivery stopped, with the two counters either side of it
+    // saying *why* — the entry could not pay, and the Exit's kill switch fired.
     assert!(
-        transfer.outcome.exit_stopped_serving(),
-        "the entry ran dry but the session ended as {:?} rather than being closed by the Exit. \
-         Its kill switch is what turns non-payment into something an embedder can observe; \
-         without it the session merely degrades and nothing says why. (exit: {})",
+        transfer.outcome != PumpOutcome::Complete,
+        "the entry ran dry and its deposits failed, yet the whole payload still came back \
+         ({:.1}% arrival, outcome {:?}). The Exit served traffic it was never paid for, so its \
+         kill switch is not enforcing payment. (exit: {})",
+        transfer.arrival_pct(),
         transfer.outcome,
         exit_counters.summary(),
     );

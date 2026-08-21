@@ -556,7 +556,13 @@ async fn boot_edgli(
     Ok((edgli, reactor))
 }
 
-fn connector_cfg() -> BlockchainConnectorConfig {
+/// Connector tuning every chain-touching path here needs, not just the node's own.
+///
+/// `pub(crate)` because a one-off connector built for a side transaction — funding the entry's
+/// account in [`crate::pix::fund_node_eoa`] — needs the same budget. Left at the default it
+/// submits the transaction, waits for a confirmation blokli has not indexed yet, and returns
+/// "operation timed out at the client" while the transfer is in fact mined.
+pub(crate) fn connector_cfg() -> BlockchainConnectorConfig {
     BlockchainConnectorConfig {
         // Default tx-confirmation budget is too tight for blokli's SSE indexing on Anvil.
         tx_timeout_multiplier: 10,
