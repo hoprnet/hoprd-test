@@ -383,10 +383,13 @@ impl IntegrationEnv {
     /// **The SURB buffer is tiny** — 16 kB against the throughput tests' 10 MB — and this is the
     /// least obvious knob in the whole scenario. A PIX share is baked into a SURB when the SURB is
     /// *minted*, and the exit spends its buffer roughly in order, so the buffer is a pipeline delay
-    /// between share generation and share delivery. At 10 MB (~10 000 SURBs) the exit works through
-    /// SURBs minted during SSA #1 for many minutes before it touches one carrying an SSA #2 share:
-    /// exactly one cycle completes and then nothing, which reads as a broken strategy. 16 kB is
-    /// ~16 SURBs, so a new SSA's shares start landing within seconds of its commitment.
+    /// between share generation and share delivery. At 10 MB the exit works through SURBs minted
+    /// during SSA #1 long before it touches one carrying an SSA #2 share, so cycles stop completing
+    /// — which reads as a broken strategy rather than a mis-set buffer. 16 kB is ~16 SURBs, so a
+    /// new SSA's shares start landing within seconds of its commitment.
+    ///
+    /// Measured, not reasoned: the same scenario run at 10 MB recovered and swept **1** cycle where
+    /// 16 kB recovered and swept **6**, and failed on the deposit-confirmation assertion.
     ///
     /// Both hop counts must be at least 1. The share encryption key is derived from the first
     /// relayer's acknowledgement, so a zero-hop path has nothing to derive it from and the Session
