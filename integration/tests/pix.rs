@@ -114,6 +114,16 @@ const REPLY_MARGIN: u64 = 2;
 /// Exit's kill switch, and this scenario would then be measuring the *other* one.
 const FUNDED_CYCLES: u64 = 20;
 
+/// Cycles the exhaustion scenario funds — few, since the run is over once they are spent.
+const EXHAUSTION_FUNDED_CYCLES: u64 = 2;
+
+/// Cycles the exhaustion scenario offers traffic for.
+///
+/// Must outlast the close, which lands about `EXHAUSTION_FUNDED_CYCLES` cycles of traffic plus the
+/// Exit's `max_deposit_wait + max_ssa_delivery_time` fuse (80 s) later — call it 130 s against the
+/// ~205 s this offers. Sized in cycles rather than seconds so it tracks the pacing constants.
+const EXHAUSTION_PAYLOAD_CYCLES: u64 = 8;
+
 /// Budget for offering the whole payload. Bounds the writer, which is otherwise capped only by the
 /// session accepting writes.
 const PUMP_TIMEOUT: Duration = Duration::from_secs(600);
@@ -337,6 +347,136 @@ async fn edgli_entry_deposits_should_be_swept_into_the_exit_safe() -> anyhow::Re
     tracing::info!(
         cycles, %recovered, %spent,
         "edgli PIX entry test PASSED in {:?}", t0.elapsed()
+    );
+    Ok(())
+}
+
+/// The failure mode edge-client documents as its known limitation, made falsifiable.
+///
+/// PIX deposits come off the entry's own account rather than its Safe, so an operator has to leave
+/// a float there and size it themselves. The README's warning about running dry is that the Exit
+/// closes the Session on its deposit deadline "with nothing logged as an error at this end" — so
+/// the *only* way an embedder learns about it is the Session ending. That is what this asserts:
+/// funded for exactly [`EXHAUSTION_FUNDED_CYCLES`], offered several times that much traffic, the
+/// stream must stop because the counterparty closed it and not merely degrade.
+///
+/// The distinction matters. A session that quietly delivers less is a performance problem an
+/// embedder might ride out; one that closes is a signal it can act on. Asserting `SessionClosed`
+/// rather than "throughput fell" is asserting that the signal exists.
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+#[ignore = "requires PIX-enabled hoprd/hoprd-localcluster binaries and a chain"]
+async fn a_session_should_close_when_the_entry_can_no_longer_deposit() -> anyhow::Result<()> {
+    request_cluster_size(NODES);
+    let t0 = std::time::Instant::now();
+
+    let per_cycle = pix::per_cycle()?;
+    let float = per_cycle * EXHAUSTION_FUNDED_CYCLES;
+    tracing::info!(
+        %per_cycle, %float, EXHAUSTION_FUNDED_CYCLES, EXHAUSTION_PAYLOAD_CYCLES,
+        "entry funded for a fixed number of cycles, then offered several times that much traffic"
+    );
+
+    let env = IntegrationEnv::setup_pix(float).await?;
+    let (session, exit_addr) = env.open_pix_session(HOPS, HOPS).await?;
+    let exit = node_for(&env, exit_addr)?;
+
+    let exit_before = pix::node_balances(&exit).await?;
+    let exit_counters_before = pix::sample_exit(&exit).await?;
+    let entry_counters_before = pix::sample_entry();
+
+    let payload = payload_for(EXHAUSTION_PAYLOAD_CYCLES);
+    let (mut rx, mut tx) = tokio::io::split(session);
+    let transfer = pump_halves(
+        &mut rx,
+        &mut tx,
+        &payload,
+        "pix-exhaustion",
+        PUMP_TIMEOUT,
+        pix_pump_opts(),
+    )
+    .await?;
+
+    // The funded cycles are the most the Exit can ever sweep here, so this settles rather than
+    // waits — it returns on the deadline if fewer completed, which is a legitimate outcome.
+    let exit_counters = await_sweeps(
+        &exit,
+        &exit_counters_before,
+        EXHAUSTION_FUNDED_CYCLES,
+        SETTLE_TIMEOUT,
+    )
+    .await?;
+    let entry_counters = entry_counters_before.delta(&pix::sample_entry());
+    let recovered = pix::node_balances(&exit).await?.safe - exit_before.safe;
+    let remaining = env.entry_node_balance().await?;
+
+    tracing::info!(
+        %recovered, %remaining, outcome = ?transfer.outcome, elapsed = ?t0.elapsed(),
+        "entry counters: {} | exit counters: {}",
+        entry_counters.summary(), exit_counters.summary()
+    );
+
+    // ── Assertions ───────────────────────────────────────────────────────────
+
+    // The session has to have worked before it stopped, or "it closed" says nothing about running
+    // out of money — `NeverStarted` also satisfies `exit_stopped_serving`.
+    assert!(
+        transfer.arrival_pct() > 0.0,
+        "the session never carried traffic at all, so its closing says nothing about the entry's \
+         float (outcome {:?}; entry {})",
+        transfer.outcome,
+        entry_counters.summary(),
+    );
+
+    // The entry genuinely ran out, rather than the session ending for some other reason.
+    assert!(
+        remaining < per_cycle,
+        "the entry still holds {remaining}, at least one more {per_cycle} deposit's worth, so it \
+         did not run dry and whatever ended the session was not exhaustion ({})",
+        entry_counters.summary(),
+    );
+    assert!(
+        entry_counters.deposits_failed().unwrap_or(0) >= 1,
+        "the entry recorded no failed deposit ({}), so it never tried to pay for an SSA it could \
+         not afford — the payload was too short to outrun a {EXHAUSTION_FUNDED_CYCLES}-cycle float",
+        entry_counters.summary(),
+    );
+
+    // The signal itself: the counterparty ended it.
+    assert!(
+        transfer.outcome.exit_stopped_serving(),
+        "the entry ran dry but the session ended as {:?} rather than being closed by the Exit. \
+         Its kill switch is what turns non-payment into something an embedder can observe; \
+         without it the session merely degrades and nothing says why. (exit: {})",
+        transfer.outcome,
+        exit_counters.summary(),
+    );
+    assert!(
+        exit_counters.deposits_timed_out().unwrap_or(0) >= 1,
+        "the Exit recorded no deposit timeout ({}), so the session was closed by something other \
+         than the PIX kill switch",
+        exit_counters.summary(),
+    );
+
+    // And it collected exactly what it was paid for — no more, since nothing funded it, and at
+    // least one, since the first cycles did complete.
+    let cycles = pix::completed_cycles(recovered, per_cycle).unwrap_or_else(|| {
+        panic!(
+            "the Exit's Safe gained {recovered}, which is not a whole multiple of the {per_cycle} \
+             per-SSA deposit — something other than PIX sweeps moved the balance"
+        )
+    });
+    assert!(
+        (1..=EXHAUSTION_FUNDED_CYCLES).contains(&cycles),
+        "the Exit swept {cycles} cycles against an entry funded for exactly \
+         {EXHAUSTION_FUNDED_CYCLES}. Above that it collected more than was ever deposited; zero \
+         means the session died before a single cycle completed, so the close was not exhaustion. \
+         (exit: {})",
+        exit_counters.summary(),
+    );
+
+    tracing::info!(
+        cycles, %recovered, %remaining,
+        "PIX exhaustion test PASSED in {:?}", t0.elapsed()
     );
     Ok(())
 }
