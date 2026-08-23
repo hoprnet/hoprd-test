@@ -30,13 +30,22 @@
 //! # Running
 //!
 //! ```bash
-//! HOPRD_SRC=../hoprd HOPRD_KEEP_ARTIFACTS=1 just pix
+//! # both scenarios, ~11 min (~285 s + ~390 s, plus a chain bootstrap each)
+//! HOPRD_SRC=../hoprd HOPRD_KEEP_ARTIFACTS=1 just pix > /tmp/pix.log 2>&1
+//!
+//! # just one
+//! HOPRD_SRC=../hoprd just pix edgli_entry_deposits_should_be_swept_into_the_exit_safe
 //! ```
 //!
-//! One scenario at a time — the cluster binds fixed ports. `HOPRD_KEEP_ARTIFACTS=1` always, or the
-//! node logs are deleted at teardown and a failed run leaves nothing to read. Redirect with `>`
-//! rather than piping into `tail`: a pipeline's exit status is the last command's, so a failed run
-//! reports success.
+//! The two run sequentially on a fresh chain each — they want different entry funding, and the
+//! cluster binds fixed ports, so they cannot share one. `HOPRD_KEEP_ARTIFACTS=1` (the recipe's
+//! default) always, or the node logs are deleted at teardown and a failed run leaves nothing to
+//! read. Redirect with `>` rather than piping into `tail`: a pipeline's exit status is the last
+//! command's, so a failed run reports success.
+//!
+//! Cargo captures test output on a pass, so the counter summaries logged below reach the log only
+//! for a failing run. Add `TEST_ARGS=--nocapture` to see them on green — at the cost of every
+//! `sqlx` query the nodes make.
 //!
 //! # Which build each participant runs
 //!

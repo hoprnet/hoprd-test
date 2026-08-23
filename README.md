@@ -46,7 +46,7 @@ there is nothing to configure.
 
 ### Manual test binaries (not run in CI)
 
-Three extra test binaries reuse the same `IntegrationEnv` harness but need resources CI
+Four extra test binaries reuse the same `IntegrationEnv` harness but need resources CI
 does not provide, so they live in their **own** test targets — CI only runs
 `--test integration`, so these never run automatically:
 
