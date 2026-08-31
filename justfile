@@ -110,7 +110,7 @@ pix *scenarios: build-chain
     # Release rather than debug: debug builds slow packet processing and cryptography enough to
     # distort the SSA cycle pacing the scenarios rest on. Only hoprd needs the feature named —
     # hoprd-localcluster already depends on the same pool unconditionally.
-    (cd "${src}" && nix develop -c cargo build --release -p hoprd --features strategy-pix-secp256k1)
+    (cd "${src}" && nix develop -c cargo build --release -p hoprd --features strategy-pix-test)
     (cd "${src}" && nix develop -c cargo build --release -p hoprd-localcluster)
     export HOPRD_BIN="${src}/target/release/hoprd"
     export HOPRD_LOCALCLUSTER_BIN="${src}/target/release/hoprd-localcluster"
@@ -120,13 +120,13 @@ pix *scenarios: build-chain
     # hoprd::strategy is a &str compiled in for exactly this check.
     grep -qa 'non-anonymous-secp256k1' "${HOPRD_BIN}" || {
       echo "${HOPRD_BIN} was not built with the secp256k1 deposit pool. Rebuild it:" >&2
-      echo "    cargo build --release -p hoprd --features strategy-pix-secp256k1" >&2
+      echo "    cargo build --release -p hoprd --features strategy-pix-test" >&2
       echo "(The pools are mutually exclusive and the binary carries exactly one.)" >&2
       exit 1
     }
 
     # Named explicitly rather than left to the default filter: run-binchain.sh gives each scenario
-    # a fresh chain, and the two here want different entry funding.
+    # a fresh chain, and the two here want different entry deposit budgets.
     SCENARIOS='{{scenarios}}'
     [ -n "${SCENARIOS}" ] || SCENARIOS='edgli_entry_deposits_should_be_swept_into_the_exit_safe a_session_should_close_when_the_entry_can_no_longer_deposit'
     export SCENARIOS TEST_TARGET=pix CARGO_FEATURES='--features pix'

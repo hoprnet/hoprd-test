@@ -37,7 +37,7 @@ edgli = { git = "https://github.com/hoprnet/edge-client", branch = "lukas/pix", 
 #
 # To test an unmerged hoprnet change, override this alongside `edgli` rather than committing a
 # feature branch here.
-hopr-lib = { git = "https://github.com/hoprnet/hoprnet", rev = "7b46149bc32f0cdca76fd84e52c598b881c7d643", default-features = false, features = [
+hopr-lib = { git = "https://github.com/hoprnet/hoprnet", rev = "3188d8ee6b351934f7464960a79bf199e2151940", default-features = false, features = [
   "telemetry",
 ] }
 
@@ -47,9 +47,16 @@ hopr-lib = { git = "https://github.com/hoprnet/hoprnet", rev = "7b46149bc32f0cdc
 # "the counter was never built" are the same reading. Same source and version edgli resolves, so
 # the features unify onto one copy rather than adding a second.
 #
+# "Same version" is the load-bearing half, and it moves with the `hopr-lib` rev above: 4.0.0 is
+# what edge-client resolves on that rev, and a different major here would link a second
+# `hopr-strategy` whose counters are registered in the same process but incremented by nobody. The
+# reading would be a full set of zeroes rather than an error — which is the exact conclusion
+# `tests/pix.rs` draws from a zero. 1.0.2 → 4.0.0 came with the hoprnet bump; keep the three lines
+# in step.
+#
 # Not behind the `pix` feature: an unconditional feature flag on a dependency the entry already
 # links is cheaper than a conditional one, and the counters cost nothing when PIX is off.
-hopr-strategy = { version = "1.0.2", default-features = false, features = [
+hopr-strategy = { version = "4.0.0", default-features = false, features = [
   "telemetry",
 ] }
 
@@ -68,9 +75,6 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
-# Decoding the anvil deployer key, which `tests/pix.rs` needs to leave a wxHOPR float on the
-# entry's own account — see `pix::fund_node_eoa` for why the float cannot come from its Safe.
-hex = "0.4"
 # Only pulled in by the `prof` feature (executor-starvation profiling); see
 # tests/profiling.rs. Must be built with `--cfg tokio_unstable`.
 console-subscriber = { version = "0.5", optional = true }

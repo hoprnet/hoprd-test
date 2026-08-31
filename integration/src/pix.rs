@@ -5,15 +5,25 @@
 //! return-path SURBs it spent, and sweeps the deposit into its Safe. Everything here is the Entry
 //! half plus whatever is needed to *observe* the Exit half from outside.
 //!
-//! # The two sides use different accounts
+//! # Both sides move wxHOPR through their Safe
 //!
-//! Easy to get backwards, and the whole balance assertion rests on it.
-//! `SafePayloadGenerator::transfer` builds a **direct** `HoprToken.transfer` signed by the node key
-//! — the one call it does not route through the Safe module — so the Entry's deposits leave its
-//! *node* account. The Exit's `sweep_recovered` calls `withdraw_from_signer(.., &safe_address)`, so
-//! its recoveries land in its *Safe*.
+//! It used to be an asymmetry, and this module was built around it: `SafePayloadGenerator::transfer`
+//! emitted a **direct** `HoprToken.transfer` signed by the node key, so the Entry's deposits left
+//! its *node* account while the Exit's recoveries landed in its *Safe*. hopr-types 4.0.0 routes
+//! that transfer through the Safe module's `execTransactionFromModule`, so a deposit now debits the
+//! Entry's Safe however it is signed. The node accounts still pay every transaction fee — and on
+//! the Exit, the sweep's xDai top-up — but no wxHOPR moves through them.
 //!
-//! That asymmetry is also why [`fund_node_eoa`] exists at all: see its docs.
+//! Two consequences shape everything below:
+//!
+//! - **Nothing here funds the Entry.** `hoprd-localcluster` gives each extra identity 1000 wxHOPR
+//!   and `deploy_safe` sweeps it into the Safe, so edgli boots with the float already in the
+//!   account that pays. What used to be a funding step is now a precondition to *check*, which
+//!   `tests/pix.rs` does before it measures anything.
+//! - **A run cannot be bounded by an empty account.** The Safe holds the channel stakes too, so
+//!   "the float ran out" would mean "the stakes' leftovers ran out too" and a cycle count read off
+//!   it would depend on stake arithmetic that has nothing to do with PIX.
+//!   [`entry_config`]'s `budget` states the number outright instead — see there.
 //!
 //! # Dimensions have to match the Exit's window
 //!
@@ -23,7 +33,7 @@
 //! `hoprd-localcluster --enable-pix`, which widens the window to 1 MiB. edgli's own defaults price
 //! a ~560 MB quota and would be refused outright.
 
-use crate::{Address, HoprBalance, cluster::NodeInfo};
+use crate::{HoprBalance, cluster::NodeInfo};
 use anyhow::Context as _;
 
 // ── Dimensions and pricing ───────────────────────────────────────────────────
@@ -59,6 +69,13 @@ pub const MAX_SSA_ALLOCATION: &str = "10 wxHOPR";
 /// against drifting.
 pub const MAX_DEPOSIT_TRACKING_TIME: std::time::Duration = std::time::Duration::from_secs(30);
 
+/// Window the entry's deposit budget is measured over.
+///
+/// Far longer than any scenario here, deliberately: the budget is a *total* for the run, not a
+/// rate. A window that rolled mid-run would refill it, and the scenario that ends when the budget
+/// is reached would never end.
+pub const SPEND_WINDOW: std::time::Duration = std::time::Duration::from_secs(24 * 3600);
+
 /// The generator dimensions this test runs with, as edgli's `protocol.pix`.
 ///
 /// `additional_shares` is `Some` deliberately — see [`PIX_ADDITIONAL_SHARES`].
@@ -72,13 +89,32 @@ pub fn dimensions() -> edgli::PixGlobalConfig {
     }
 }
 
-/// The entry-side settlement configuration matching [`dimensions`].
+/// The entry-side settlement configuration matching [`dimensions`], budgeted at `budget` wxHOPR.
+///
+/// # `budget` is what bounds a run
+///
+/// It becomes `max_spend_per_window`: the aggregate wxHOPR the strategy will commit to deposits
+/// within [`SPEND_WINDOW`]. A deposit that would cross it is refused with `CriteriaNotSatisfied`
+/// and the event dropped — never retried — so the Session starves and the Exit closes it on its
+/// deposit deadline. That is the same ending an empty account used to produce, which is why it can
+/// stand in for one: see the module docs for why an empty account is no longer arrangeable.
+///
+/// So a scenario picks it one of two ways. Set it *above* what the traffic can consume and it never
+/// binds — the run ends on its own cycle target, and a run that hits the budget has gone wrong.
+/// Set it *at* an exact number of cycles and it is the thing under test.
+///
+/// `min_safe_hopr_reserve` is deliberately left at upstream's zero. The entry's Safe also holds its
+/// channel stakes, and a reserve is how a production node protects them — but here the budget is
+/// already well under what the Safe holds, and a second floor would just be a second thing that
+/// could refuse a deposit for a reason no assertion names.
 #[cfg(feature = "pix")]
-pub fn entry_config() -> anyhow::Result<edgli::PixEntryConfig> {
+pub fn entry_config(budget: HoprBalance) -> anyhow::Result<edgli::PixEntryConfig> {
     Ok(edgli::PixEntryConfig {
         strategy: edgli::PixEntryStrategy {
             price_per_byte: PRICE_PER_BYTE.parse().context("PRICE_PER_BYTE")?,
             max_ssa_allocation: MAX_SSA_ALLOCATION.parse().context("MAX_SSA_ALLOCATION")?,
+            max_spend_per_window: budget,
+            spend_window: SPEND_WINDOW,
             ..Default::default()
         },
         pool: edgli::PixEntryPool {
@@ -112,64 +148,6 @@ pub fn per_cycle() -> anyhow::Result<HoprBalance> {
     Ok(price * quota_per_ssa()?)
 }
 
-// ── Funding the entry's own account ──────────────────────────────────────────
-
-/// Anvil's first account, which `blokli-contract-deployer` deploys `HoprToken` from and which
-/// therefore holds the supply. The same well-known constant `hoprd-localcluster` uses as its
-/// deployer (`localcluster/src/identity.rs`), and the chain `scripts/integration/chain-up.sh`
-/// starts is plain anvil with its default accounts.
-const ANVIL_DEPLOYER_KEY: &str = "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
-
-/// Leave `amount` wxHOPR on `target`'s own account.
-///
-/// # Why the test has to do this
-///
-/// edgli boots on a localcluster *extra identity*, and `deploy_safe` sweeps that identity's whole
-/// wxHOPR balance into its Safe during provisioning. `hoprd-localcluster` re-funds the node
-/// accounts afterwards when PIX is on (its `node_deposit_float`), but the extras loop has no
-/// equivalent — so edgli starts with a funded Safe and an empty account, and PIX deposits come off
-/// the account.
-///
-/// It cannot pay itself out of its own Safe either: a Safe-routed wxHOPR transfer is exactly the
-/// primitive that does not exist upstream, which is why deposits bypass the module in the first
-/// place. So the float has to arrive from outside, and the deployer is the only account on this
-/// chain that has any.
-///
-/// Doing it here rather than fixing the localcluster gap also makes the float a *test* constant,
-/// which the exhaustion scenario needs: it funds an exact number of cycles and asserts what
-/// happens on the next one.
-pub async fn fund_node_eoa(
-    blokli_url: &str,
-    target: Address,
-    amount: HoprBalance,
-) -> anyhow::Result<()> {
-    use edgli::hopr_lib::api::types::crypto::keypairs::Keypair as _;
-
-    let secret = hex::decode(ANVIL_DEPLOYER_KEY).context("decoding the anvil deployer key")?;
-    let deployer = edgli::ChainKeypair::from_secret(&secret)
-        .map_err(|e| anyhow::anyhow!("anvil deployer keypair: {e}"))?;
-
-    // The same connector budget the node itself runs with. At the default this submits the
-    // transfer, waits for a confirmation blokli has not indexed yet, and reports "operation timed
-    // out at the client" — for a transaction that was in fact mined.
-    let ops = edgli::make_incentive_operations(
-        edgli::BlokliEndpoint::from_optional_url(Some(blokli_url))?,
-        &deployer,
-        Some(crate::env::connector_cfg()),
-    )
-    .await
-    .context("connecting to blokli as the deployer")?;
-
-    // Named `safe_address` upstream because on-boarding only ever sends to a Safe, but it is the
-    // recipient of a plain `HoprToken.transfer` — an ordinary account is a valid destination.
-    ops.withdraw_wxhopr(target, amount)
-        .await
-        .with_context(|| format!("transferring {amount} to {target}"))?;
-
-    tracing::info!(%target, %amount, "funded the entry's own account for PIX deposits");
-    Ok(())
-}
-
 // ── Reconciling balances ─────────────────────────────────────────────────────
 
 /// Ceiling when reading a balance delta as a whole number of cycles; a bound on the division
@@ -201,9 +179,10 @@ pub fn completed_cycles(delta: HoprBalance, per_cycle: HoprBalance) -> Option<u6
 /// wxHOPR held by a cluster node's own account and by its Safe.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NodeBalances {
-    /// The node's own account. An Exit's does not move under PIX; an Entry pays deposits from it.
+    /// The node's own account. No wxHOPR moves through it under PIX on either side — deposits and
+    /// sweeps both settle through the Safe module. Read for the log line, not for an assertion.
     pub node: HoprBalance,
-    /// The Safe. Swept PIX deposits land here.
+    /// The Safe. PIX deposits are paid from it, and swept ones land in it.
     pub safe: HoprBalance,
 }
 
@@ -254,10 +233,18 @@ const KEYS_RECOVERED: &str = "hopr_strategy_pix_keys_recovered_total";
 const SWEEPS: &str = "hopr_strategy_pix_sweeps_total";
 /// Deposits the entry made.
 const DEPOSITS: &str = "hopr_strategy_pix_deposits_total";
-/// Deposits the entry could not make — an empty account shows up here.
+/// Deposits the entry attempted and could not complete — a Safe that cannot cover one shows up
+/// here, as does a transfer that failed on-chain.
 const DEPOSITS_FAILED: &str = "hopr_strategy_pix_deposits_failed_total";
 /// Deposits the entry refused to make, the computed amount being over `max_ssa_allocation`.
 const DEPOSITS_REJECTED: &str = "hopr_strategy_pix_deposits_rejected_total";
+/// Deposits the entry refused because they would cross `max_spend_per_window`.
+///
+/// A separate family from [`DEPOSITS_FAILED`] and it has to stay that way: this is the *designed*
+/// end of a budget-bounded run, whereas a failed deposit is one that was attempted and did not
+/// land. Folding them together would make "the run ended as intended" and "a transfer broke"
+/// the same reading.
+const DEPOSITS_OVER_BUDGET: &str = "hopr_strategy_pix_deposits_over_budget_total";
 
 /// One reading of the `hopr_strategy_pix_*` family.
 ///
@@ -317,6 +304,11 @@ impl PixCounters {
         self.get(DEPOSITS_REJECTED)
     }
 
+    /// Deposits refused for budget — how a budget-bounded run is supposed to end.
+    pub fn deposits_over_budget(&self) -> Option<u64> {
+        self.get(DEPOSITS_OVER_BUDGET)
+    }
+
     /// Whether any PIX family exists at all; `false` means the build has no strategy telemetry.
     pub fn observable(&self) -> bool {
         !self.families.is_empty()
@@ -356,6 +348,7 @@ impl PixCounters {
             show("deposits", self.deposits()),
             show("failed", self.deposits_failed()),
             show("rejected", self.deposits_rejected()),
+            show("over_budget", self.deposits_over_budget()),
             show("confirmed", self.deposits_confirmed()),
             show("timeout", self.deposits_timed_out()),
             show("recovered", self.keys_recovered()),
@@ -435,6 +428,7 @@ mod tests {
 # TYPE hopr_strategy_pix_deposits_total counter
 hopr_strategy_pix_deposits_total 7
 hopr_strategy_pix_deposits_failed_total 0
+hopr_strategy_pix_deposits_over_budget_total 1
 hopr_strategy_pix_deposit_tracking_total{result="confirmed"} 5
 hopr_strategy_pix_deposit_tracking_total{result="timeout"} 2
 hopr_strategy_pix_keys_recovered_total 5
@@ -491,6 +485,16 @@ hopr_packets_count{type="forwarded"} 99999
             "the log line must name it absent, got: {}",
             c.summary()
         );
+    }
+
+    /// A deposit refused for budget and one that was attempted and failed are opposite verdicts:
+    /// the first is how a budget-bounded run is meant to end, the second is a broken transfer.
+    /// Folding them into one family would make the exhaustion scenario pass on a broken entry.
+    #[test]
+    fn a_budget_refusal_should_not_be_read_as_a_failed_deposit() {
+        let c = parse(EXPOSITION);
+        assert_eq!(c.deposits_over_budget(), Some(1));
+        assert_eq!(c.deposits_failed(), Some(0));
     }
 
     /// Without `hopr-strategy/telemetry` nothing is registered. Reporting that as zero would read

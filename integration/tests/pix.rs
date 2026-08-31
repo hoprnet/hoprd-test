@@ -24,7 +24,7 @@
 //!
 //! ```bash
 //! nix develop -c cargo build --release -p hoprd -p hoprd-localcluster \
-//!   --features strategy-pix-secp256k1
+//!   --features strategy-pix-test
 //! ```
 //!
 //! # Running
@@ -37,7 +37,7 @@
 //! HOPRD_SRC=../hoprd just pix edgli_entry_deposits_should_be_swept_into_the_exit_safe
 //! ```
 //!
-//! The two run sequentially on a fresh chain each — they want different entry funding, and the
+//! The two run sequentially on a fresh chain each — they want different entry budgets, and the
 //! cluster binds fixed ports, so they cannot share one. `HOPRD_KEEP_ARTIFACTS=1` (the recipe's
 //! default) always, or the node logs are deleted at teardown and a failed run leaves nothing to
 //! read. Redirect with `>` rather than piping into `tail`: a pipeline's exit status is the last
@@ -117,18 +117,19 @@ const SEND_INTERVAL: Duration = Duration::from_millis(400);
 /// whereas offering exactly the arithmetic and being wrong reads as a broken strategy.
 const REPLY_MARGIN: u64 = 2;
 
-/// Cycles the happy path leaves the entry able to afford.
+/// Cycles the happy path budgets the entry for.
 ///
-/// Far above what the traffic can consume, deliberately: an entry that runs dry mid-run trips the
-/// Exit's kill switch, and this scenario would then be measuring the *other* one.
-const FUNDED_CYCLES: u64 = 20;
+/// Far above what the traffic can consume, deliberately: an entry that exhausts its budget mid-run
+/// trips the Exit's kill switch, and this scenario would then be measuring the *other* one. Five
+/// times [`TARGET_CYCLES`] leaves no doubt which one bound.
+const BUDGETED_CYCLES: u64 = 20;
 
-/// Cycles the exhaustion scenario funds — few, since the run is over once they are spent.
-const EXHAUSTION_FUNDED_CYCLES: u64 = 2;
+/// Cycles the exhaustion scenario budgets — few, since the run is over once they are committed.
+const EXHAUSTION_BUDGETED_CYCLES: u64 = 2;
 
 /// Cycles the exhaustion scenario offers traffic for.
 ///
-/// Must outlast the close, which lands about `EXHAUSTION_FUNDED_CYCLES` cycles of traffic plus the
+/// Must outlast the close, which lands about `EXHAUSTION_BUDGETED_CYCLES` cycles of traffic plus the
 /// Exit's `max_deposit_wait + max_ssa_delivery_time` fuse (80 s) later — call it 130 s against the
 /// ~205 s this offers. Sized in cycles rather than seconds so it tracks the pacing constants.
 const EXHAUSTION_PAYLOAD_CYCLES: u64 = 8;
@@ -207,27 +208,36 @@ async fn edgli_entry_deposits_should_be_swept_into_the_exit_safe() -> anyhow::Re
 
     let per_cycle = pix::per_cycle()?;
     let quota = pix::quota_per_ssa()?;
-    let float = per_cycle * FUNDED_CYCLES;
+    let budget = per_cycle * BUDGETED_CYCLES;
     tracing::info!(
-        %per_cycle, quota, %float, TARGET_CYCLES,
+        %per_cycle, quota, %budget, TARGET_CYCLES,
         "PIX accounting: one SSA cycle costs price_per_byte x quota"
     );
 
-    let env = IntegrationEnv::setup_pix(float).await?;
+    let env = IntegrationEnv::setup_pix(budget).await?;
     let (session, exit_addr) = env.open_pix_session(HOPS, HOPS).await?;
     let exit = node_for(&env, exit_addr)?;
     tracing::info!(exit = %exit_addr, elapsed = ?t0.elapsed(), "PIX session open");
 
-    // Snapshot after the channels are funded, so the stakes are already out of the Safes and the
-    // only subsequent movement is PIX. The two sides read *different accounts*: the entry pays
-    // deposits from its own, the Exit receives sweeps into its Safe.
+    // Both sides move wxHOPR through their Safe: a deposit debits the entry's, a sweep credits the
+    // Exit's. Sampled after the channels are funded, so the stakes are already out.
     let exit_before = pix::node_balances(&exit).await?;
     let exit_counters_before = pix::sample_exit(&exit).await?;
-    let entry_before = env.entry_node_balance().await?;
+    let entry_before = env.entry_safe_balance().await?;
     let entry_counters_before = pix::sample_entry();
     tracing::info!(
-        entry_node = %entry_before, exit_safe = %exit_before.safe,
+        entry_safe = %entry_before, exit_safe = %exit_before.safe,
         "balances before the session"
+    );
+
+    // The one precondition nothing else checks. The localcluster funds each extra identity with
+    // 1000 wxHOPR and `deploy_safe` sweeps it into the Safe, so the budget is comfortably covered —
+    // but if that ever stops being true the entry runs dry before the budget binds, and every
+    // assertion below would be reporting the wrong cause.
+    assert!(
+        entry_before >= budget,
+        "the entry's Safe holds {entry_before} against a {budget} deposit budget, so it would run \
+         dry before the budget bound and this run would end for a reason it does not test"
     );
 
     let payload = payload_for(TARGET_CYCLES);
@@ -246,12 +256,15 @@ async fn edgli_entry_deposits_should_be_swept_into_the_exit_safe() -> anyhow::Re
         await_sweeps(&exit, &exit_counters_before, TARGET_CYCLES, SETTLE_TIMEOUT).await?;
     let entry_counters = entry_counters_before.delta(&pix::sample_entry());
     let exit_after = pix::node_balances(&exit).await?;
-    let entry_after = env.entry_node_balance().await?;
+    let entry_after = env.entry_safe_balance().await?;
     let recovered = exit_after.safe - exit_before.safe;
-    let spent = entry_before - entry_after;
+    // An upper bound on PIX spend, not a measurement of it: the channel-lifecycle strategy stakes
+    // and tops up from the same Safe, and it keeps ticking through the run. Only the Exit's side
+    // has a clean enough account for an exact-multiple reading — see the assertions below.
+    let safe_drop = entry_before - entry_after;
 
     tracing::info!(
-        %recovered, %spent, elapsed = ?t0.elapsed(),
+        %recovered, %safe_drop, elapsed = ?t0.elapsed(),
         "entry counters: {} | exit counters: {}",
         entry_counters.summary(), exit_counters.summary()
     );
@@ -288,8 +301,8 @@ async fn edgli_entry_deposits_should_be_swept_into_the_exit_safe() -> anyhow::Re
         exit_counters.deposits_timed_out().unwrap_or(0),
         0,
         "the Exit gave up waiting for {:?} deposit(s) and let the PIX kill switch close the \
-         session (it confirmed {:?}). Either the entry never deposited — it pays from its own \
-         account, which starts empty — or the deposit landed outside the \
+         session (it confirmed {:?}). Either the entry never deposited — check its `deposits` and \
+         `over_budget` counters below — or the deposit landed outside the \
          max_deposit_wait + max_ssa_delivery_time window.",
         exit_counters.deposits_timed_out(),
         exit_counters.deposits_confirmed(),
@@ -332,12 +345,22 @@ async fn edgli_entry_deposits_should_be_swept_into_the_exit_safe() -> anyhow::Re
         exit_counters.summary(),
     );
 
-    // The entry funded every one of those out of its own account, and nothing else came off it.
-    // Not an equality: early-recovery pipelining legitimately funds SSAs still in flight.
-    let deposited = pix::completed_cycles(spent, per_cycle).unwrap_or_else(|| {
+    // The entry paid for every one of those, and for hardly any more.
+    //
+    // Counted from the entry's own `deposits` counter rather than divided out of its Safe balance,
+    // which is what this used to do. Both were exact while the deposit left the node's own account
+    // — nothing else touched it — but the Safe also stakes and tops up channels, and the
+    // channel-lifecycle strategy keeps ticking through the run. A whole-multiple assertion on that
+    // balance now fails on a *healthy* run as soon as one channel is topped up, and the counter is
+    // the more direct statement anyway: it counts deposits rather than inferring them from money.
+    //
+    // Not an equality against `cycles`: early-recovery pipelining legitimately funds SSAs still in
+    // flight when the sample is taken.
+    let deposited = entry_counters.deposits().unwrap_or_else(|| {
         panic!(
-            "the entry's own account paid out {spent}, which is not a whole multiple of the \
-             {per_cycle} per-SSA deposit — something other than PIX deposits moved it"
+            "the entry exposed no hopr_strategy_pix_deposits_total series — it was built without \
+             `hopr-strategy/telemetry`, so nothing counted its deposits ({})",
+            entry_counters.summary()
         )
     });
     assert!(
@@ -347,20 +370,46 @@ async fn edgli_entry_deposits_should_be_swept_into_the_exit_safe() -> anyhow::Re
          pipelining; more than that means deposits are being made for SSAs that never complete."
     );
 
-    // A failed deposit is the entry's own account running out, which the float above rules out —
-    // so a non-zero count here means something else, and the cycle counts above understate.
+    // ...and the money left the Safe, which is the account that actually pays. A lower bound
+    // rather than an equality, for the reason above: the channel strategy spends the same balance,
+    // and only ever downwards here — no channel closes in this scenario, and the entry receives no
+    // tickets to redeem. So a drop smaller than what was deposited means the deposits did not come
+    // from where PIX says they do.
+    let deposited_value = per_cycle * deposited;
+    assert!(
+        safe_drop >= deposited_value,
+        "the entry's Safe fell by {safe_drop} while the strategy reported {deposited} deposits \
+         worth {deposited_value}. Deposits settle through the Safe module, so the Safe must have \
+         paid at least that much ({})",
+        entry_counters.summary(),
+    );
+
+    // A failed deposit means one was attempted and did not land. The budget is 5x the target, and
+    // a refusal for budget is a separate counter, so neither explains a non-zero here — it is a
+    // broken transfer, and the cycle counts above understate what the run should have achieved.
     assert_eq!(
         entry_counters.deposits_failed().unwrap_or(0),
         0,
-        "the entry failed {:?} deposit(s) despite being funded for {FUNDED_CYCLES} cycles \
-         ({}); its remaining float is {}",
+        "the entry failed {:?} deposit(s) despite being budgeted for {BUDGETED_CYCLES} cycles and \
+         holding {} in its Safe ({})",
         entry_counters.deposits_failed(),
-        entry_counters.summary(),
         entry_after,
+        entry_counters.summary(),
+    );
+
+    // The budget is deliberately far above what this traffic can consume. Reaching it means the
+    // pricing or the pacing constants have drifted, and this run measured the exhaustion scenario
+    // instead of this one.
+    assert_eq!(
+        entry_counters.deposits_over_budget().unwrap_or(0),
+        0,
+        "the entry hit its {BUDGETED_CYCLES}-cycle deposit budget, so it stopped paying part-way \
+         through a scenario that is not supposed to reach it ({})",
+        entry_counters.summary(),
     );
 
     tracing::info!(
-        cycles, %recovered, %spent,
+        cycles, deposited, %recovered, %safe_drop,
         "edgli PIX entry test PASSED in {:?}", t0.elapsed()
     );
     Ok(())
@@ -368,20 +417,34 @@ async fn edgli_entry_deposits_should_be_swept_into_the_exit_safe() -> anyhow::Re
 
 /// The failure mode edge-client documents as its known limitation, made falsifiable.
 ///
-/// PIX deposits come off the entry's own account rather than its Safe, so an operator has to leave
-/// a float there and size it themselves. edge-client's README warns that a node which runs dry
-/// stops depositing and the Exit closes the Session on its deposit deadline, "with nothing logged
-/// as an error at this end". This funds exactly [`EXHAUSTION_FUNDED_CYCLES`], offers several times
-/// that much traffic, and pins what actually happens.
+/// An entry that stops being able to pay stops depositing, and the Exit closes the Session on its
+/// deposit deadline — "with nothing logged as an error at this end", as edge-client's README puts
+/// it. This budgets exactly [`EXHAUSTION_BUDGETED_CYCLES`], offers several times that much traffic,
+/// and pins what actually happens.
 ///
-/// Measured, that last clause is stronger than it sounds. The entry does not merely miss a log
-/// line — it gets no event at all. An unreliable session carries no end-of-stream, so the Exit's
-/// closure arrives as replies ceasing, and the pump ends `Idle` rather than `SessionClosed`. The
-/// only thing distinguishing "the counterparty stopped paying attention" from "the network went
-/// quiet" is on the *Exit's* side, in a counter the entry cannot see. An embedder that wants to
-/// react to running dry has to watch its own float, which is why
-/// [`IntegrationEnv::entry_node_balance`](hoprd_integration_test::IntegrationEnv::entry_node_balance)
-/// exists.
+/// # Budget, not an empty Safe
+///
+/// The entry used to be starved by funding its account with an exact number of cycles' worth. That
+/// account no longer pays: deposits settle through the Safe module, and the Safe also holds the
+/// channel stakes — so "the money ran out" would now mean "the stakes' leftovers ran out too", and
+/// the cycle count would turn on stake arithmetic that has nothing to do with PIX.
+///
+/// `max_spend_per_window` states the number outright instead. The strategy refuses the deposit that
+/// would cross it and drops the event, which starves the Session in exactly the way an empty
+/// account did — the Exit cannot tell the two apart, and its kill switch is what both scenarios
+/// exercise. The refusal lands in its own counter (`over_budget`), separate from a deposit that was
+/// attempted and failed, so the two endings stay distinguishable.
+///
+/// # What the entry does *not* learn
+///
+/// Measured, edge-client's "nothing logged" is stronger than it sounds: the entry gets no event at
+/// all. An unreliable session carries no end-of-stream, so the Exit's closure arrives as replies
+/// ceasing, and the pump ends `Idle` rather than `SessionClosed`. The only thing distinguishing "the
+/// counterparty stopped paying attention" from "the network went quiet" is on the *Exit's* side, in
+/// a counter the entry cannot see. An embedder that wants to react has to watch its own budget and
+/// balance, which is why the `hopr_strategy_pix_*` counters and
+/// [`IntegrationEnv::entry_safe_balance`](hoprd_integration_test::IntegrationEnv::entry_safe_balance)
+/// exist.
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 #[ignore = "requires PIX-enabled hoprd/hoprd-localcluster binaries and a chain"]
 async fn a_session_should_close_when_the_entry_can_no_longer_deposit() -> anyhow::Result<()> {
@@ -389,19 +452,28 @@ async fn a_session_should_close_when_the_entry_can_no_longer_deposit() -> anyhow
     let t0 = std::time::Instant::now();
 
     let per_cycle = pix::per_cycle()?;
-    let float = per_cycle * EXHAUSTION_FUNDED_CYCLES;
+    let budget = per_cycle * EXHAUSTION_BUDGETED_CYCLES;
     tracing::info!(
-        %per_cycle, %float, EXHAUSTION_FUNDED_CYCLES, EXHAUSTION_PAYLOAD_CYCLES,
-        "entry funded for a fixed number of cycles, then offered several times that much traffic"
+        %per_cycle, %budget, EXHAUSTION_BUDGETED_CYCLES, EXHAUSTION_PAYLOAD_CYCLES,
+        "entry budgeted for a fixed number of cycles, then offered several times that much traffic"
     );
 
-    let env = IntegrationEnv::setup_pix(float).await?;
+    let env = IntegrationEnv::setup_pix(budget).await?;
     let (session, exit_addr) = env.open_pix_session(HOPS, HOPS).await?;
     let exit = node_for(&env, exit_addr)?;
 
     let exit_before = pix::node_balances(&exit).await?;
     let exit_counters_before = pix::sample_exit(&exit).await?;
     let entry_counters_before = pix::sample_entry();
+    let entry_safe_before = env.entry_safe_balance().await?;
+
+    // The budget has to be what binds, so the Safe must be able to cover it — otherwise the entry
+    // runs dry first and the run ends for a reason with no assertion behind it.
+    assert!(
+        entry_safe_before >= budget,
+        "the entry's Safe holds {entry_safe_before} against a {budget} deposit budget, so the \
+         balance would bind before the budget and this scenario would not be testing the budget"
+    );
 
     let payload = payload_for(EXHAUSTION_PAYLOAD_CYCLES);
     let (mut rx, mut tx) = tokio::io::split(session);
@@ -415,21 +487,22 @@ async fn a_session_should_close_when_the_entry_can_no_longer_deposit() -> anyhow
     )
     .await?;
 
-    // The funded cycles are the most the Exit can ever sweep here, so this settles rather than
+    // The budgeted cycles are the most the Exit can ever sweep here, so this settles rather than
     // waits — it returns on the deadline if fewer completed, which is a legitimate outcome.
     let exit_counters = await_sweeps(
         &exit,
         &exit_counters_before,
-        EXHAUSTION_FUNDED_CYCLES,
+        EXHAUSTION_BUDGETED_CYCLES,
         SETTLE_TIMEOUT,
     )
     .await?;
     let entry_counters = entry_counters_before.delta(&pix::sample_entry());
     let recovered = pix::node_balances(&exit).await?.safe - exit_before.safe;
-    let remaining = env.entry_node_balance().await?;
+    let entry_safe_after = env.entry_safe_balance().await?;
 
     tracing::info!(
-        %recovered, %remaining, outcome = ?transfer.outcome, elapsed = ?t0.elapsed(),
+        %recovered, entry_safe = %entry_safe_after, outcome = ?transfer.outcome,
+        elapsed = ?t0.elapsed(),
         "entry counters: {} | exit counters: {}",
         entry_counters.summary(), exit_counters.summary()
     );
@@ -441,22 +514,38 @@ async fn a_session_should_close_when_the_entry_can_no_longer_deposit() -> anyhow
     assert!(
         transfer.arrival_pct() > 0.0,
         "the session never carried traffic at all, so its closing says nothing about the entry's \
-         float (outcome {:?}; entry {})",
+         budget (outcome {:?}; entry {})",
         transfer.outcome,
         entry_counters.summary(),
     );
 
-    // The entry genuinely ran out, rather than the session ending for some other reason.
-    assert!(
-        remaining < per_cycle,
-        "the entry still holds {remaining}, at least one more {per_cycle} deposit's worth, so it \
-         did not run dry and whatever ended the session was not exhaustion ({})",
+    // The entry committed its whole budget and no more. This is where an off-by-one in the budget
+    // arithmetic would show: the ceiling is crossed by the deposit that *would* exceed it, so
+    // exactly the budgeted number are made.
+    assert_eq!(
+        entry_counters.deposits().unwrap_or(0),
+        EXHAUSTION_BUDGETED_CYCLES,
+        "the entry made {:?} deposits against a {EXHAUSTION_BUDGETED_CYCLES}-cycle budget ({})",
+        entry_counters.deposits(),
         entry_counters.summary(),
     );
+
+    // And then it refused, for budget rather than for anything else. Separate counters, because a
+    // refusal is the designed ending here and a failure is a broken transfer — an assertion that
+    // accepted either would pass on an entry whose deposits simply do not work.
     assert!(
-        entry_counters.deposits_failed().unwrap_or(0) >= 1,
-        "the entry recorded no failed deposit ({}), so it never tried to pay for an SSA it could \
-         not afford — the payload was too short to outrun a {EXHAUSTION_FUNDED_CYCLES}-cycle float",
+        entry_counters.deposits_over_budget().unwrap_or(0) >= 1,
+        "the entry refused no deposit for budget ({}), so it never reached its \
+         {EXHAUSTION_BUDGETED_CYCLES}-cycle ceiling — the payload was too short to outrun it",
+        entry_counters.summary(),
+    );
+    assert_eq!(
+        entry_counters.deposits_failed().unwrap_or(0),
+        0,
+        "the entry failed {:?} deposit(s). The run is supposed to end by refusing one for budget, \
+         not by attempting one that does not land; its Safe still holds {} ({})",
+        entry_counters.deposits_failed(),
+        entry_safe_after,
         entry_counters.summary(),
     );
 
@@ -470,11 +559,11 @@ async fn a_session_should_close_when_the_entry_can_no_longer_deposit() -> anyhow
     // absence, and an embedder learns about it by noticing the silence.
     //
     // So the honest assertion is that delivery stopped, with the two counters either side of it
-    // saying *why* — the entry could not pay, and the Exit's kill switch fired.
+    // saying *why* — the entry would not pay, and the Exit's kill switch fired.
     assert!(
         transfer.outcome != PumpOutcome::Complete,
-        "the entry ran dry and its deposits failed, yet the whole payload still came back \
-         ({:.1}% arrival, outcome {:?}). The Exit served traffic it was never paid for, so its \
+        "the entry reached its deposit budget and refused to pay, yet the whole payload still came \
+         back ({:.1}% arrival, outcome {:?}). The Exit served traffic it was never paid for, so its \
          kill switch is not enforcing payment. (exit: {})",
         transfer.arrival_pct(),
         transfer.outcome,
@@ -487,8 +576,8 @@ async fn a_session_should_close_when_the_entry_can_no_longer_deposit() -> anyhow
         exit_counters.summary(),
     );
 
-    // And it collected exactly what it was paid for — no more, since nothing funded it, and at
-    // least one, since the first cycles did complete.
+    // And it collected exactly what it was paid for — no more, since nothing beyond the budget was
+    // ever deposited, and at least one, since the first cycles did complete.
     let cycles = pix::completed_cycles(recovered, per_cycle).unwrap_or_else(|| {
         panic!(
             "the Exit's Safe gained {recovered}, which is not a whole multiple of the {per_cycle} \
@@ -496,16 +585,16 @@ async fn a_session_should_close_when_the_entry_can_no_longer_deposit() -> anyhow
         )
     });
     assert!(
-        (1..=EXHAUSTION_FUNDED_CYCLES).contains(&cycles),
-        "the Exit swept {cycles} cycles against an entry funded for exactly \
-         {EXHAUSTION_FUNDED_CYCLES}. Above that it collected more than was ever deposited; zero \
-         means the session died before a single cycle completed, so the close was not exhaustion. \
+        (1..=EXHAUSTION_BUDGETED_CYCLES).contains(&cycles),
+        "the Exit swept {cycles} cycles against an entry budgeted for exactly \
+         {EXHAUSTION_BUDGETED_CYCLES}. Above that it collected more than was ever deposited; zero \
+         means the session died before a single cycle completed, so the close was not the budget. \
          (exit: {})",
         exit_counters.summary(),
     );
 
     tracing::info!(
-        cycles, %recovered, %remaining,
+        cycles, %recovered, entry_safe = %entry_safe_after,
         "PIX exhaustion test PASSED in {:?}", t0.elapsed()
     );
     Ok(())

@@ -177,15 +177,16 @@ impl IntegrationEnv {
         })
     }
 
-    /// As [`Self::setup`], but with the cluster configured for PIX, the entry running the PIX
-    /// deposit strategy, and `float` wxHOPR left on the entry's own account to pay deposits from.
+    /// As [`Self::setup`], but with the cluster configured for PIX and the entry running the PIX
+    /// deposit strategy, budgeted at `budget` wxHOPR of deposits.
     ///
-    /// The float is the parameter that matters. PIX deposits leave the node account, not the Safe,
-    /// and edgli's is empty by the time it boots — `deploy_safe` swept it during provisioning and
-    /// only cluster *nodes* get re-funded. See [`crate::pix::fund_node_eoa`]. Sizing it against a
-    /// cycle count is also what lets a scenario run the entry deliberately dry.
+    /// `budget` is the parameter that matters, and it is a *budget* rather than a balance: deposits
+    /// are paid by the entry's Safe, which also holds its channel stakes, so a scenario cannot
+    /// arrange for it to run dry without also deciding what the stakes leave behind. See
+    /// [`crate::pix::entry_config`] for how a scenario picks it, and [`crate::pix`] for why
+    /// nothing here funds the entry any more.
     #[cfg(feature = "pix")]
-    pub async fn setup_pix(float: crate::HoprBalance) -> anyhow::Result<Self> {
+    pub async fn setup_pix(budget: crate::HoprBalance) -> anyhow::Result<Self> {
         cluster::request_pix();
         let cluster = cluster::bring_up().await?;
         let summary = cluster.summary.clone();
@@ -197,15 +198,10 @@ impl IntegrationEnv {
             &NetTuning::local(),
             cluster_size(),
             ExtraStrategies {
-                pix: Some(crate::pix::entry_config()?),
+                pix: Some(crate::pix::entry_config(budget)?),
             },
         )
         .await?;
-
-        // After boot rather than before: nothing deposits until a Session opens, and taking the
-        // address from the running node rather than re-deriving it from the keystore means the
-        // account funded here is definitely the one that will sign the transfers.
-        crate::pix::fund_node_eoa(&summary.blokli_url, edgli.me_onchain(), float).await?;
 
         let (dest_zero_hop, dest_one_hop) = select_session_targets(&edgli).await?;
 
@@ -426,17 +422,24 @@ impl IntegrationEnv {
         Ok((session, dest))
     }
 
-    /// wxHOPR still sitting on the entry's own account — the float PIX deposits are paid from.
+    /// Unallocated wxHOPR in the entry's Safe — the float PIX deposits are paid from.
     ///
-    /// `describe_current_capacity_allocations` reports it as the `node` allocation, which is the
-    /// figure an operator running PIX is told to watch.
+    /// The Safe and not the node's own account: since hopr-types 4.0.0 a deposit settles through
+    /// the Safe module, so that is the balance that moves. `describe_current_capacity_allocations`
+    /// reports it as the `safe` allocation, which is the figure an operator running PIX is told to
+    /// watch — and "unallocated" is what makes it the right one, since wxHOPR already staked into a
+    /// channel is not available to a deposit.
+    ///
+    /// It is not a PIX-only figure. The channel-lifecycle strategy stakes and tops up from the same
+    /// Safe, so read a *decrease* here as an upper bound on PIX spend rather than as a measurement
+    /// of it; `pix::PixCounters::deposits` is what counts deposits.
     #[cfg(feature = "pix")]
-    pub async fn entry_node_balance(&self) -> anyhow::Result<crate::HoprBalance> {
+    pub async fn entry_safe_balance(&self) -> anyhow::Result<crate::HoprBalance> {
         Ok(self
             .edgli
             .describe_current_capacity_allocations()
             .await?
-            .node
+            .safe
             .stake)
     }
 
@@ -559,13 +562,14 @@ async fn boot_edgli(
     Ok((edgli, reactor))
 }
 
-/// Connector tuning every chain-touching path here needs, not just the node's own.
+/// Connector tuning every chain-touching path here needs.
 ///
-/// `pub(crate)` because a one-off connector built for a side transaction — funding the entry's
-/// account in [`crate::pix::fund_node_eoa`] — needs the same budget. Left at the default it
-/// submits the transaction, waits for a confirmation blokli has not indexed yet, and returns
-/// "operation timed out at the client" while the transfer is in fact mined.
-pub(crate) fn connector_cfg() -> BlockchainConnectorConfig {
+/// Left at the default it submits the transaction, waits for a confirmation blokli has not indexed
+/// yet, and returns "operation timed out at the client" while the transfer is in fact mined.
+///
+/// Private again since the PIX float stopped needing its own funding transaction — it used to be
+/// `pub(crate)` for the side connector that made it.
+fn connector_cfg() -> BlockchainConnectorConfig {
     BlockchainConnectorConfig {
         // Default tx-confirmation budget is too tight for blokli's SSE indexing on Anvil.
         tx_timeout_multiplier: 10,

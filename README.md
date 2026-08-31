@@ -69,12 +69,16 @@ does not provide, so they live in their **own** test targets — CI only runs
   the configuration that ships (`gnosis_vpn-client` embeds `edgli`) and which hoprd's own
   `session_pix` does not cover — that one is hoprd-Entry ↔ hoprd-Exit over the REST API. One
   scenario asserts the money reconciles: the Exit's Safe gains an exact whole multiple of
-  `price_per_byte × quota`, and the entry's own account pays out the same multiple. The other
-  pins the documented failure mode — an entry that runs out of float stops depositing, the Exit's
-  kill switch fires, and it sweeps only the cycles it was paid for. Measured, the entry gets **no
-  event at all** when that happens: an unreliable session carries no end-of-stream, so the closure
-  arrives as replies ceasing. An embedder that wants to react has to watch its own float
-  (`IntegrationEnv::entry_node_balance`), not the session. Both need a `hoprd` carrying a deposit
+  `price_per_byte × quota`, and the entry's strategy reports the same multiple in deposits. The
+  other pins the documented failure mode — an entry that reaches its deposit budget stops paying,
+  the Exit's kill switch fires, and it sweeps only the cycles it was paid for. Measured, the entry
+  gets **no event at all** when that happens: an unreliable session carries no end-of-stream, so
+  the closure arrives as replies ceasing. An embedder that wants to react has to watch its own
+  counters and Safe balance (`IntegrationEnv::entry_safe_balance`), not the session.
+  Since hopr-types 4.0.0 deposits are debited from the entry's **Safe** rather than its node
+  account, which is also where the channel stakes live — so a run is bounded by
+  `max_spend_per_window` rather than by an exact float, and the entry side is counted rather than
+  divided out of a balance. Both need a `hoprd` carrying a deposit
   pool, which is a non-default cargo feature the nix
   flake does not build, so `just pix` compiles it from `HOPRD_SRC` (default `../hoprd`) and checks
   the resulting binary for its pool marker before starting a cluster. See
