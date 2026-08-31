@@ -30,7 +30,7 @@
 //! # Running
 //!
 //! ```bash
-//! # both scenarios, ~11 min (~285 s + ~390 s, plus a chain bootstrap each)
+//! # both scenarios, ~11 min (~270 s + ~371 s, plus a chain bootstrap each)
 //! HOPRD_SRC=../hoprd HOPRD_KEEP_ARTIFACTS=1 just pix > /tmp/pix.log 2>&1
 //!
 //! # just one
@@ -46,6 +46,29 @@
 //! Cargo captures test output on a pass, so the counter summaries logged below reach the log only
 //! for a failing run. Add `TEST_ARGS=--nocapture` to see them on green — at the cost of every
 //! `sqlx` query the nodes make.
+//!
+//! # What a healthy run measures
+//!
+//! Recorded so a future reader can tell a drifted constant from a real regression. Four
+//! consecutive full runs on the stack these constants were last tuned against (hoprnet
+//! `3188d8ee`, hopr-strategy 4.0.0, blokli v0.14.0) produced the same figures each time, to the
+//! wxHOPR:
+//!
+//! | | measured | asserted |
+//! | --- | --- | --- |
+//! | happy path: cycles swept | 6 | ≥ [`TARGET_CYCLES`] = 4 |
+//! | happy path: deposits made | 7 | within [`MAX_SSAS_IN_FLIGHT`] of the swept count |
+//! | happy path: Exit Safe gained | 19.9296 wxHOPR | exactly 6 × 3.3216 |
+//! | happy path: entry Safe fell | 23.2512 wxHOPR | ≥ what the Exit gained |
+//! | happy path: failed / over-budget | 0 / 0 | both 0 |
+//! | exhaustion: deposits made | 2 | exactly [`EXHAUSTION_BUDGETED_CYCLES`] |
+//! | exhaustion: refused for budget | 5 | ≥ 1 |
+//! | exhaustion: Exit deposit timeouts | 5 | ≥ 1 |
+//! | exhaustion: cycles swept | 2 | 1..=2 |
+//!
+//! The happy path clears its cycle target by 50 % and every other margin is wider still, so a run
+//! that lands *on* a threshold is worth investigating rather than accepting. Wall-clock was 269–271 s
+//! and 370–372 s across the four.
 //!
 //! # Which build each participant runs
 //!

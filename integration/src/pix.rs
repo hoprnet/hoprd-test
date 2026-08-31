@@ -1,4 +1,4 @@
-//! PIX accounting for the edgli entry: dimensions, funding, and the counters both ends expose.
+//! PIX accounting for the edgli entry: dimensions, pricing, and the counters both ends expose.
 //!
 //! PIX pays the Exit for the traffic it delivers. The Entry deposits wxHOPR to a per-Session
 //! stealth address; the Exit reconstructs that address's key from the SSA shares carried by the
@@ -22,8 +22,9 @@
 //!   `tests/pix.rs` does before it measures anything.
 //! - **A run cannot be bounded by an empty account.** The Safe holds the channel stakes too, so
 //!   "the float ran out" would mean "the stakes' leftovers ran out too" and a cycle count read off
-//!   it would depend on stake arithmetic that has nothing to do with PIX.
-//!   [`entry_config`]'s `budget` states the number outright instead — see there.
+//!   it would depend on stake arithmetic that has nothing to do with PIX. `entry_config`'s `budget`
+//!   states the number outright instead — see there. (A code span rather than a link: this module
+//!   is ungated and that function is not.)
 //!
 //! # Dimensions have to match the Exit's window
 //!
