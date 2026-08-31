@@ -67,18 +67,19 @@ does not provide, so they live in their **own** test targets — CI only runs
   (`HOPRD_CLUSTER_SIZE` sets the default elsewhere; `hoprd-localcluster` caps at 5).
 - **PIX** runs the settlement protocol end to end with **`edgli` as the paying Entry**, which is
   the configuration that ships (`gnosis_vpn-client` embeds `edgli`) and which hoprd's own
-  `session_pix` does not cover — that one is hoprd-Entry ↔ hoprd-Exit over the REST API. One
-  scenario asserts the money reconciles: the Exit's Safe gains an exact whole multiple of
-  `price_per_byte × quota`, and the entry's strategy reports the same multiple in deposits. The
-  other pins the documented failure mode — an entry that reaches its deposit budget stops paying,
-  the Exit's kill switch fires, and it sweeps only the cycles it was paid for. Measured, the entry
-  gets **no event at all** when that happens: an unreliable session carries no end-of-stream, so
-  the closure arrives as replies ceasing. An embedder that wants to react has to watch its own
-  counters and Safe balance (`IntegrationEnv::entry_safe_balance`), not the session.
-  Since hopr-types 4.0.0 deposits are debited from the entry's **Safe** rather than its node
-  account, which is also where the channel stakes live — so a run is bounded by
-  `max_spend_per_window` rather than by an exact float, and the entry side is counted rather than
-  divided out of a balance. Both need a `hoprd` carrying a deposit
+  `session_pix` does not cover — that one is hoprd-Entry ↔ hoprd-Exit over the REST API.
+  Deposits are debited from the entry's **Safe** (hopr-types 4.0.0 routes the transfer through the
+  Safe module), which is also where the channel stakes live — so a run is bounded by the
+  strategy's `max_spend_per_window` rather than by an exact float, and the entry's side is counted
+  off `hopr_strategy_pix_*` rather than divided out of a balance two strategies spend.
+  One scenario asserts the money reconciles: the Exit's Safe gains an exact whole multiple of
+  `price_per_byte × quota`, the entry reports the same count in deposits, and the entry's Safe fell
+  by at least what the Exit's gained. The other pins the documented failure mode — an entry that
+  reaches its deposit budget stops paying, the Exit's kill switch fires, and it sweeps only the
+  cycles it was paid for. Measured, the entry gets **no event at all** when that happens: an
+  unreliable session carries no end-of-stream, so the closure arrives as replies ceasing. An
+  embedder that wants to react has to watch its own counters and Safe balance
+  (`IntegrationEnv::entry_safe_balance`), not the session. Both need a `hoprd` carrying a deposit
   pool, which is a non-default cargo feature the nix
   flake does not build, so `just pix` compiles it from `HOPRD_SRC` (default `../hoprd`) and checks
   the resulting binary for its pool marker before starting a cluster. See
@@ -130,7 +131,8 @@ The chain can come from two places:
 
 - **Binary chain (recommended, no docker):** anvil + bloklid built from the
   **blokli flake at its latest release** (`github:hoprnet/blokli/<tag>#bloklid`,
-  currently `v0.12.0`), attached via `--chain-url`. Every scenario gets a fresh
+  currently `v0.14.0`, the first with the `service_registry` contract address the
+  current `hoprd-localcluster` requires), attached via `--chain-url`. Every scenario gets a fresh
   locally-built chain. This is the reliable local path — it pins a concrete
   blokli release instead of a floating docker tag.
 - **Docker image (local alternative):** the `bloklid-anvil` image, pulled at a
@@ -203,7 +205,7 @@ For the chain, prefer the flake binary chain over the docker image — build blo
 (anvil + bloklid) from its **latest release** (Cachix-cached):
 
 ```bash
-nix build -L 'github:hoprnet/blokli/v0.12.0#bloklid' --out-link result-bloklid   # a blokli release (CI resolves the latest per run)
+nix build -L 'github:hoprnet/blokli/v0.14.0#bloklid' --out-link result-bloklid   # a blokli release (CI resolves the latest per run)
 nix build -L 'nixpkgs#foundry'                       --out-link result-foundry   # anvil
 ```
 

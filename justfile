@@ -29,7 +29,13 @@ chain_image := env_var_or_default("BLOKLID_ANVIL_IMAGE", "europe-west3-docker.pk
 
 # Blokli release for the image-free binary chain — keep at the LATEST blokli release
 # (override: `just blokli_ref=… build-chain`, or set BLOKLI_REF).
-blokli_ref := env_var_or_default("BLOKLI_REF", "v0.12.0")
+#
+# Not merely "latest for its own sake" since v0.14.0: it is the first release whose contract
+# addresses carry `service_registry`, which the on-chain service registry added to `HoprChainApi`.
+# Against v0.13.0 or earlier, `hoprd-localcluster` exits during bootstrap with "contract addresses
+# not a valid JSON: missing field `service_registry`" — before any node starts, so a run fails in
+# seconds with nothing about the test in the message.
+blokli_ref := env_var_or_default("BLOKLI_REF", "v0.14.0")
 
 # hoprd checkout carrying PIX (hoprd#91). The nix flake exposes no PIX-enabled binary — the
 # deposit pool is a non-default cargo feature — so `just pix` compiles hoprd from this tree

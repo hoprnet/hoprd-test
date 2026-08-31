@@ -370,17 +370,27 @@ async fn edgli_entry_deposits_should_be_swept_into_the_exit_safe() -> anyhow::Re
          pipelining; more than that means deposits are being made for SSAs that never complete."
     );
 
-    // ...and the money left the Safe, which is the account that actually pays. A lower bound
-    // rather than an equality, for the reason above: the channel strategy spends the same balance,
-    // and only ever downwards here — no channel closes in this scenario, and the entry receives no
-    // tickets to redeem. So a drop smaller than what was deposited means the deposits did not come
-    // from where PIX says they do.
-    let deposited_value = per_cycle * deposited;
+    // ...and the money came out of the Safe. Conservation, across the two accounts: the entry's
+    // Safe fell by at least what the Exit's Safe gained.
+    //
+    // This is the half the counter cannot state. It says deposits were *made*, not which account
+    // was debited — and the payer moving from the node account to the Safe is exactly what changed.
+    //
+    // Measured against `recovered` rather than against `deposited`, which is the tighter-looking
+    // bound and the wrong one. `deposited` includes SSAs still in flight, whose transfers the
+    // entry has counted but whose balance effect blokli may not have indexed when the read below
+    // happens; `recovered` is money the Exit has already swept, so every debit behind it is
+    // settled by construction. An equality is out for a separate reason: the channel-lifecycle
+    // strategy spends the same Safe, and in this scenario only ever downwards — it opens toward
+    // its channel target while the run proceeds, nothing closes, and the entry has no tickets to
+    // redeem.
     assert!(
-        safe_drop >= deposited_value,
-        "the entry's Safe fell by {safe_drop} while the strategy reported {deposited} deposits \
-         worth {deposited_value}. Deposits settle through the Safe module, so the Safe must have \
-         paid at least that much ({})",
+        safe_drop >= recovered,
+        "the entry's Safe fell by {safe_drop} while the Exit's gained {recovered}. Deposits settle \
+         through the Safe module, so the entry's must have paid at least what arrived. A drop of \
+         exactly 0 means it *grew* instead — a channel closed mid-run and returned its stake, which \
+         swamps the deposit signal rather than contradicting it. Anything else means the deposits \
+         were debited somewhere other than the Safe. ({})",
         entry_counters.summary(),
     );
 
