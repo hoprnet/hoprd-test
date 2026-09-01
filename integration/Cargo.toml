@@ -37,7 +37,7 @@ edgli = { git = "https://github.com/hoprnet/edge-client", branch = "lukas/pix", 
 #
 # To test an unmerged hoprnet change, override this alongside `edgli` rather than committing a
 # feature branch here.
-hopr-lib = { git = "https://github.com/hoprnet/hoprnet", rev = "3188d8ee6b351934f7464960a79bf199e2151940", default-features = false, features = [
+hopr-lib = { git = "https://github.com/hoprnet/hoprnet", rev = "87f0e07d505527253b278fc7372b9601afb921d2", default-features = false, features = [
   "telemetry",
 ] }
 
