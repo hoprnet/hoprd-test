@@ -134,6 +134,16 @@ pub struct PumpOpts {
     /// into "how much came back in a fixed window", which is the question a survival scenario is
     /// actually asking.
     pub tail_grace: Option<Duration>,
+    /// Bytes offered between `pace` sleeps; `None` uses [`IO_CHUNK`].
+    ///
+    /// `pace` alone only fixes the *average* rate — the shape is `chunk` bytes at line speed
+    /// followed by silence. That is fine for a throughput scenario, where the average is the
+    /// measurement, and wrong for one pacing a *packet* rate. PIX delivers one SSA share per
+    /// return-path SURB the exit spends, so the reply rate is what advances a cycle; at the
+    /// ~1.3 kB/s a cycle needs, a 64 KiB chunk is nearly a minute of traffic delivered as one
+    /// burst and then nothing, which both distorts share pacing and lets a cycle outrun the
+    /// deposit paying for it.
+    pub chunk: Option<usize>,
 }
 
 /// Result of one loopback round-trip.
@@ -527,10 +537,12 @@ pub async fn pump_halves(
     // measure from. Written once by the writer, read on the reader's poll cadence.
     let offer_completed_ms = std::sync::atomic::AtomicU64::new(OFFER_IN_FLIGHT);
 
+    // Zero would spin forever offering nothing, so an explicit 0 falls back rather than hanging.
+    let chunk = opts.chunk.filter(|c| *c > 0).unwrap_or(IO_CHUNK);
     let send = async {
         let mut offset = 0;
         while offset < payload.len() {
-            let end = (offset + IO_CHUNK).min(payload.len());
+            let end = (offset + chunk).min(payload.len());
             tx.write_all(&payload[offset..end]).await?;
             if let Some(d) = pace {
                 tokio::time::sleep(d).await;

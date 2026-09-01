@@ -29,7 +29,18 @@ chain_image := env_var_or_default("BLOKLID_ANVIL_IMAGE", "europe-west3-docker.pk
 
 # Blokli release for the image-free binary chain — keep at the LATEST blokli release
 # (override: `just blokli_ref=… build-chain`, or set BLOKLI_REF).
-blokli_ref := env_var_or_default("BLOKLI_REF", "v0.12.0")
+#
+# Not merely "latest for its own sake" since v0.14.0: it is the first release whose contract
+# addresses carry `service_registry`, which the on-chain service registry added to `HoprChainApi`.
+# Against v0.13.0 or earlier, `hoprd-localcluster` exits during bootstrap with "contract addresses
+# not a valid JSON: missing field `service_registry`" — before any node starts, so a run fails in
+# seconds with nothing about the test in the message.
+blokli_ref := env_var_or_default("BLOKLI_REF", "v0.14.0")
+
+# hoprd checkout carrying PIX (hoprd#91). The nix flake exposes no PIX-enabled binary — the
+# deposit pool is a non-default cargo feature — so `just pix` compiles hoprd from this tree
+# instead of using `just build`.
+hoprd_src := env_var_or_default("HOPRD_SRC", "../hoprd")
 
 data_dir := "/tmp/hopr-it"
 
@@ -92,6 +103,41 @@ return-path *scenarios: build build-chain
     SCENARIOS='{{scenarios}}'
     [ -n "${SCENARIOS}" ] || SCENARIOS='return_paths_should_spread_across_distinct_relayers session_should_survive_return_relayer_loss a_symmetric_session_should_survive_relayer_loss'
     export SCENARIOS TEST_TARGET=return_path
+    HOPRNET_SHELL='{{hoprnet}}' bash scripts/integration/run-binchain.sh
+
+# End-to-end PIX with edgli as the paying entry (binary chain; manual, NOT run in CI).
+# Builds hoprd from HOPRD_SRC (default ../hoprd) because the nix flake has no PIX binary.
+# See integration/tests/pix.rs. Optional args = test-name filters.
+pix *scenarios: build-chain
+    #!/usr/bin/env bash
+    set -euo pipefail
+    src="$(cd '{{hoprd_src}}' && pwd)"
+    echo "building PIX-enabled hoprd + hoprd-localcluster from ${src}"
+    # Release rather than debug: debug builds slow packet processing and cryptography enough to
+    # distort the SSA cycle pacing the scenarios rest on. Only hoprd needs the feature named —
+    # hoprd-localcluster already depends on the same pool unconditionally.
+    (cd "${src}" && nix develop -c cargo build --release -p hoprd --features strategy-pix-test)
+    (cd "${src}" && nix develop -c cargo build --release -p hoprd-localcluster)
+    export HOPRD_BIN="${src}/target/release/hoprd"
+    export HOPRD_LOCALCLUSTER_BIN="${src}/target/release/hoprd-localcluster"
+
+    # The deposit pool is a *build-time* choice, and a binary carrying the other one bootstraps
+    # normally and then simply never deposits — several minutes into a run. `POOL` in
+    # hoprd::strategy is a &str compiled in for exactly this check.
+    grep -qa 'non-anonymous-secp256k1' "${HOPRD_BIN}" || {
+      echo "${HOPRD_BIN} was not built with the secp256k1 deposit pool. Rebuild it:" >&2
+      echo "    cargo build --release -p hoprd --features strategy-pix-test" >&2
+      echo "(The pools are mutually exclusive and the binary carries exactly one.)" >&2
+      exit 1
+    }
+
+    # Named explicitly rather than left to the default filter: run-binchain.sh gives each scenario
+    # a fresh chain, and the two here want different entry deposit budgets.
+    SCENARIOS='{{scenarios}}'
+    [ -n "${SCENARIOS}" ] || SCENARIOS='edgli_entry_deposits_should_be_swept_into_the_exit_safe a_session_should_close_when_the_entry_can_no_longer_deposit'
+    export SCENARIOS TEST_TARGET=pix CARGO_FEATURES='--features pix'
+    # A failed PIX run is unreadable without the node logs, and they are deleted at teardown.
+    export HOPRD_KEEP_ARTIFACTS="${HOPRD_KEEP_ARTIFACTS:-1}"
     HOPRNET_SHELL='{{hoprnet}}' bash scripts/integration/run-binchain.sh
 
 # Run a single test against a fresh env (e.g. `just scenario zero_hop`).
