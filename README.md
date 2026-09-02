@@ -6,10 +6,13 @@ channels) plus a pre-funded edge identity, boots an `edgli` edge client, and
 pumps a payload through **0-hop and 1-hop UDP sessions** to the exit node's
 built-in loopback — measuring goodput and datagram loss.
 
-It runs on every merge to `main` of `hoprd` and `edge-client` (and on hoprd-test
-PRs labelled `run-integration`), on hosted `depot-ubuntu-24.04-8` runners, and
-**gates the hoprd → first-network deploy**. The chain is always the latest
-`blokli` release, built from its flake per run.
+It is the gate for the **hoprd v4 line** (`release/4.1`) against `edge-client`
+`main`, runs on a dedicated self-hosted Hetzner runner (label `hetzner`), and **gates the
+hoprd → first-network deploy**. The chain is always the latest `blokli` release,
+built from its flake per run. Today's live triggers are a manual dispatch and the
+`run-integration` label on a hoprd-test PR; the `repository_dispatch` merge hook
+is implemented here but **not yet fired** by hoprd / edge-client (see
+[`runner/README.md`](runner/README.md)).
 
 - Test crate: [`integration/`](integration/)
 - CI workflow: [`.github/workflows/integration.yaml`](.github/workflows/integration.yaml)
@@ -50,11 +53,11 @@ Three extra test binaries reuse the same `IntegrationEnv` harness but need resou
 does not provide, so they live in their **own** test targets — CI only runs
 `--test integration`, so these never run automatically:
 
-| Binary                    | What it needs                                    | Run with     |
-| ------------------------- | ------------------------------------------------ | ------------ |
-| `tests/return_path.rs`    | a 5-node cluster (more CPU than the throughput tests) | `just return-path` |
-| `tests/rotsee.rs`         | a funded Gnosis identity + exit node (`EDGLI_ROTSEE_*`) | `just rotsee` |
-| `tests/profiling.rs`      | `--features prof` + `--profile tracer` + `tokio_unstable` | `just profile` |
+| Binary                 | What it needs                                             | Run with           |
+| ---------------------- | --------------------------------------------------------- | ------------------ |
+| `tests/return_path.rs` | a 5-node cluster (more CPU than the throughput tests)     | `just return-path` |
+| `tests/rotsee.rs`      | a funded Gnosis identity + exit node (`EDGLI_ROTSEE_*`)   | `just rotsee`      |
+| `tests/profiling.rs`   | `--features prof` + `--profile tracer` + `tokio_unstable` | `just profile`     |
 
 - **Return path** reproduces the 2026-08-11 return-path break. Sessions are opened with a
   **0-hop forward and 1-hop return** path, so the only packets a cluster node forwards are
@@ -109,20 +112,21 @@ Goodput (`mbps`) is logged but not gated.
 The chain can come from two places:
 
 - **Binary chain (recommended, no docker):** anvil + bloklid built from the
-  **blokli flake at its latest release** (`github:hoprnet/blokli/<tag>#bloklid`,
-  currently `v0.12.0`), attached via `--chain-url`. Every scenario gets a fresh
-  locally-built chain. This is the reliable local path — it pins a concrete
-  blokli release instead of a floating docker tag.
+  blokli flake at its **`latest-jura`** tag (`github:hoprnet/blokli/latest-jura#bloklid`),
+  attached via `--chain-url`. Every scenario gets a fresh locally-built chain.
+  This is the path CI uses. The tag floats — blokli moves it to whatever build the
+  Jura (v4) network runs — so the build passes `--refresh`, without which nix would
+  reuse its cached revision for the tag for up to `tarball-ttl` (1h).
 - **Docker image (local alternative):** the `bloklid-anvil` image, pulled at a
-  **floating** tag (`:latest` / `:latest-rhine`) which can drift ahead of the pinned
+  **floating** tag (`:latest` / `:latest-jura`) which can drift ahead of the pinned
   `hoprd`/`edgli` and break local runs with schema skew. Prefer the binary chain
   locally; CI does not use this path.
 
 ### Quickstart (`just`)
 
 ```bash
-# recommended: binary chain (blokli from flake latest release, no docker)
-just build-chain             # bloklid + blokli-contract-deployer + anvil, from the blokli flake release
+# recommended: binary chain (blokli from flake tag latest-jura, no docker)
+just build-chain             # bloklid + blokli-contract-deployer + anvil, from the blokli flake tag
 just integration-binchain    # build hoprd, run both scenarios against a fresh flake chain per scenario
 just integration-binchain zero_hop   # one scenario
 
@@ -132,16 +136,18 @@ just unit                # fast unit tests (no cluster)
 just integration         # build binaries, preflight (pull image), run both tests
 just scenario zero_hop   # one test, fresh env
 just preflight           # docker + nix + chain-image doctor
-just ci                  # CI-equivalent: build from main/latest (or overrides)
+just ci                  # CI-equivalent: build from the v4 line / latest (or overrides)
 # fast iteration — one cluster, many runs (docker path):
 just cluster-up          # terminal 1 (blocks)
 just attach one_hop      # terminal 2
 just clean               # tear down container + temp state
 ```
 
-`just --list` shows all recipes. The blokli release is the `blokli_ref` var in the
-justfile — keep it at the latest blokli release (override: `just blokli_ref=<tag>
-build-chain`, or `BLOKLI_REF=<tag>`). Set `HOPRNET_SHELL=path:../hoprnet` to use a
+`just --list` shows all recipes. The blokli tag is the `blokli_ref` var in the
+justfile — `latest-jura`, which floats, so it needs no bumping (override: `just
+blokli_ref=<tag> build-chain`, or `BLOKLI_REF=<tag>`). The hoprd branch is the `hoprd_ref` var
+(default `release/4.1`, the v4 line — override with `just hoprd_ref=<ref> build`
+or `HOPRD_REF=<ref>`). Set `HOPRNET_SHELL=path:../hoprnet` to use a
 local checkout for the dev shell instead of the flake. The rest of this section
 documents the underlying env contract the recipes set up.
 
@@ -149,13 +155,13 @@ The test is `#[ignore]` — it needs external binaries + a container runtime.
 
 ### Prerequisites
 
-| Var                       | Required      | Meaning                                   |
-| ------------------------- | ------------- | ----------------------------------------- |
-| `HOPRD_BIN`               | managed mode  | path to a `hoprd` binary                  |
-| `HOPRD_LOCALCLUSTER_BIN`  | always        | path to a `hoprd-localcluster` binary     |
-| `HOPRD_CHAIN_IMAGE`       | managed mode  | a `bloklid-anvil` image tag               |
-| `HOPRD_CONTAINER_RUNTIME` | no            | `docker` (default), `container`, `podman` |
-| `HOPRD_CLUSTER_DATA_DIR`  | external mode | data-dir of an already-running cluster    |
+| Var                       | Required      | Meaning                                                                                                        |
+| ------------------------- | ------------- | -------------------------------------------------------------------------------------------------------------- |
+| `HOPRD_BIN`               | managed mode  | path to a `hoprd` binary                                                                                       |
+| `HOPRD_LOCALCLUSTER_BIN`  | always        | path to a `hoprd-localcluster` binary                                                                          |
+| `HOPRD_CHAIN_IMAGE`       | managed mode  | a `bloklid-anvil` image tag                                                                                    |
+| `HOPRD_CONTAINER_RUNTIME` | no            | `docker` (default), `container`, `podman`                                                                      |
+| `HOPRD_CLUSTER_DATA_DIR`  | external mode | data-dir of an already-running cluster                                                                         |
 | `HOPRD_CHAIN_URL`         | binary chain  | attach to an external blokli (e.g. `http://localhost:8080`); skips the container, replaces `HOPRD_CHAIN_IMAGE` |
 
 Docker is the only external service: the chain (anvil + blokli + contracts) runs
@@ -179,11 +185,11 @@ nix build -L github:hoprnet/hoprd#binary-hoprd-localcluster-x86_64-linux --out-l
 ```
 
 For the chain, prefer the flake binary chain over the docker image — build blokli
-(anvil + bloklid) from its **latest release** (Cachix-cached):
+(anvil + bloklid) from its floating **`latest-jura`** tag (Cachix-cached):
 
 ```bash
-nix build -L 'github:hoprnet/blokli/v0.12.0#bloklid' --out-link result-bloklid   # a blokli release (CI resolves the latest per run)
-nix build -L 'nixpkgs#foundry'                       --out-link result-foundry   # anvil
+nix build -L --refresh 'github:hoprnet/blokli/latest-jura#bloklid' --out-link result-bloklid   # --refresh: the tag moves
+nix build -L 'nixpkgs#foundry'                                     --out-link result-foundry   # anvil
 ```
 
 Only if you must use the docker path instead: `docker pull
@@ -248,11 +254,13 @@ Unit tests (cluster status parsing, no external deps): `cargo test --lib`.
 
 ## CI
 
-`pr.yaml` runs on every PR: validates the PR title (Conventional Commits) and
-checks the integration crate — `cargo fmt --check`, `cargo clippy -D warnings`,
-and `cargo test --lib` (fast unit tests; the `#[ignore]` e2e is **not**
-run here). It builds in the hoprnet dev shell on a hosted `depot` runner. Locally:
-`just lint` + `just unit`.
+`pr.yaml` runs on every PR, in three jobs split by what each one needs: the PR
+title check (Conventional Commits) and `lint` (`cargo fmt --check` +
+`cargo clippy -D warnings`) on hosted **depot** runners, and `unit`
+(`cargo test --lib`) on the self-hosted **`hetzner`** box — anything that
+_executes_ a test runs on the same machine as the throughput gate, so results are
+comparable. The `#[ignore]` e2e is **not** run here. All three build in the
+hoprnet dev shell. Locally: `just lint` + `just unit`.
 
 `integration.yaml` runs on `repository_dispatch[integration]` (fired by `hoprd` /
 `edge-client` on merge), on manual `workflow_dispatch`, and on a hoprd-test PR
@@ -260,25 +268,40 @@ labelled **`run-integration`** (to test changes to this repo against the live
 stack). Concurrency: a new push to a PR **cancels** that PR's in-progress run;
 dispatch/manual runs **stack** (shared group, never cancelled) and execute one
 after another. **No version state is stored:** the triggering project supplies its
-rev via the dispatch; the other defaults to its `main` HEAD; **blokli is always
-the latest release**, resolved per run (`gh api …/releases/latest`) and built from
-its flake. So every run tests one project's change against the current tip of the
-other and the latest blokli release. `run.sh` builds `hoprd` + `hoprd-localcluster`
-from the hoprd ref, builds the blokli chain from the release, pins `edgli` to the
-resolved edge-client sha, runs the tests against a fresh flake chain per scenario
-(`run-binchain.sh`), and notifies Zulip on red. Nothing is committed back.
+rev via the dispatch; `hoprd` otherwise defaults to the **v4 line** and
+`edge-client` to its `main` HEAD; **blokli always tracks its floating `latest-jura`
+tag**, re-resolved per run (`nix build --refresh`) and built from its flake. So
+every run tests one project's change against the current tip of the other and the
+current Jura blokli. `run.sh` builds `hoprd` + `hoprd-localcluster` from the hoprd ref, builds
+the blokli chain from the release, pins `edgli` to the resolved edge-client sha,
+runs the tests against a fresh flake chain per scenario (`run-binchain.sh`), and
+notifies Zulip on red. Nothing is committed back.
 
-Defaults are overridable via repo variables `HOPRD_REF`, `EDGLI_REF`, `BLOKLI_REF`
-(unset → main / main / latest release).
+### hoprd v4 / v5
+
+hoprd `main` is **v5**. This test targets **v4**: the integration crate pins
+`hopr-lib` to hoprnet `release/4.0`, which is also what `edge-client` `main`
+resolves, so a v5 hoprd binary would run against a v4 library set. `run.sh`
+therefore builds hoprd from `HOPRD_LINE` — **`release/4.1`**, hoprd's only v4
+branch — and rejects a dispatched hoprd rev that is not contained in it (bypass:
+`HOPRD_SKIP_LINE_CHECK=1`). hoprd's merge workflow should only dispatch from
+`release/4.1`.
+
+Defaults are overridable via repo variables `HOPRD_LINE`, `HOPRD_REF`,
+`EDGLI_REF`, `BLOKLI_REF` (unset → `release/4.1` / same / `main` /
+`latest-jura`).
 
 Manual run:
 
 ```bash
 gh workflow run integration.yaml -R hoprnet/hoprd-test \
   -f project=hoprd -f rev=<sha>          # or project=edge-client
-# empty inputs → hoprd/edge-client at main, blokli at latest release
+# empty inputs → hoprd at release/4.1, edge-client at main, blokli at latest-jura
 ```
 
-Runs on hosted `depot-ubuntu-24.04-8` runners (nix installed per run via the
-`setup-nix` action; docker is present on depot). See [`runner/README.md`](runner/README.md)
-for the repo secrets and validation steps.
+Runs on the self-hosted **`hetzner`** runner, provisioned from the gitops repo
+(`ansible/playbooks/install-github-hetzner-runner.yaml`). Nix and the `hoprnet`
+Cachix substituter must be present **on the box** — the `setup-nix` action skips
+both once nix is on PATH. See [`runner/README.md`](runner/README.md) for the
+prerequisites, the shared-box concurrency caveat, the repo secrets, and validation
+steps.

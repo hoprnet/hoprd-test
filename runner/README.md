@@ -1,16 +1,144 @@
 # Runner
 
-The integration test currently runs on **hosted `depot-ubuntu-24.04-8`** runners
-(`runs-on: depot-ubuntu-24.04-8` in `integration.yaml`) — 8 vCPUs. The onion
-encoder is CPU-bound; `-4` floods with packet-encode timeouts, so `-8` (or a
-larger / self-hosted box) is needed. Each run is an isolated
-VM: docker is preinstalled, and Nix is installed per run by the
-`hoprnet/hopr-workflows` `setup-nix` action (which also wires the `hoprnet`
-Cachix cache). Nothing to provision.
+Jobs are split by whether they **execute a test** or only compile:
 
-> A dedicated self-hosted runner (for stable throughput numbers) is a possible
-> future change — switch `runs-on` to its label and add that label to
-> `.github/actionlint.yaml`. Not used for now.
+| Job                                | Runner                 | Why                                     |
+| ---------------------------------- | ---------------------- | --------------------------------------- |
+| `pr.yaml` → `validate-pr-title`    | `depot-ubuntu-24.04`   | metadata only                           |
+| `pr.yaml` → `lint` (fmt + clippy)  | `depot-ubuntu-24.04-4` | compile-time checks, timing-insensitive |
+| `pr.yaml` → `unit`                 | **`hetzner`**          | runs tests                              |
+| `integration.yaml` → `integration` | **`hetzner`**          | the throughput gate                     |
+
+Anything that runs a test runs on the **self-hosted Hetzner box** (label
+`hetzner`), so a result here and a result there come from the same hardware. A
+dedicated machine rather than a hosted VM because the onion encoder is CPU-bound
+and the throughput thresholds only mean anything on a stable core count — on the
+hosted runners the gate used to sit on, the 4-vCPU size already flooded with
+packet-encode timeouts and 8 was the floor.
+
+Format and clippy stay on depot deliberately: they saturate every core they are
+given and would otherwise contend with a measurement, and they gain nothing from
+stable hardware.
+
+## Provisioning
+
+The boxes are provisioned out of the **gitops** repo, not here:
+`ansible/playbooks/install-github-hetzner-runner.yaml` (see `ansible/README.md`
+there). Two servers, four runner instances each — `github-hetzner-runner@1..4` —
+registered at the **org** level with the single label `hetzner`.
+
+```bash
+# gitops repo
+just install-github-hetzner-runner
+
+# on the box
+sudo journalctl -u 'github-hetzner-runner@*' -f
+sudo systemctl restart 'github-hetzner-runner@*'
+```
+
+### Prerequisites the box must satisfy
+
+Unlike a hosted VM, nothing is reinstalled per run:
+
+- **Nix, multi-user, installed on the box.** This is the one that bit us: the
+  first CI run on this runner died in 13s with
+
+  ```
+  sudo: a terminal is required to read the password
+  sudo: a password is required
+  ```
+
+  `hopr-workflows/actions/setup-nix` only skips installation when `nix` is already
+  on PATH; otherwise it falls through to `install-nix-action`, which needs root
+  that the `runner` system user does not have. Giving `runner` passwordless sudo
+  is _not_ a fix — the install would succeed once, then every later run would find
+  `command -v nix` false again (`install-nix-action` exports PATH via
+  `GITHUB_PATH`, which is per-run) and the installer would refuse because `/nix`
+  already exists.
+
+  So the hetzner jobs do not use `setup-nix` at all. They run a `Locate nix` step
+  that finds nix on PATH, or at `/nix/var/nix/profiles/default/bin` or
+  `~/.nix-profile/bin`, and fails with a pointer here if it is genuinely absent.
+  The explicit profile path matters because a multi-user install exports nix
+  through `/etc/profile.d/nix.sh`, which a **non-login** job shell never sources.
+  `setup-nix` is still used by the depot `lint` job, where it works.
+
+  The install itself belongs in the gitops role, roughly:
+
+  ```yaml
+  - name: Check whether nix is installed
+    ansible.builtin.stat:
+      path: /nix/var/nix/profiles/default/bin/nix
+    register: nix_bin
+
+  - name: Install nix (multi-user)
+    ansible.builtin.shell:
+      cmd: >-
+        curl -L https://nixos.org/nix/install
+        | sh -s -- --daemon --yes
+    when: not nix_bin.stat.exists
+
+  - name: Enable flakes and the hoprnet substituter
+    ansible.builtin.copy:
+      dest: /etc/nix/nix.conf
+      mode: "0644"
+      content: |
+        experimental-features = nix-command flakes
+        substituters = https://cache.nixos.org https://hoprnet.cachix.org
+        trusted-public-keys = cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY= hoprnet.cachix.org-1:FzIaDwgsZOy42i2h0qyQ/k9kkggzoeTWmoo/2ehEr90=
+        trusted-users = root runner
+    notify: restart nix-daemon
+  ```
+
+  The `hoprnet` key above is the live one from
+  `https://app.cachix.org/api/v1/cache/hoprnet` as of 2026-09-02; re-check it if
+  the cache is ever rotated, because a wrong key silently disables the cache
+  rather than erroring.
+
+- **The `hoprnet` Cachix substituter in `/etc/nix/nix.conf`.** The action's
+  `cachix-action` step is also skipped once nix is pre-installed, so the cache
+  has to be configured on the box or every run compiles hopr-lib from source.
+- **Disk headroom for the nix store.** Each run adds a fresh hoprd + blokli
+  closure. The workflow GCs (`nix-collect-garbage --delete-older-than 7d`) only
+  when `/nix` drops below 50 GB free, so a warm store survives the common case.
+- **Room under `~runner/.cache`** for the cargo target dirs. `actions/checkout`
+  runs `git clean -ffdx`, which deletes the gitignored `integration/target` on
+  every run — so both workflows redirect `CARGO_TARGET_DIR` to
+  `$HOME/.cache/hoprd-test/cargo-target-$RUNNER_NAME`, outside the workspace and
+  keyed per runner instance (concurrent jobs would otherwise serialise on cargo's
+  target-dir lock). Nothing prunes these; delete them by hand if the disk fills.
+
+`harden-runner` still guards the depot `lint` job but is absent from the `unit`
+job: it installs an eBPF egress monitor and needs sudo, and only supports
+GitHub-hosted runners.
+
+### Dedicating the box — two gitops changes still open
+
+A throughput number is only comparable to another number from the same idle
+machine, so the box has to be **dedicated to hoprd-test** and **run one job at a
+time**. Neither is achievable from this repo — both are gitops / org settings:
+
+1. **Restrict the runners to this repository.** They are registered at the _org_
+   level, so today any hoprnet repo can schedule onto them. The mechanism is a
+   GitHub **runner group** scoped to `hoprd-test` (Org → Settings → Actions →
+   Runner groups: limit repository access to `hoprd-test`, leave _Allow public
+   repositories_ off), not a label — a label expresses a preference, it does not
+   deny anyone. Renaming the label would also work but breaks every workflow
+   referencing it, so prefer the group.
+2. **One runner instance per box** — `github_hetzner_runner_instances: 1` in the
+   gitops role, down from 4. Four instances means up to four concurrent jobs on
+   one machine's cores. Per-workflow concurrency groups cannot fix this: they
+   serialise runs _within_ one workflow, so `pr.yaml`'s `unit` job would still run
+   alongside an `integration.yaml` measurement. One instance serialises the whole
+   machine, which is what a measurement needs; PR unit tests then queue behind a
+   60–90 minute run.
+
+Until both land: if the numbers move without a code change, check what else was
+scheduled on the box. Two concurrent chains would also collide on ports 8080/8545.
+
+Both boxes register the _same_ `hetzner` label, so a run lands on either one — a
+baseline established on one box is only a baseline for that box. If the two ever
+differ in spec, give this workflow its own label.
 
 ## Repo secrets (hoprd-test)
 
@@ -23,19 +151,56 @@ Set under Settings → Secrets and variables → Actions:
 
 The `bloklid-anvil` image is in a **public** GCP Artifact Registry repo
 (`hoprassociation/docker-images`, `allUsers` reader) — no registry credentials
-needed to pull it.
+needed to pull it. CI does not use it at all (binary chain); it is a local-only
+alternative path.
 
 Plus `HOPRD_TEST_DISPATCH_TOKEN` in **hoprd / edge-client / blokli** (Actions
 read+write on hoprd-test) so their merge workflows can trigger this one.
 
-Optional repo _variables_: `HOPRD_REF`, `EDGLI_REF`, `BLOKLID_ANVIL_IMAGE`
-(non-triggering-project defaults; unset → main/latest). There are no gate
-variables — thresholds are hardcoded in `integration/tests/integration.rs`.
+Optional repo _variables_:
+
+| Variable     | Default       | Meaning                                                               |
+| ------------ | ------------- | --------------------------------------------------------------------- |
+| `HOPRD_LINE` | `release/4.1` | hoprd release line the binaries and any dispatched rev must belong to |
+| `HOPRD_REF`  | `$HOPRD_LINE` | hoprd ref override                                                    |
+| `EDGLI_REF`  | `main`        | edge-client ref override                                              |
+| `BLOKLI_REF` | `latest-jura` | blokli tag override (the default is floating, not a release number)   |
+
+There are no gate variables — thresholds are hardcoded in
+`integration/tests/integration.rs`.
+
+## hoprd v4 / v5 split
+
+hoprd `main` is **v5**; this test targets **v4**. The integration crate pins
+`hopr-lib` to hoprnet `release/4.0` (which edge-client `main` also resolves), so
+a v5 hoprd binary would be paired with a v4 library set. `run.sh` therefore
+builds from `HOPRD_LINE` (`release/4.1` — the only v4 branch hoprd has; `4.0`
+exists as a hoprnet branch and as hoprd tags `v4.0.x`, not as a hoprd branch) and
+**rejects** a dispatched hoprd rev not contained in that line, before spending a
+build on it. Bypass with `HOPRD_SKIP_LINE_CHECK=1`.
+
+**hoprd side:** its merge workflow must only dispatch from `release/4.1`. A
+dispatch fired on a `main` merge now fails fast with
+`hoprd ref '<sha>' is not contained in 'release/4.1'` instead of running a
+mismatched stack. When v5 gets its own line, run this workflow twice with
+different `HOPRD_LINE` values rather than loosening the check.
+
+### The merge hook is not wired yet
+
+`integration.yaml` listens for `repository_dispatch[integration]`, but as of
+2026-09-02 **no** workflow in hoprd, edge-client, or blokli references hoprd-test
+— nothing fires that event, and `HOPRD_TEST_DISPATCH_TOKEN` is untested. So the
+only live triggers today are `workflow_dispatch` and the `run-integration` label.
+
+To close the loop, hoprd's `merge.yaml` needs a `repository-dispatch` step
+guarded on `github.event.pull_request.base.ref == vars.MAINTENANCE_RELEASE_BRANCH`
+(that variable is already `release/4.1`), so a v5 `main` merge does not fire a v4
+gate.
 
 ## Triggering / validating
 
 - **On a hoprd-test PR:** add the `run-integration` label → the test runs against
-  the current main/latest of all three projects.
+  the hoprd v4 line, edge-client main, and blokli `latest-jura`.
 - **Manual:** `gh workflow run integration.yaml -R hoprnet/hoprd-test`
   then `gh run watch -R hoprnet/hoprd-test --exit-status`.
 - **Simulate a merge trigger:**

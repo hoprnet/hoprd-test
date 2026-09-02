@@ -1,6 +1,10 @@
 name: PR
-# Validate PR metadata and check the integration crate (fmt, clippy, unit tests).
-# The heavy end-to-end run lives in integration.yaml (dispatch / manual only).
+# Validate PR metadata and check the integration crate. Split by what each step
+# actually needs: `fmt`/`clippy` are pure compile-time checks and run on a hosted
+# depot runner, while anything that EXECUTES a test runs on the self-hosted
+# `hetzner` box — the same machine the throughput gate uses, so a test result here
+# and one there come from the same hardware. The heavy end-to-end run lives in
+# integration.yaml. See runner/README.md.
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
@@ -34,8 +38,8 @@ jobs:
             perf
             test
           requireScope: false
-  check:
-    name: Lint & unit test
+  lint:
+    name: Format + clippy
     runs-on: depot-ubuntu-24.04-4
     timeout-minutes: 30
     steps:
@@ -63,6 +67,47 @@ jobs:
             cargo fmt --check
             cargo clippy -p hoprd-integration-test --all-targets -- -D warnings
           '
+  unit:
+    name: Unit tests
+    # On hetzner because it runs tests, not because these 52 are slow. No
+    # `harden-runner`: it installs an eBPF egress monitor and needs sudo, and only
+    # supports GitHub-hosted runners.
+    runs-on: [self-hosted, hetzner]
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      # Keep build artifacts OUT of the workspace: the checkout above runs
+      # `git clean -ffdx`, which deletes the gitignored `integration/target` every
+      # run — on a persistent box that means recompiling the whole hopr-lib dep
+      # tree each time for no reason. Under the runner's own $HOME (it owns that,
+      # unlike /opt), and keyed by $RUNNER_NAME so jobs on separate instances do
+      # not serialise on cargo's target-dir lock. Set here rather than in `env:`
+      # because the `runner` context is not available at that level.
+      - name: Point cargo at a persistent target dir
+        run: |
+          dir="${HOME}/.cache/hoprd-test/cargo-target-${RUNNER_NAME}"
+          mkdir -p "${dir}"
+          echo "CARGO_TARGET_DIR=${dir}" >> "${GITHUB_ENV}"
+      # Same as integration.yaml: `setup-nix` would try `install-nix-action`, which
+      # needs root the `runner` user does not have. Nix belongs to the box here.
+      - name: Locate nix
+        run: |
+          if command -v nix >/dev/null 2>&1; then
+            echo "nix already on PATH: $(command -v nix)"
+            exit 0
+          fi
+          for d in /nix/var/nix/profiles/default/bin "${HOME}/.nix-profile/bin"; do
+            if [ -x "${d}/nix" ]; then
+              echo "found nix in ${d}; adding to PATH"
+              echo "${d}" >> "${GITHUB_PATH}"
+              exit 0
+            fi
+          done
+          echo "::error::nix is not installed on this runner — see runner/README.md." >&2
+          exit 1
       - name: Unit tests
         run: |
           nix develop github:hoprnet/hoprnet --command bash -c '
