@@ -1,6 +1,6 @@
 # Integration throughput test — convenience recipes.
 #
-# Local quickstart (recommended — binary chain, blokli from flake tag latest-jura, no docker):
+# Local quickstart (recommended — binary chain, blokli from flake branch release/0.13, no docker):
 #   just build-chain            # build blokli(anvil+bloklid) from the flake release
 #   just integration-binchain   # build hoprd, run all scenarios against a fresh flake chain
 #   just unit                   # fast unit tests (no cluster)
@@ -13,7 +13,7 @@
 #   just cluster-up             # terminal 1: bring up a persistent cluster
 #   just attach                 # terminal 2: run scenarios against it
 #
-# CI-equivalent (build from the hoprd v4 line / blokli latest-jura via run.sh):
+# CI-equivalent (build from the hoprd v4 line / blokli release/0.13 via run.sh):
 #   just ci
 
 set shell := ["bash", "-uc"]
@@ -23,15 +23,17 @@ set shell := ["bash", "-uc"]
 hoprnet := env_var_or_default("HOPRNET_SHELL", "github:hoprnet/hoprnet")
 
 # Chain image for the DOCKER path only (override: `just chain_image=… integration`,
-# or set BLOKLID_ANVIL_IMAGE). Floating tag — can drift ahead of the pinned
-# binaries; prefer the binary chain (build-chain / integration-binchain) locally.
-chain_image := env_var_or_default("BLOKLID_ANVIL_IMAGE", "europe-west3-docker.pkg.dev/hoprassociation/docker-images/bloklid-anvil:latest-jura")
+# or set BLOKLID_ANVIL_IMAGE). NOT aligned with the v4 line: the registry has no
+# jura tag and no clean `0.13.x` tag for bloklid-anvil (only `0.13.1-commit.*` and
+# `-pr.*`), so this floating tag can drift well ahead of the pinned binaries.
+# Prefer the binary chain (build-chain / integration-binchain) locally.
+chain_image := env_var_or_default("BLOKLID_ANVIL_IMAGE", "europe-west3-docker.pkg.dev/hoprassociation/docker-images/bloklid-anvil:latest-rhine")
 
-# Blokli tag for the image-free binary chain. `latest-jura` is floating — it is
-# moved to whatever build the Jura (v4) network runs, so this stays as-is rather
-# than being bumped per release (override: `just blokli_ref=… build-chain`, or set
-# BLOKLI_REF).
-blokli_ref := env_var_or_default("BLOKLI_REF", "latest-jura")
+# Blokli ref for the image-free binary chain: the `release/0.13` branch, the line
+# the Jura (v4) network runs. A moving branch, so it needs no bumping per patch
+# release — `build-chain` passes `--refresh` to pick a moved head up (override:
+# `just blokli_ref=… build-chain`, or set BLOKLI_REF).
+blokli_ref := env_var_or_default("BLOKLI_REF", "release/0.13")
 
 # hoprd branch the binaries are built from. hoprd is split into v4 / v5: `main` is
 # v5, and this test targets v4 because the integration crate pins hoprnet
@@ -73,9 +75,9 @@ integration *filter: build preflight
     trap 'docker ps -aq --filter "ancestor={{chain_image}}" | xargs -r docker rm -f' EXIT
     nix develop {{hoprnet}} -c cargo test --manifest-path integration/Cargo.toml --test integration --no-fail-fast {{filter}} -- --include-ignored --test-threads=1
 
-# Build the image-free chain: bloklid + blokli-contract-deployer (blokli tag) and
-# anvil (nixpkgs foundry). Replaces the bloklid-anvil docker image. `--refresh` so
-# a moved `latest-jura` is picked up instead of nix's cached revision for it.
+# Build the image-free chain: bloklid + blokli-contract-deployer (blokli branch)
+# and anvil (nixpkgs foundry). Replaces the bloklid-anvil docker image. `--refresh`
+# so a moved branch head is picked up instead of nix's cached revision for it.
 build-chain:
     nix build -L --refresh 'github:hoprnet/blokli/{{blokli_ref}}#bloklid' --out-link result-bloklid
     nix build -L 'nixpkgs#foundry' --out-link result-foundry
@@ -165,7 +167,7 @@ lint:
     nix develop {{hoprnet}} -c cargo fmt --manifest-path integration/Cargo.toml --check
     nix develop {{hoprnet}} -c cargo clippy --manifest-path integration/Cargo.toml -p hoprd-integration-test --all-targets -- -D warnings
 
-# CI-equivalent: resolve refs (v4 line / main / latest-jura, or overrides), build, run via run.sh.
+# CI-equivalent: resolve refs (hoprd v4 line / edgli main / blokli 0.13, or overrides), build, run.
 ci:
     nix develop {{hoprnet}} -c bash scripts/integration/run.sh
 

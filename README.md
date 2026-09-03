@@ -112,20 +112,23 @@ Goodput (`mbps`) is logged but not gated.
 The chain can come from two places:
 
 - **Binary chain (recommended, no docker):** anvil + bloklid built from the
-  blokli flake at its **`latest-jura`** tag (`github:hoprnet/blokli/latest-jura#bloklid`),
+  blokli flake at its **`release/0.13`** branch (`github:hoprnet/blokli/release/0.13#bloklid`),
   attached via `--chain-url`. Every scenario gets a fresh locally-built chain.
-  This is the path CI uses. The tag floats — blokli moves it to whatever build the
-  Jura (v4) network runs — so the build passes `--refresh`, without which nix would
-  reuse its cached revision for the tag for up to `tarball-ttl` (1h).
-- **Docker image (local alternative):** the `bloklid-anvil` image, pulled at a
-  **floating** tag (`:latest` / `:latest-jura`) which can drift ahead of the pinned
-  `hoprd`/`edgli` and break local runs with schema skew. Prefer the binary chain
-  locally; CI does not use this path.
+  This is the path CI uses, and `release/0.13` is the line the Jura (v4) network
+  runs. It is a **moving branch**, so the build passes `--refresh`, without which
+  nix would reuse its cached revision for the branch for up to `tarball-ttl` (1h).
+  Note the branch can sit ahead of the exact build Jura deploys (branch head was
+  0.13.2 while jura-dev/prod pinned 0.13.1 on 2026-09-03).
+- **Docker image (local alternative):** the `bloklid-anvil` image at a **floating**
+  tag, which can drift ahead of the pinned `hoprd`/`edgli` and break local runs
+  with schema skew. It is also **not** v4-aligned: the registry publishes no jura
+  tag and no clean `0.13.x` tag for `bloklid-anvil` (only `0.13.1-commit.*` and
+  `-pr.*`). Prefer the binary chain locally; CI does not use this path.
 
 ### Quickstart (`just`)
 
 ```bash
-# recommended: binary chain (blokli from flake tag latest-jura, no docker)
+# recommended: binary chain (blokli from flake branch release/0.13, no docker)
 just build-chain             # bloklid + blokli-contract-deployer + anvil, from the blokli flake tag
 just integration-binchain    # build hoprd, run both scenarios against a fresh flake chain per scenario
 just integration-binchain zero_hop   # one scenario
@@ -144,8 +147,9 @@ just clean               # tear down container + temp state
 ```
 
 `just --list` shows all recipes. The blokli tag is the `blokli_ref` var in the
-justfile — `latest-jura`, which floats, so it needs no bumping (override: `just
-blokli_ref=<tag> build-chain`, or `BLOKLI_REF=<tag>`). The hoprd branch is the `hoprd_ref` var
+justfile — `release/0.13`, a moving branch, so it needs no bumping per patch
+release (override: `just blokli_ref=<ref> build-chain`, or `BLOKLI_REF=<ref>`).
+The hoprd branch is the `hoprd_ref` var
 (default `release/4.1`, the v4 line — override with `just hoprd_ref=<ref> build`
 or `HOPRD_REF=<ref>`). Set `HOPRNET_SHELL=path:../hoprnet` to use a
 local checkout for the dev shell instead of the flake. The rest of this section
@@ -185,11 +189,11 @@ nix build -L github:hoprnet/hoprd#binary-hoprd-localcluster-x86_64-linux --out-l
 ```
 
 For the chain, prefer the flake binary chain over the docker image — build blokli
-(anvil + bloklid) from its floating **`latest-jura`** tag (Cachix-cached):
+(anvil + bloklid) from its **`release/0.13`** branch (Cachix-cached):
 
 ```bash
-nix build -L --refresh 'github:hoprnet/blokli/latest-jura#bloklid' --out-link result-bloklid   # --refresh: the tag moves
-nix build -L 'nixpkgs#foundry'                                     --out-link result-foundry   # anvil
+nix build -L --refresh 'github:hoprnet/blokli/release/0.13#bloklid' --out-link result-bloklid   # --refresh: the branch moves
+nix build -L 'nixpkgs#foundry'                                      --out-link result-foundry   # anvil
 ```
 
 Only if you must use the docker path instead: `docker pull
@@ -269,10 +273,10 @@ stack). Concurrency: a new push to a PR **cancels** that PR's in-progress run;
 dispatch/manual runs **stack** (shared group, never cancelled) and execute one
 after another. **No version state is stored:** the triggering project supplies its
 rev via the dispatch; `hoprd` otherwise defaults to the **v4 line** and
-`edge-client` to its `main` HEAD; **blokli always tracks its floating `latest-jura`
-tag**, re-resolved per run (`nix build --refresh`) and built from its flake. So
-every run tests one project's change against the current tip of the other and the
-current Jura blokli. `run.sh` builds `hoprd` + `hoprd-localcluster` from the hoprd ref, builds
+`edge-client` to its `main` HEAD; **blokli always tracks the head of its
+`release/0.13` branch** — the Jura (v4) line — re-resolved per run
+(`nix build --refresh`) and built from its flake. So every run tests one project's
+change against the current tip of the other and the current 0.13 blokli. `run.sh` builds `hoprd` + `hoprd-localcluster` from the hoprd ref, builds
 the blokli chain from the release, pins `edgli` to the resolved edge-client sha,
 runs the tests against a fresh flake chain per scenario (`run-binchain.sh`), and
 notifies Zulip on red. Nothing is committed back.
@@ -289,14 +293,14 @@ branch — and rejects a dispatched hoprd rev that is not contained in it (bypas
 
 Defaults are overridable via repo variables `HOPRD_LINE`, `HOPRD_REF`,
 `EDGLI_REF`, `BLOKLI_REF` (unset → `release/4.1` / same / `main` /
-`latest-jura`).
+`release/0.13`).
 
 Manual run:
 
 ```bash
 gh workflow run integration.yaml -R hoprnet/hoprd-test \
   -f project=hoprd -f rev=<sha>          # or project=edge-client
-# empty inputs → hoprd at release/4.1, edge-client at main, blokli at latest-jura
+# empty inputs → hoprd at release/4.1, edge-client at main, blokli at release/0.13
 ```
 
 Runs on the self-hosted **`hetzner`** runner, provisioned from the gitops repo

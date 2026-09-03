@@ -3,15 +3,15 @@ name: Integration throughput test
 #   * a merge to main of hoprd / edge-client (repository_dispatch),
 #   * manual workflow_dispatch,
 #   * a hoprd-test PR labelled `run-integration` (to test changes to this repo).
-# The chain is always blokli's floating `latest-jura` tag, built from its flake
-# per run (no docker image, no blokli merge-testing).
+# The chain is always the head of blokli's `release/0.13` branch (the Jura/v4
+# line), built from its flake per run (no docker image, no merge-testing).
 on:
   repository_dispatch:
     types: [integration]
   workflow_dispatch:
     inputs:
       project:
-        description: "Triggering project (hoprd | edge-client); empty = hoprd v4 line + edge-client main, blokli latest-jura"
+        description: "Triggering project (hoprd | edge-client); empty = hoprd v4 line + edge-client main, blokli release/0.13"
         required: false
         default: ""
       rev:
@@ -40,8 +40,8 @@ jobs:
     env:
       PROJECT: ${{ github.event.client_payload.project || github.event.inputs.project }}
       OVERRIDE_REV: ${{ github.event.client_payload.rev || github.event.inputs.rev }}
-      # Defaults for the non-triggering projects (blokli always tracks its
-      # floating `latest-jura` tag, re-resolved per run).
+      # Defaults for the non-triggering projects (blokli always tracks the head
+      # of its `release/0.13` branch, re-resolved per run).
       # hoprd is split into v4 / v5: `main` is v5, and this test targets v4 (the
       # crate pins hoprnet release/4.0). HOPRD_LINE is the v4 branch the binaries
       # come from and the line a dispatched hoprd rev must belong to.
@@ -66,7 +66,7 @@ jobs:
       GH_TOKEN: ${{ github.token }}
     steps:
       - name: Checkout
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           # No step pushes; edge-client/hoprd are public so cargo/gh fetch needs no token.
           persist-credentials: false
@@ -112,6 +112,22 @@ jobs:
           done
           echo "::error::nix is not installed on this runner. It is a prerequisite of the box, not of the workflow — install it from gitops/ansible (multi-user) and put its profile bin dir on the runner user's PATH. See runner/README.md." >&2
           exit 1
+      # Nix evaluation shells out to the `git` BINARY to fetch git dependencies
+      # (hoprd's flake pulls hopr-lib from github.com/hoprnet/hoprnet), and the
+      # hoprnet dev shell does not provide one — it inherits whatever the host has.
+      # A box without git therefore fails deep inside a derivation eval with
+      # `executing "git": No such file or directory`, long after everything else
+      # looked fine. Note `actions/checkout` does NOT catch this for us: it falls
+      # back to a tarball download when git is missing, so the checkout succeeds
+      # and hides the gap. Take git from nix so this holds on any box.
+      - name: Ensure git is on PATH
+        run: |
+          if command -v git >/dev/null 2>&1; then
+            echo "git already on PATH: $(git --version)"
+            exit 0
+          fi
+          echo "git absent — taking it from nixpkgs"
+          echo "$(nix build --no-link --print-out-paths nixpkgs#git)/bin" >> "${GITHUB_PATH}"
       # Nix is pre-installed, so nothing here configures the `hoprnet` Cachix
       # substituter — it has to be in /etc/nix/nix.conf on the box. A missing one
       # does not fail, it just turns every run into a from-source hopr-lib build,

@@ -6,8 +6,8 @@
 # Version model — no stored state, no commits:
 #   * the triggering project (PROJECT) uses the rev from the dispatch;
 #   * hoprd defaults to the v4 release line (see below), edge-client to main HEAD;
-#   * blokli is ALWAYS whatever its floating `latest-jura` tag points at, built
-#     from its flake — no docker image, no unreleased-merge testing.
+#   * blokli is ALWAYS the head of its `release/0.13` branch (the Jura/v4 line),
+#     built from its flake — no docker image, no unreleased-merge testing.
 # So a hoprd/edge-client merge is tested against the current tip of the other and
 # the current Jura blokli.
 #
@@ -24,7 +24,7 @@
 #   HOPRD_LINE       hoprd release line the rev must belong to (default: release/4.1)
 #   HOPRD_REF        default hoprd ref       (default: ${HOPRD_LINE})
 #   EDGLI_REF        default edge-client ref (default: main)
-#   BLOKLI_REF       blokli tag override     (default: latest-jura, floating)
+#   BLOKLI_REF       blokli ref override     (default: release/0.13, a moving branch)
 #   HOPRD_SKIP_LINE_CHECK  set to 1 to run a hoprd rev outside HOPRD_LINE anyway
 #   NIX_SYSTEM_SUFFIX    nix output arch suffix (default: x86_64-linux)
 set -euo pipefail
@@ -41,8 +41,8 @@ EDGLI_REF="${EDGLI_REF:-main}"
 case "${PROJECT:-}" in
 hoprd) HOPRD_REF="${OVERRIDE_REV:?OVERRIDE_REV required for PROJECT=hoprd}" ;;
 edge-client) EDGLI_REF="${OVERRIDE_REV:?OVERRIDE_REV required for PROJECT=edge-client}" ;;
-blokli) echo "PROJECT=blokli: merge-testing dropped — running hoprd ${HOPRD_LINE} / edge-client main against blokli ${BLOKLI_REF:-latest-jura}" ;;
-"" | manual) echo "no PROJECT override — hoprd at ${HOPRD_LINE}, edge-client at main, blokli at ${BLOKLI_REF:-latest-jura}" ;;
+blokli) echo "PROJECT=blokli: merge-testing dropped — running hoprd ${HOPRD_LINE} / edge-client main against blokli ${BLOKLI_REF:-release/0.13}" ;;
+"" | manual) echo "no PROJECT override — hoprd at ${HOPRD_LINE}, edge-client at main, blokli at ${BLOKLI_REF:-release/0.13}" ;;
 *)
   echo "unknown PROJECT '${PROJECT}'" >&2
   exit 2
@@ -69,11 +69,18 @@ EDGLI_SHA="$(resolve_sha hoprnet/edge-client "${EDGLI_REF}")"
   exit 1
 }
 
-# blokli tracks the floating `latest-jura` tag rather than a resolved release
-# number: the tag is moved to whatever blokli build the Jura (v4) network runs, so
-# which build is current is blokli's call and not ours. Nothing to resolve here —
-# what makes it actually float is the `--refresh` on its build below.
-BLOKLI_REF="${BLOKLI_REF:-latest-jura}"
+# blokli tracks the `release/0.13` BRANCH — the line the Jura (v4) network runs,
+# agreed with the blokli team. Deliberately a moving branch and not a resolved
+# release number, so patch releases land without an edit here; `--refresh` on its
+# build below is what makes that actually take effect.
+#
+# Note there is no `latest-jura` (or any `latest-*`) git tag in blokli — those
+# names only ever existed as bloklid-anvil DOCKER tags, and this builds a flake
+# ref, which resolves against git. Note also that the branch can sit ahead of what
+# Jura actually deploys (branch head was 0.13.2 while jura-dev/prod pinned 0.13.1
+# on 2026-09-03), so a green gate here is evidence about the 0.13 line, not proof
+# about the exact deployed build.
+BLOKLI_REF="${BLOKLI_REF:-release/0.13}"
 
 # Reject a hoprd rev from the wrong side of the v4/v5 split. A merge dispatch from
 # hoprd `main` carries a v5 sha, which pairs with a v4 hopr-lib only by accident;
@@ -100,19 +107,19 @@ fi
 echo "resolved versions:"
 echo "  hoprd        = ${HOPRD_REF} (line ${HOPRD_LINE})"
 echo "  edge-client  = ${EDGLI_REF} (${EDGLI_SHA})"
-echo "  blokli       = ${BLOKLI_REF} (floating tag)"
+echo "  blokli       = ${BLOKLI_REF} (Jura/v4 line, moving branch)"
 
 # ── Build hoprd + hoprd-localcluster from the hoprd ref (Cachix-cached) ──
 echo "building hoprd binaries from ref ${HOPRD_REF} ..."
 nix build -L "github:hoprnet/hoprd/${HOPRD_REF}#binary-hoprd-${ARCH}" --out-link "${REPO_ROOT}/result-hoprd"
 nix build -L "github:hoprnet/hoprd/${HOPRD_REF}#binary-hoprd-localcluster-${ARCH}" --out-link "${REPO_ROOT}/result-localcluster"
 
-# ── Build the blokli binary chain from the tag (bloklid + deployer + anvil) ──
+# ── Build the blokli binary chain from the branch (bloklid + deployer + anvil) ──
 # `--refresh` is load-bearing: nix caches a flake ref's resolved revision for
-# `tarball-ttl` (1h by default), so without it a tag that moved inside that window
-# silently rebuilds the previous revision — which defeats the point of tracking a
-# floating tag at all.
-echo "building blokli chain from tag ${BLOKLI_REF} ..."
+# `tarball-ttl` (1h by default), so without it a branch that moved inside that
+# window silently rebuilds the previous revision — which defeats the point of
+# tracking a moving ref at all.
+echo "building blokli chain from ${BLOKLI_REF} ..."
 nix build -L --refresh "github:hoprnet/blokli/${BLOKLI_REF}#bloklid" --out-link "${REPO_ROOT}/result-bloklid"
 nix build -L "nixpkgs#foundry" --out-link "${REPO_ROOT}/result-foundry"
 

@@ -95,9 +95,33 @@ Unlike a hosted VM, nothing is reinstalled per run:
   the cache is ever rotated, because a wrong key silently disables the cache
   rather than erroring.
 
-- **The `hoprnet` Cachix substituter in `/etc/nix/nix.conf`.** The action's
-  `cachix-action` step is also skipped once nix is pre-installed, so the cache
-  has to be configured on the box or every run compiles hopr-lib from source.
+- **`git`, the actual binary.** Nix evaluation shells out to `git` to fetch git
+  dependencies (hoprd's flake pulls hopr-lib from `github.com/hoprnet/hoprnet`),
+  and the hoprnet dev shell does not provide one — it inherits the host's. A box
+  without git fails deep inside a derivation eval with
+  `executing "git": No such file or directory`. **`actions/checkout` does not
+  reveal this**: it falls back to a tarball download when git is absent, so the
+  checkout goes green and hides the gap. `integration.yaml` now takes git from
+  nixpkgs when the host has none, but installing it on the box is the better fix —
+  a CI runner without git is a trap for every future workflow.
+- **The HOPR Cachix substituters in `/etc/nix/nix.conf`** (`hoprd` _and_
+  `hoprnet` — `setup-nix` derives the cache name from the repo basename, so the
+  two repos publish to two caches). The action's `cachix-action` step is skipped
+  once nix is pre-installed, so these have to be on the box; they cannot be
+  supplied from the workflow, because the nix daemon ignores substituters offered
+  by an untrusted client. Both caches are public, so **no auth token is
+  involved** — a Cachix token is a _push_ credential, and nothing here pushes.
+
+  Do not expect this to speed up the hoprd build. Measured 2026-09-03 with
+  `nix build --dry-run` against hoprd `release/4.1`
+  `packages.x86_64-linux.binary-hoprd-x86_64-linux`: **1015 derivations built,
+  201 fetched — identical with and without both HOPR caches.** Neither cache
+  carries hoprd's x86_64-linux musl outputs (nor `main`'s, nor the
+  `hoprd-deps` cargoArtifacts). So the caches help the shared nixpkgs and
+  dev-shell closure only, and hoprd compiles from source either way. Worth
+  configuring anyway — free, and it pays off the moment hoprd's CI publishes
+  those paths, which is the real fix if these builds need to be fast.
+
 - **Disk headroom for the nix store.** Each run adds a fresh hoprd + blokli
   closure. The workflow GCs (`nix-collect-garbage --delete-older-than 7d`) only
   when `/nix` drops below 50 GB free, so a warm store survives the common case.
@@ -159,12 +183,12 @@ read+write on hoprd-test) so their merge workflows can trigger this one.
 
 Optional repo _variables_:
 
-| Variable     | Default       | Meaning                                                               |
-| ------------ | ------------- | --------------------------------------------------------------------- |
-| `HOPRD_LINE` | `release/4.1` | hoprd release line the binaries and any dispatched rev must belong to |
-| `HOPRD_REF`  | `$HOPRD_LINE` | hoprd ref override                                                    |
-| `EDGLI_REF`  | `main`        | edge-client ref override                                              |
-| `BLOKLI_REF` | `latest-jura` | blokli tag override (the default is floating, not a release number)   |
+| Variable     | Default        | Meaning                                                                |
+| ------------ | -------------- | ---------------------------------------------------------------------- |
+| `HOPRD_LINE` | `release/4.1`  | hoprd release line the binaries and any dispatched rev must belong to  |
+| `HOPRD_REF`  | `$HOPRD_LINE`  | hoprd ref override                                                     |
+| `EDGLI_REF`  | `main`         | edge-client ref override                                               |
+| `BLOKLI_REF` | `release/0.13` | blokli ref override (default is a moving branch, not a release number) |
 
 There are no gate variables — thresholds are hardcoded in
 `integration/tests/integration.rs`.
@@ -200,7 +224,7 @@ gate.
 ## Triggering / validating
 
 - **On a hoprd-test PR:** add the `run-integration` label → the test runs against
-  the hoprd v4 line, edge-client main, and blokli `latest-jura`.
+  the hoprd v4 line, edge-client main, and blokli `release/0.13`.
 - **Manual:** `gh workflow run integration.yaml -R hoprnet/hoprd-test`
   then `gh run watch -R hoprnet/hoprd-test --exit-status`.
 - **Simulate a merge trigger:**
