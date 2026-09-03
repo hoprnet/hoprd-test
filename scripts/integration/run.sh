@@ -127,14 +127,29 @@ nix build -L "nixpkgs#foundry" --out-link "${REPO_ROOT}/result-foundry"
 echo "pinning edgli to ${EDGLI_SHA} ..."
 python3 - "$CRATE_CARGO" "$EDGLI_SHA" <<'PY'
 import re, sys
+
 path, rev = sys.argv[1], sys.argv[2]
 src = open(path).read()
-new, n = re.subn(r'(edgli\s*=\s*\{[^}]*?\brev\s*=\s*")[0-9a-f]{7,40}(")',
-                 rf'\g<1>{rev}\g<2>', src, count=1)
+
+# The committed manifest pins edgli by BRANCH (`branch = "main"`) on purpose, so the
+# default does not drift behind what CI tests. Pinning here therefore has to *replace
+# the branch key with a rev*, not edit an existing rev — an earlier version of this
+# only handled `rev = "<sha>"` and so could never match the committed state.
+# Accept whichever key the stanza carries so a repeat run over an already-pinned
+# manifest works too.
+stanza = re.search(r'^edgli\s*=\s*\{.*?\}', src, re.S | re.M)
+if not stanza:
+    sys.exit(f"run.sh: no `edgli = {{ ... }}` dependency stanza in {path} — "
+             "refusing to run against a stale pin")
+
+pinned, n = re.subn(r'\b(?:branch|rev|tag)\s*=\s*"[^"]*"', f'rev = "{rev}"',
+                    stanza.group(0), count=1)
 if n == 0:
-    sys.exit(f"run.sh: no edgli rev entry matched in {path} — the dependency "
-             "stanza changed shape; refusing to run against a stale pin")
-open(path, 'w').write(new)
+    sys.exit(f"run.sh: the edgli stanza in {path} carries no branch/rev/tag to "
+             "pin — refusing to run against a stale pin")
+
+open(path, 'w').write(src[: stanza.start()] + pinned + src[stanza.end() :])
+print(f"  edgli pinned: {pinned.splitlines()[0]}")
 PY
 (cd "${REPO_ROOT}/integration" && cargo update -p edgli)
 
