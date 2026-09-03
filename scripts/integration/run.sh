@@ -109,10 +109,33 @@ echo "  hoprd        = ${HOPRD_REF} (line ${HOPRD_LINE})"
 echo "  edge-client  = ${EDGLI_REF} (${EDGLI_SHA})"
 echo "  blokli       = ${BLOKLI_REF} (Jura/v4 line, moving branch)"
 
-# ── Build hoprd + hoprd-localcluster from the hoprd ref (Cachix-cached) ──
+# ── Build everything, keeping the build chatter off the console ──
+# `nix build -L` emits every derivation's build log: ~20k lines for one run, which
+# buries the few dozen lines anyone actually reads. Keep `-L` (the detail is what
+# makes a failed build diagnosable) but send it to a file, print one line per
+# build, and dump the tail only when a build fails. BUILD_LOG is picked up by the
+# workflow and uploaded as an artifact, so the full detail is still one click away.
+BUILD_LOG="${BUILD_LOG:-${REPO_ROOT}/nix-build.log}"
+: >"${BUILD_LOG}"
+
+nix_build() { # description, then `nix build` arguments
+  local what="$1"
+  shift
+  echo "  building ${what} ..."
+  {
+    echo
+    echo "═══ ${what} ═══"
+  } >>"${BUILD_LOG}"
+  if ! nix build "$@" >>"${BUILD_LOG}" 2>&1; then
+    echo "nix build failed: ${what} — last 80 lines of ${BUILD_LOG}:" >&2
+    tail -80 "${BUILD_LOG}" >&2
+    return 1
+  fi
+}
+
 echo "building hoprd binaries from ref ${HOPRD_REF} ..."
-nix build -L "github:hoprnet/hoprd/${HOPRD_REF}#binary-hoprd-${ARCH}" --out-link "${REPO_ROOT}/result-hoprd"
-nix build -L "github:hoprnet/hoprd/${HOPRD_REF}#binary-hoprd-localcluster-${ARCH}" --out-link "${REPO_ROOT}/result-localcluster"
+nix_build "hoprd" -L "github:hoprnet/hoprd/${HOPRD_REF}#binary-hoprd-${ARCH}" --out-link "${REPO_ROOT}/result-hoprd"
+nix_build "hoprd-localcluster" -L "github:hoprnet/hoprd/${HOPRD_REF}#binary-hoprd-localcluster-${ARCH}" --out-link "${REPO_ROOT}/result-localcluster"
 
 # ── Build the blokli binary chain from the branch (bloklid + deployer + anvil) ──
 # `--refresh` is load-bearing: nix caches a flake ref's resolved revision for
@@ -120,8 +143,8 @@ nix build -L "github:hoprnet/hoprd/${HOPRD_REF}#binary-hoprd-localcluster-${ARCH
 # window silently rebuilds the previous revision — which defeats the point of
 # tracking a moving ref at all.
 echo "building blokli chain from ${BLOKLI_REF} ..."
-nix build -L --refresh "github:hoprnet/blokli/${BLOKLI_REF}#bloklid" --out-link "${REPO_ROOT}/result-bloklid"
-nix build -L "nixpkgs#foundry" --out-link "${REPO_ROOT}/result-foundry"
+nix_build "bloklid + deployer" -L --refresh "github:hoprnet/blokli/${BLOKLI_REF}#bloklid" --out-link "${REPO_ROOT}/result-bloklid"
+nix_build "anvil (foundry)" -L "nixpkgs#foundry" --out-link "${REPO_ROOT}/result-foundry"
 
 # ── Pin edgli to the resolved sha and refresh the lockfile ──
 echo "pinning edgli to ${EDGLI_SHA} ..."

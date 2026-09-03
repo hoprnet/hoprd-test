@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-use edgli::hopr_lib::exports::transport::HoprSession;
+use edgli::hopr_lib::exports::transport::{HoprSession, SESSION_MTU};
 use sha2::{Digest, Sha256};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -320,7 +320,25 @@ impl Transfer {
     }
 }
 
-const IO_CHUNK: usize = 64 * 1024;
+/// Bytes handed to the session per `write_all`.
+///
+/// Bounded by the largest datagram a `NoDelay` session accepts, not by a round 64 KiB.
+/// hoprnet #8358 made `NoDelay` imply datagram-boundary preservation on stateless sessions:
+/// each write becomes exactly one frame, and `segment_into` rejects a frame needing more than
+/// `SeqIndicator::MAX` segments of `SESSION_MTU` bytes — `SeqIndicator::try_from` returns
+/// `GeneralError::InvalidInput`, which surfaces as "input argument to the function is invalid".
+/// At the current 1020-byte MTU a 64 KiB write needs 65 segments, so every send failed
+/// outright: the session established, then nothing was ever transmitted (`outcome
+/// NeverStarted`, 0% arrival, on both hop counts).
+///
+/// The multiplier is 63, not 64. Upstream's doc comment says a datagram "may be as large as
+/// `64 * SESSION_MTU`", but `SeqIndicator::MAX` IS 63 and `try_from` rejects anything above it,
+/// so 64 segments is already one too many. Confirmed by A/B on one machine at CI's exact
+/// dependency revisions: `64 * SESSION_MTU` reproduces the 0% failure, `63 * SESSION_MTU` passes.
+///
+/// `SeqIndicator` is not re-exported through hopr-lib, so 63 is spelled out here; `SESSION_MTU`
+/// is imported, so this still tracks a packet-size change.
+const IO_CHUNK: usize = 63 * SESSION_MTU;
 
 /// Per-chunk delay to cap the send rate at `HOPRD_PUMP_MBPS` MB/s. Blasting a large
 /// payload saturates the node's rayon packet pool on CPU-constrained CI runners
@@ -746,6 +764,13 @@ pub async fn pump_halves(
 ///
 /// A read timeout is logged rather than returned as an error, so the profiling run
 /// still completes and writes its trace even when the payload stalls mid-flight.
+///
+/// **Broken against hoprnet #8358 for payloads over `IO_CHUNK`.** That change made
+/// `NoDelay` imply datagram-boundary preservation, so this single `write_all` is offered
+/// as one datagram and rejected once it exceeds 64 segments (see [`IO_CHUNK`]). Chunking it
+/// is not the fix — the unbroken write is the anti-pattern being measured — so reviving this
+/// harness needs either a smaller payload or a session without `NoDelay`. Only reachable
+/// from the `prof`-gated, `#[ignore]`d `tests/profiling.rs`, so CI is unaffected.
 pub async fn pump_continuous(
     session: HoprSession,
     payload: &[u8],

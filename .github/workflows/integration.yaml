@@ -49,7 +49,17 @@ jobs:
       HOPRD_REF: ${{ vars.HOPRD_REF }}
       EDGLI_REF: ${{ vars.EDGLI_REF }}
       BLOKLI_REF: ${{ vars.BLOKLI_REF }}
-      RUST_LOG: info,edgli=debug
+      # Narrow on purpose. At `info,edgli=debug` a two-scenario run emitted ~6900
+      # lines to surface ~44 useful ones; the whole hopr-lib/edgli stack narrates
+      # every packet. `hoprd_integration_test` is where the measurements live
+      # (pump.rs / session_metrics.rs), and `warn` still lets the stack speak up
+      # when something is actually wrong. Node logs are unaffected — localcluster
+      # always writes those to `hoprd_<i>.log`, and they are uploaded on failure.
+      RUST_LOG: warn,hoprd_integration_test=info
+      # Without this libtest captures a PASSING test's output, so a green run would
+      # show no measurements at all — the one thing worth reading. Safe to enable
+      # only because RUST_LOG above is narrow.
+      TEST_ARGS: --nocapture
       # Everything here drives nix through `nix build` / `nix develop`, both of
       # which are gated behind the `nix-command` and `flakes` experimental flags.
       # Set them per-job rather than relying on `/etc/nix/nix.conf`: these are
@@ -150,6 +160,22 @@ jobs:
           esac
       - name: Resolve versions, build stack, run test
         run: nix develop github:hoprnet/hoprnet --command bash scripts/integration/run.sh
+      # The console now carries a summary; this is where the detail lives when a run
+      # goes red. Only on failure, so a green run stores nothing.
+      - name: Upload logs
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: integration-logs-${{ github.run_id }}-${{ github.run_attempt }}
+          # hoprd_<i>.log lives under the per-run cluster dir; the chain logs under
+          # the chain data dir; nix-build.log next to the checkout.
+          path: |
+            nix-build.log
+            /tmp/hopr-chain/*.log
+            /tmp/hoprd-it-*/**/*.log
+            /tmp/hopr-nodes/**/*.log
+          if-no-files-found: warn
+          retention-days: 14
       - name: Notify failure (Zulip)
         if: failure()
         uses: zulip/github-actions-zulip/send-message@bd8ec52de371d139ae8313661b7d8318c19266aa # v2.0.1
