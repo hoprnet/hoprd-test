@@ -15,6 +15,11 @@ concurrency:
   cancel-in-progress: true
 env:
   CARGO_TERM_COLOR: always
+  # `nix develop` is gated behind these experimental flags. Client-side settings,
+  # so setting them here keeps the jobs working regardless of what the runner's
+  # /etc/nix/nix.conf says — see runner/README.md.
+  NIX_CONFIG: |
+    extra-experimental-features = nix-command flakes
 jobs:
   validate-pr-title:
     name: Validate title

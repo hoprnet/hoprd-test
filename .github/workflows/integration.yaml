@@ -50,6 +50,17 @@ jobs:
       EDGLI_REF: ${{ vars.EDGLI_REF }}
       BLOKLI_REF: ${{ vars.BLOKLI_REF }}
       RUST_LOG: info,edgli=debug
+      # Everything here drives nix through `nix build` / `nix develop`, both of
+      # which are gated behind the `nix-command` and `flakes` experimental flags.
+      # Set them per-job rather than relying on `/etc/nix/nix.conf`: these are
+      # client-side settings, so this keeps the workflow working on any box whose
+      # nix.conf we do not control. (The Cachix substituter cannot be done this
+      # way — the daemon ignores substituters from an untrusted client — so that
+      # one genuinely has to live in nix.conf; see the check step below.)
+      # `extra-` so this appends to whatever nix.conf already enables rather than
+      # replacing the list.
+      NIX_CONFIG: |
+        extra-experimental-features = nix-command flakes
       # run.sh resolves the edge-client + blokli refs via `gh api`; authenticate it
       # (works unauthenticated on the public repos too, but dodges the 60/hr IP limit).
       GH_TOKEN: ${{ github.token }}
@@ -108,10 +119,17 @@ jobs:
       - name: Check the hoprnet substituter is configured
         run: |
           nix --version
-          subs=$(nix config show substituters 2>/dev/null || nix show-config substituters 2>/dev/null || true)
+          # Do NOT swallow stderr here. `nix config show` is itself a nix-command
+          # subcommand, so when that feature was disabled this printed an empty
+          # list and the check below reported "substituter absent" — which was a
+          # guess dressed up as a finding. Distinguish the two cases explicitly.
+          if ! subs=$(nix config show substituters 2>&1); then
+            echo "::warning::could not read nix substituters, so the cache state is unknown: ${subs}"
+            exit 0
+          fi
           echo "substituters: ${subs}"
           case "${subs}" in
-          *hoprnet*) ;;
+          *hoprnet*) echo "hoprnet cache present" ;;
           *) echo "::warning::hoprnet Cachix substituter absent — this run will compile hopr-lib from source. Configure it in /etc/nix/nix.conf on the runner (see runner/README.md)." ;;
           esac
       - name: Resolve versions, build stack, run test
