@@ -4,7 +4,9 @@ name: Integration throughput test
 #     merging to main — and by a `run-integration` label on a PR in any of them
 #     (all via workflow_dispatch / repository_dispatch from those repos),
 #   * manual workflow_dispatch,
-#   * a hoprd-test PR labelled `run-integration` (to test changes to this repo).
+#   * the MERGE QUEUE for this repo's own `main` — so a change here cannot land
+#     without the test passing, whether or not anyone remembered the label,
+#   * a hoprd-test PR labelled `run-integration` (to run it before queueing).
 # Each triggering project supplies its own rev; the other two use the defaults in
 # scripts/integration/run.sh.
 on:
@@ -32,14 +34,22 @@ on:
         default: ""
   pull_request:
     types: [labeled, synchronize, reopened]
+  # The gate for this repo's own changes. Without it a PR here runs the test only
+  # when someone applies `run-integration`, so an unlabelled PR could change the
+  # harness, the thresholds or the scripts and merge without ever running it.
+  # GitHub asks for checks on the queue candidate (this PR merged into `main`), and
+  # the job below already admits any non-`pull_request` event.
+  merge_group:
+    types: [checks_requested]
+# Uniform indentation on purpose: `>-` only folds lines at the SAME indent as the
+# first one, so an indented continuation would leave real newlines in this string.
 run-name: >-
-  ${{ inputs.marker != '' && format('Integration [{0}]', inputs.marker)
-
-      || (github.event_name == 'repository_dispatch' && format('Integration ({0} {1})', github.event.client_payload.project, github.event.client_payload.rev)
-      || 'Integration throughput test') }}
+  ${{ inputs.marker != '' && format('Integration [{0}]', inputs.marker) || (github.event_name == 'repository_dispatch' && format('Integration ({0} {1})', github.event.client_payload.project, github.event.client_payload.rev) || (github.event_name == 'merge_group' && format('Integration (merge queue {0})', github.event.merge_group.head_sha) || 'Integration throughput test')) }}
 # PR events: one group per PR, cancel-in-progress (a new push supersedes the
-# previous run of that PR). Dispatch/manual: a single shared group that never
-# cancels, so those runs stack and execute one after another.
+# previous run of that PR). Dispatch/manual/merge-queue: a single shared group that
+# never cancels, so those runs stack and execute one after another. Merge-queue runs
+# must NOT be cancellable — cancelling one fails the queue entry — and they share the
+# group deliberately, since the runner executes one job at a time anyway.
 concurrency:
   group: ${{ github.event_name == 'pull_request' && format('integration-pr-{0}', github.event.pull_request.number) || 'integration' }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -193,12 +203,16 @@ jobs:
           PR_URL: ${{ github.event.pull_request.html_url }}
           PR_REF: ${{ github.event.pull_request.head.ref }}
           MARKER: ${{ inputs.marker }}
+          MQ_SHA: ${{ github.event.merge_group.head_sha }}
         run: |
           # Keyed on what was actually supplied rather than on the event name. The
           # upstream gates arrive as `workflow_dispatch` (that is the only trigger
           # that can carry a marker and so be waited on), so switching on the event
           # would have labelled every hoprd merge gate a "manual run".
-          if [ "${EVENT}" = "pull_request" ]; then
+          if [ "${EVENT}" = "merge_group" ]; then
+            # This repo's own merge queue: the candidate is this PR merged into main.
+            echo "TRIGGER=hoprd-test merge queue ([\`${MQ_SHA:0:8}\`](https://github.com/${GITHUB_REPOSITORY}/commit/${MQ_SHA}))"
+          elif [ "${EVENT}" = "pull_request" ]; then
             # A PR in THIS repo.
             echo "TRIGGER=hoprd-test PR [#${PR_NUMBER}](${PR_URL}) (\`${PR_REF}\`)"
           elif [ -n "${PROJECT}" ] && [ -n "${OVERRIDE_REV}" ]; then

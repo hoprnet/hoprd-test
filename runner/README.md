@@ -211,12 +211,13 @@ different `HOPRD_LINE` values rather than loosening the check.
 
 ### How the upstream repos call in
 
-| Repo        | When                                                       | Behaviour                                                                               |
-| ----------- | ---------------------------------------------------------- | --------------------------------------------------------------------------------------- |
-| hoprd       | merge to `vars.MAINTENANCE_RELEASE_BRANCH` (`release/4.1`) | **Blocks.** Runs before `build-docker`, so a red gate means no image, no tag, no deploy |
-| edge-client | merge to `main`                                            | Fire-and-forget; failure reported by the Zulip message below                            |
-| blokli      | merge to `release/0.13`                                    | Fire-and-forget; same                                                                   |
-| all three   | PR labelled `run-integration`                              | Waits, so the verdict is a check on that PR                                             |
+| Repo              | When                                                       | Behaviour                                                                               |
+| ----------------- | ---------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| hoprd             | merge to `vars.MAINTENANCE_RELEASE_BRANCH` (`release/4.1`) | **Blocks.** Runs before `build-docker`, so a red gate means no image, no tag, no deploy |
+| edge-client       | merge to `main`                                            | Fire-and-forget; failure reported by the Zulip message below                            |
+| blokli            | merge to `release/0.13`                                    | Fire-and-forget; same                                                                   |
+| all three         | PR labelled `run-integration`                              | Waits, so the verdict is a check on that PR                                             |
+| hoprd-test itself | merge queue to `main`                                      | Blocks its own merges — see below                                                       |
 
 Two mechanisms, deliberately:
 
@@ -240,6 +241,25 @@ the gate at `main` (v5) would fail every merge. Keying on
 `run.sh` accepts `identical`/`behind`/`ahead` and rejects only `diverged` — without
 `ahead` the label-triggered PR runs, which is exactly what the upstream repos fire,
 would all be refused.
+
+### This repo gates its own changes too
+
+`integration.yaml` also runs on `merge_group` for hoprd-test's own `main`. The
+`run-integration` label is opt-in, so without a queue gate an unlabelled PR could
+change the harness, the thresholds or the scripts and merge without the test ever
+running — the one repo where that matters most. The job already admitted any
+non-`pull_request` event, so only the trigger had to be added.
+
+Merge-queue runs share the non-cancelling `integration` concurrency group with the
+dispatch runs. That is deliberate: cancelling a queue run fails the queue entry, and
+the runner executes one job at a time anyway. The cost is that a candidate can wait
+behind an upstream gate run, so keep the queue's max wait comfortably above the
+~30-40 minute runtime.
+
+**hoprd-test has no rulesets at all** as of 2026-09-04 — `main` is unprotected, so
+this trigger fires but nothing enforces it. To make it a real gate, create a ruleset
+for `main` with a merge queue rule and `Integration throughput` among its required
+status checks.
 
 ### Prerequisites in the upstream repos
 
