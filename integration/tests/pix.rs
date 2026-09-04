@@ -8,7 +8,8 @@
 //!
 //!   1. edgli opens a PIX Session to a cluster Exit through one relay.
 //!   2. edgli's strategy deposits `price_per_byte × quota` to the SSA stealth address.
-//!   3. The Exit observes the deposit and defuses its PIX kill switch, so the Session survives.
+//!   3. The Exit observes the deposit and clears that SSA's deposit deadline, so the Session
+//!      survives.
 //!   4. Bidirectional traffic carries SSA shares on the return-path SURBs until the Exit
 //!      reconstructs the stealth address private key.
 //!   5. The Exit sweeps the deposit into its Safe.
@@ -16,11 +17,12 @@
 //!
 //! # Prerequisites
 //!
-//! Both cluster binaries must come from a tree that carries PIX (hoprd#91), built in **release**
-//! with the secp256k1 deposit pool. Release is not a preference: debug builds slow packet
-//! processing enough to distort the cycle pacing this rests on. The pool is a *build-time* choice,
-//! and a binary carrying the other one bootstraps normally and then never deposits — so
-//! [`just pix`](../../justfile) greps the binary for its pool marker before starting anything.
+//! Both cluster binaries must be built in **release** with the secp256k1 deposit pool. PIX itself
+//! is on hoprd `main` since hoprd#91, but the pool is not: it is a *build-time* choice behind a
+//! non-default feature, and a binary carrying the other one bootstraps normally and then never
+//! deposits — so [`just pix`](../../justfile) greps the binary for its pool marker before starting
+//! anything. Release is not a preference either: debug builds slow packet processing enough to
+//! distort the cycle pacing this rests on.
 //!
 //! ```bash
 //! nix develop -c cargo build --release -p hoprd -p hoprd-localcluster \
@@ -49,10 +51,10 @@
 //!
 //! # What a healthy run measures
 //!
-//! Recorded so a future reader can tell a drifted constant from a real regression. Four
-//! consecutive full runs on the stack these constants were last tuned against (hoprnet
-//! `3188d8ee`, hopr-strategy 4.0.0, blokli v0.14.0) produced the same figures each time, to the
-//! wxHOPR:
+//! Recorded so a future reader can tell a drifted constant from a real regression. Measured on
+//! the stack these constants were last run against — hoprnet `85e698a7`, hopr-strategy 4.0.0,
+//! edgli `main` (`ced8fa64`), blokli v0.14.0 — one full run plus a second of the exhaustion
+//! scenario, which reproduced to the wxHOPR:
 //!
 //! | | measured | asserted |
 //! | --- | --- | --- |
@@ -62,13 +64,24 @@
 //! | happy path: entry Safe fell | 23.2512 wxHOPR | ≥ what the Exit gained |
 //! | happy path: failed / over-budget | 0 / 0 | both 0 |
 //! | exhaustion: deposits made | 2 | exactly [`EXHAUSTION_BUDGETED_CYCLES`] |
-//! | exhaustion: refused for budget | 5 | ≥ 1 |
-//! | exhaustion: Exit deposit timeouts | 5 | ≥ 1 |
+//! | exhaustion: refused for budget | **1** | ≥ 1 |
+//! | exhaustion: Exit deposit timeouts | **1** | ≥ 1 |
 //! | exhaustion: cycles swept | 2 | 1..=2 |
+//! | exhaustion: Exit Safe gained | 6.6432 wxHOPR | exactly 2 × 3.3216 |
 //!
-//! The happy path clears its cycle target by 50 % and every other margin is wider still, so a run
-//! that lands *on* a threshold is worth investigating rather than accepting. Wall-clock was 269–271 s
-//! and 370–372 s across the four.
+//! The happy path clears its cycle target by 50 % and every other margin there is wider still, so
+//! a run that lands *on* a threshold is worth investigating rather than accepting.
+//!
+//! **The two bolded rows have no margin, by design rather than by luck.** Both read 5 before
+//! hoprnet#8237 replaced the per-SSA deadline pair with the Exit's Session supervisor. The old
+//! deposit awaiter re-armed and kept timing out while the Session stayed up, so the repeats
+//! accumulated; the supervisor closes on the first failed cycle instead — `max_failed_cycles`
+//! defaults to 1 — and the entry, having refused one deposit for budget, never gets asked again.
+//! So 1 is the whole of what this scenario can now produce, and `≥ 1` is exact rather than
+//! generous. A 0 is a real failure; anything above 1 means the supervisor tolerated a failed cycle
+//! it is configured not to.
+//!
+//! Wall-clock was 265.9 s and 371.4 / 371.5 s.
 //!
 //! # Which build each participant runs
 //!
@@ -126,7 +139,7 @@ const SEND_CHUNK: usize = 512;
 /// `EMISSIONS_PER_SSA × SEND_INTERVAL` ≈ 13 s.
 ///
 /// The pacing is load-bearing rather than cosmetic. Share collection and the deposit run
-/// *concurrently* — the Exit serves data on credit and only the kill switch enforces payment — so a
+/// *concurrently* — the Exit serves data on credit and only its supervisor enforces payment — so a
 /// cycle that finished before its deposit transaction was mined would leave the Exit recovering a
 /// key against a zero balance, logging "already swept", and the funds stranded at the stealth
 /// address. 400 ms keeps a cycle comfortably longer than an Anvil transaction.
@@ -143,8 +156,8 @@ const REPLY_MARGIN: u64 = 2;
 /// Cycles the happy path budgets the entry for.
 ///
 /// Far above what the traffic can consume, deliberately: an entry that exhausts its budget mid-run
-/// trips the Exit's kill switch, and this scenario would then be measuring the *other* one. Five
-/// times [`TARGET_CYCLES`] leaves no doubt which one bound.
+/// trips the Exit's deposit deadline, and this scenario would then be measuring the *other* one.
+/// Five times [`TARGET_CYCLES`] leaves no doubt which one bound.
 const BUDGETED_CYCLES: u64 = 20;
 
 /// Cycles the exhaustion scenario budgets — few, since the run is over once they are committed.
@@ -153,8 +166,8 @@ const EXHAUSTION_BUDGETED_CYCLES: u64 = 2;
 /// Cycles the exhaustion scenario offers traffic for.
 ///
 /// Must outlast the close, which lands about `EXHAUSTION_BUDGETED_CYCLES` cycles of traffic plus the
-/// Exit's `max_deposit_wait + max_ssa_delivery_time` fuse (80 s) later — call it 130 s against the
-/// ~205 s this offers. Sized in cycles rather than seconds so it tracks the pacing constants.
+/// Exit's `max_deposit_wait + max_ssa_delivery_time` deadline (80 s) later — call it 130 s against
+/// the ~205 s this offers. Sized in cycles rather than seconds so it tracks the pacing constants.
 const EXHAUSTION_PAYLOAD_CYCLES: u64 = 8;
 
 /// Budget for offering the whole payload. Bounds the writer, which is otherwise capped only by the
@@ -312,8 +325,9 @@ async fn edgli_entry_deposits_should_be_swept_into_the_exit_safe() -> anyhow::Re
          strategy telemetry, so nothing here was measured"
     );
 
-    // "The Exit sees the deposit and does not kill the session": the deposit awaiter counts one
-    // confirmation per SSA when it defuses the kill switch, and a timeout when it lets it fire.
+    // "The Exit sees the deposit and does not close the session": its deposit pool counts one
+    // confirmation per SSA when the deposit lands inside the deadline, and a timeout when it does
+    // not — the latter being what the Exit's supervisor closes the Session on.
     //
     // `unwrap_or(0)` and not `== Some(0)`, which is the opposite of how the unlabelled families are
     // read here. `deposit_tracking` is a *labelled* counter and a label set materialises only once
@@ -323,8 +337,8 @@ async fn edgli_entry_deposits_should_be_swept_into_the_exit_safe() -> anyhow::Re
     assert_eq!(
         exit_counters.deposits_timed_out().unwrap_or(0),
         0,
-        "the Exit gave up waiting for {:?} deposit(s) and let the PIX kill switch close the \
-         session (it confirmed {:?}). Either the entry never deposited — check its `deposits` and \
+        "the Exit gave up waiting for {:?} deposit(s) and closed the session on its PIX deposit \
+         deadline (it confirmed {:?}). Either the entry never deposited — check its `deposits` and \
          `over_budget` counters below — or the deposit landed outside the \
          max_deposit_wait + max_ssa_delivery_time window.",
         exit_counters.deposits_timed_out(),
@@ -464,7 +478,7 @@ async fn edgli_entry_deposits_should_be_swept_into_the_exit_safe() -> anyhow::Re
 ///
 /// `max_spend_per_window` states the number outright instead. The strategy refuses the deposit that
 /// would cross it and drops the event, which starves the Session in exactly the way an empty
-/// account did — the Exit cannot tell the two apart, and its kill switch is what both scenarios
+/// account did — the Exit cannot tell the two apart, and its deposit deadline is what both scenarios
 /// exercise. The refusal lands in its own counter (`over_budget`), separate from a deposit that was
 /// attempted and failed, so the two endings stay distinguishable.
 ///
@@ -592,12 +606,12 @@ async fn a_session_should_close_when_the_entry_can_no_longer_deposit() -> anyhow
     // absence, and an embedder learns about it by noticing the silence.
     //
     // So the honest assertion is that delivery stopped, with the two counters either side of it
-    // saying *why* — the entry would not pay, and the Exit's kill switch fired.
+    // saying *why* — the entry would not pay, and the Exit's deposit deadline expired.
     assert!(
         transfer.outcome != PumpOutcome::Complete,
         "the entry reached its deposit budget and refused to pay, yet the whole payload still came \
          back ({:.1}% arrival, outcome {:?}). The Exit served traffic it was never paid for, so its \
-         kill switch is not enforcing payment. (exit: {})",
+         supervisor is not enforcing payment. (exit: {})",
         transfer.arrival_pct(),
         transfer.outcome,
         exit_counters.summary(),
@@ -605,7 +619,7 @@ async fn a_session_should_close_when_the_entry_can_no_longer_deposit() -> anyhow
     assert!(
         exit_counters.deposits_timed_out().unwrap_or(0) >= 1,
         "the Exit recorded no deposit timeout ({}), so the session was closed by something other \
-         than the PIX kill switch",
+         than its PIX deposit deadline",
         exit_counters.summary(),
     );
 

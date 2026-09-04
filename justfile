@@ -37,9 +37,9 @@ chain_image := env_var_or_default("BLOKLID_ANVIL_IMAGE", "europe-west3-docker.pk
 # seconds with nothing about the test in the message.
 blokli_ref := env_var_or_default("BLOKLI_REF", "v0.14.0")
 
-# hoprd checkout carrying PIX (hoprd#91). The nix flake exposes no PIX-enabled binary — the
-# deposit pool is a non-default cargo feature — so `just pix` compiles hoprd from this tree
-# instead of using `just build`.
+# hoprd checkout to build the PIX binaries from. PIX is on `main` since hoprd#91, but the nix
+# flake still exposes no PIX-enabled binary — the deposit pool is a non-default cargo feature —
+# so `just pix` compiles hoprd from this tree instead of using `just build`.
 hoprd_src := env_var_or_default("HOPRD_SRC", "../hoprd")
 
 data_dir := "/tmp/hopr-it"

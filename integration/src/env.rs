@@ -602,12 +602,30 @@ fn edgli_config(
             },
             path_planner: tuning.path_planner,
             packet: HoprPacketPipelineConfig {
-                // Stated rather than defaulted: the library default is FIFO, which replies with the
-                // oldest SURBs first and so keeps using a return path for as long as its backlog
-                // lasts. hoprd already pins LIFO, and a cluster where the two ends disagree
-                // measures neither one.
+                // Stated rather than defaulted, and it follows the Exit's build. The library
+                // default is FIFO, which replies with the oldest SURBs first and so keeps using a
+                // return path for as long as its backlog lasts; hoprd's default build pins LIFO,
+                // and a cluster whose two ends disagree measures neither one.
+                //
+                // A PIX build of hoprd pins FIFO instead (hoprd#91), and not as an optimisation: a
+                // PIX share reaches the Exit's reconstructor only when its SURB is *spent*, and
+                // the per-pseudonym ring buffer evicts from the oldest end — so popping
+                // newest-first leaves the oldest SURBs unspent until they are overwritten, and
+                // every overwrite is a share that can never be delivered. hoprd measured that as
+                // a total, silent stall: one confirmed deposit and then nothing, through 300 s of
+                // clean traffic with no error logged on any node.
+                //
+                // Here the Exit is the side popping SURBs to reply, so this end's order is very
+                // likely inert in the PIX scenarios. It tracks the Exit anyway, rather than
+                // stating a rationale that is false for the binary `just pix` builds.
                 surb_store: SurbStoreConfig {
-                    pop_order: SurbPopOrder::Lifo,
+                    // `cfg!` rather than two `#[cfg]`'d fields: one expression, and both arms
+                    // typecheck in either build.
+                    pop_order: if cfg!(feature = "pix") {
+                        SurbPopOrder::Fifo
+                    } else {
+                        SurbPopOrder::Lifo
+                    },
                     ..Default::default()
                 },
                 ..Default::default()

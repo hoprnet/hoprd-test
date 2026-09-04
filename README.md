@@ -75,7 +75,7 @@ does not provide, so they live in their **own** test targets — CI only runs
   One scenario asserts the money reconciles: the Exit's Safe gains an exact whole multiple of
   `price_per_byte × quota`, the entry reports the same count in deposits, and the entry's Safe fell
   by at least what the Exit's gained. The other pins the documented failure mode — an entry that
-  reaches its deposit budget stops paying, the Exit's kill switch fires, and it sweeps only the
+  reaches its deposit budget stops paying, the Exit's deposit deadline fires, and it sweeps only the
   cycles it was paid for. Measured, the entry gets **no event at all** when that happens: an
   unreliable session carries no end-of-stream, so the closure arrives as replies ceasing. An
   embedder that wants to react has to watch its own counters and Safe balance
@@ -179,7 +179,7 @@ The test is `#[ignore]` — it needs external binaries + a container runtime.
 | `HOPRD_CONTAINER_RUNTIME` | no            | `docker` (default), `container`, `podman` |
 | `HOPRD_CLUSTER_DATA_DIR`  | external mode | data-dir of an already-running cluster    |
 | `HOPRD_CHAIN_URL`         | binary chain  | attach to an external blokli (e.g. `http://localhost:8080`); skips the container, replaces `HOPRD_CHAIN_IMAGE` |
-| `HOPRD_SRC`               | `just pix`    | hoprd checkout carrying PIX (default `../hoprd`); built from source since the flake has no PIX binary |
+| `HOPRD_SRC`               | `just pix`    | hoprd checkout to build the PIX binaries from (default `../hoprd`); built from source since the flake exposes no binary with a deposit pool |
 
 Docker is the only external service: the chain (anvil + blokli + contracts) runs
 as a single `bloklid-anvil` container on the host daemon — `localcluster` launches

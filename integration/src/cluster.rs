@@ -111,11 +111,11 @@ static REQUESTED_PIX: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
 ///
 /// Passes `--enable-pix`, which writes three things into every generated node config: the
 /// Entry-side generator dimensions, the Exit-side admission policy (a widened quota window and the
-/// two deadlines forming the kill switch), and a `Pix` settlement strategy stanza. Without it the
-/// Exit has no PIX strategy at all and simply relays a PIX Session for free.
+/// two deadlines its Session supervisor enforces), and a `Pix` settlement strategy stanza. Without
+/// it the Exit has no PIX strategy at all and simply relays a PIX Session for free.
 ///
-/// This needs a `hoprd-localcluster` **and** a `hoprd` built from a tree that carries PIX, with a
-/// deposit pool selected at compile time — see `tests/pix.rs`. A `hoprd` built without one parses
+/// This needs a `hoprd-localcluster` **and** a `hoprd` with a deposit pool selected at compile
+/// time — see `tests/pix.rs`. A `hoprd` built without one parses
 /// the generated stanza and refuses to start, which is the loud failure; a binary built with the
 /// *other* pool starts normally and never deposits, which is not.
 ///

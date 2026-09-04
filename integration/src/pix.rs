@@ -59,15 +59,16 @@ pub const PIX_ADDITIONAL_SHARES: usize = 2;
 pub const PRICE_PER_BYTE: &str = "0.0001 wxHOPR";
 
 /// Ceiling on a single deposit. Must exceed `PRICE_PER_BYTE × quota` or the strategy refuses to
-/// deposit at all and the Exit's kill switch closes the Session.
+/// deposit at all and the Exit closes the Session on its deposit deadline.
 pub const MAX_SSA_ALLOCATION: &str = "10 wxHOPR";
 
 /// How long the entry's pool keeps polling a stealth address for its deposit.
 ///
 /// Also fixes the poll cadence at a tenth of this, which must stay comfortably below the Exit's
-/// `max_deposit_wait + max_ssa_delivery_time` fuse (80 s under `--enable-pix`). The upstream
-/// default of 60 s would poll every 6 s, which is fine; edgli's own default is what this guards
-/// against drifting.
+/// `max_deposit_wait + max_ssa_delivery_time` deadline (80 s under `--enable-pix`). Those two are
+/// the Exit supervisor's, and each is multiplied by the SSA batch size — one at the localcluster's
+/// `ssas_per_request`, so 80 s stands. The upstream default of 60 s would poll every 6 s, which is
+/// fine; edgli's own default is what this guards against drifting.
 pub const MAX_DEPOSIT_TRACKING_TIME: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// Window the entry's deposit budget is measured over.
@@ -226,7 +227,7 @@ fn parse_balances(body: &str) -> anyhow::Result<NodeBalances> {
 
 // ── PIX lifecycle counters ───────────────────────────────────────────────────
 
-/// Deposits the Exit confirmed, so its kill switch stood down for that SSA.
+/// Deposits the Exit confirmed, clearing that SSA's deposit deadline.
 const DEPOSIT_TRACKING: &str = "hopr_strategy_pix_deposit_tracking_total";
 /// Stealth-address keys the Exit reconstructed from the shares it received.
 const KEYS_RECOVERED: &str = "hopr_strategy_pix_keys_recovered_total";
@@ -280,7 +281,7 @@ impl PixCounters {
         self.deposit_tracking("confirmed")
     }
 
-    /// Deposits the Exit gave up waiting for; each one armed the kill switch.
+    /// Deposits the Exit gave up waiting for; each one expired an SSA's deposit deadline.
     pub fn deposits_timed_out(&self) -> Option<u64> {
         self.deposit_tracking("timeout")
     }
