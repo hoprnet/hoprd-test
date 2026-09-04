@@ -12,7 +12,8 @@
 #   TEST_TARGET test binary to run them from (default: "integration"; "return_path" for
 #               the return-path resilience scenarios)
 #   TEST_ARGS   extra libtest args, e.g. "--nocapture" to see a passing scenario's own
-#               measurements (libtest swallows them otherwise)
+#               measurements (libtest swallows them otherwise). CI sets this,
+#               paired with a narrow RUST_LOG — see .github/workflows/integration.yaml.
 #   others      forwarded to the test (RUST_LOG, HOPRD_PUMP_MBPS, ...) with defaults below
 set -euo pipefail
 
@@ -30,7 +31,7 @@ SCENARIOS="${SCENARIOS:-zero_hop one_hop}"
 TEST_TARGET="${TEST_TARGET:-integration}"
 # Split once into an array. An unquoted ${TEST_ARGS} would be pathname-expanded, so a value
 # containing `*` would reach libtest as a list of repository filenames.
-read -r -a TEST_ARGS_ARR <<< "${TEST_ARGS:-}"
+read -r -a TEST_ARGS_ARR <<<"${TEST_ARGS:-}"
 BLOKLI_API_PORT="${BLOKLI_API_PORT:-8080}"
 
 CHAIN_PID=""
@@ -58,16 +59,33 @@ reap_nodes_and_settle() {
   sleep 5
 }
 
+# chain-up.sh keeps anvil/bloklid output in files rather than on the console, so a
+# startup failure would otherwise be a bare "chain died" with no cause. Surface the
+# tails at exactly the moment they are worth reading.
+dump_chain_logs() {
+  local dir="${CHAIN_DATA_DIR:-/tmp/hopr-chain}"
+  for f in bloklid.log anvil.log deployer.log; do
+    [ -s "${dir}/${f}" ] || continue
+    echo "── last 40 lines of ${dir}/${f} ──" >&2
+    tail -40 "${dir}/${f}" >&2
+  done
+}
+
 start_chain() {
   bash "${REPO_ROOT}/scripts/integration/chain-up.sh" &
   CHAIN_PID=$!
   for _ in $(seq 1 60); do
     curl -sf -X POST "http://localhost:${BLOKLI_API_PORT}/graphql" \
       -H 'content-type: application/json' --data '{"query":"{__typename}"}' >/dev/null 2>&1 && return 0
-    kill -0 "${CHAIN_PID}" 2>/dev/null || { echo "chain died during startup" >&2; return 1; }
+    kill -0 "${CHAIN_PID}" 2>/dev/null || {
+      echo "chain died during startup" >&2
+      dump_chain_logs
+      return 1
+    }
     sleep 2
   done
   echo "chain did not become ready in time" >&2
+  dump_chain_logs
   return 1
 }
 

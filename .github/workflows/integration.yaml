@@ -3,15 +3,15 @@ name: Integration throughput test
 #   * a merge to main of hoprd / edge-client (repository_dispatch),
 #   * manual workflow_dispatch,
 #   * a hoprd-test PR labelled `run-integration` (to test changes to this repo).
-# The chain is always the latest blokli release, built from its flake per run
-# (no docker image, no blokli merge-testing).
+# The chain is always the head of blokli's `release/0.13` branch (the Jura/v4
+# line), built from its flake per run (no docker image, no merge-testing).
 on:
   repository_dispatch:
     types: [integration]
   workflow_dispatch:
     inputs:
       project:
-        description: "Triggering project (hoprd | edge-client); empty = both main, blokli latest release"
+        description: "Triggering project (hoprd | edge-client); empty = hoprd v4 line + edge-client main, blokli release/0.13"
         required: false
         default: ""
       rev:
@@ -32,39 +32,187 @@ jobs:
     # PR runs only when the `run-integration` label is present; dispatch/manual always run.
     if: >-
       github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'run-integration')
-    runs-on: depot-ubuntu-24.04-8
+    # Self-hosted Hetzner box (provisioned by gitops/ansible, label `hetzner`).
+    # A dedicated machine rather than a hosted VM: the onion encoder is CPU-bound
+    # and the throughput thresholds only mean anything on a stable core count.
+    runs-on: [self-hosted, hetzner]
     timeout-minutes: 90
     env:
       PROJECT: ${{ github.event.client_payload.project || github.event.inputs.project }}
       OVERRIDE_REV: ${{ github.event.client_payload.rev || github.event.inputs.rev }}
-      # Defaults for the non-triggering projects (empty → main in run.sh; blokli
-      # is always the latest release, resolved per run).
+      # Defaults for the non-triggering projects (blokli always tracks the head
+      # of its `release/0.13` branch, re-resolved per run).
+      # hoprd is split into v4 / v5: `main` is v5, and this test targets v4 (the
+      # crate pins hoprnet release/4.0). HOPRD_LINE is the v4 branch the binaries
+      # come from and the line a dispatched hoprd rev must belong to.
+      HOPRD_LINE: ${{ vars.HOPRD_LINE || 'release/4.1' }}
       HOPRD_REF: ${{ vars.HOPRD_REF }}
       EDGLI_REF: ${{ vars.EDGLI_REF }}
       BLOKLI_REF: ${{ vars.BLOKLI_REF }}
-      RUST_LOG: info,edgli=debug
+      # Narrow on purpose. At `info,edgli=debug` a two-scenario run emitted ~6900
+      # lines to surface ~44 useful ones; the whole hopr-lib/edgli stack narrates
+      # every packet. `hoprd_integration_test` is where the measurements live
+      # (pump.rs / session_metrics.rs), and `warn` still lets the stack speak up
+      # when something is actually wrong. Node logs are unaffected — localcluster
+      # always writes those to `hoprd_<i>.log`, and they are uploaded on failure.
+      RUST_LOG: warn,hoprd_integration_test=info
+      # Without this libtest captures a PASSING test's output, so a green run would
+      # show no measurements at all — the one thing worth reading. Safe to enable
+      # only because RUST_LOG above is narrow.
+      TEST_ARGS: --nocapture
+      # Everything here drives nix through `nix build` / `nix develop`, both of
+      # which are gated behind the `nix-command` and `flakes` experimental flags.
+      # Set them per-job rather than relying on `/etc/nix/nix.conf`: these are
+      # client-side settings, so this keeps the workflow working on any box whose
+      # nix.conf we do not control. (The Cachix substituter cannot be done this
+      # way — the daemon ignores substituters from an untrusted client — so that
+      # one genuinely has to live in nix.conf; see the check step below.)
+      # `extra-` so this appends to whatever nix.conf already enables rather than
+      # replacing the list.
+      NIX_CONFIG: |
+        extra-experimental-features = nix-command flakes
       # run.sh resolves the edge-client + blokli refs via `gh api`; authenticate it
       # (works unauthenticated on the public repos too, but dodges the 60/hr IP limit).
       GH_TOKEN: ${{ github.token }}
     steps:
       - name: Checkout
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           # No step pushes; edge-client/hoprd are public so cargo/gh fetch needs no token.
           persist-credentials: false
+      # The runner is persistent, so leftovers from a crashed previous run survive
+      # into this one. Scope the kill to this job's workspace: the box runs several
+      # runner instances, each with its own `_work` path, and every process we
+      # start (hoprd, localcluster, bloklid, anvil) is launched from a binary under
+      # ours — so matching the workspace prefix reaps all of them and none of a
+      # neighbouring job's. A bare `pkill -f hoprd` would not make that distinction.
+      # Stale `result-*` out-links also go: they pin store paths GC would keep.
       - name: Pre-run hygiene
         run: |
+          pkill -f "${GITHUB_WORKSPACE}/result-" || true
           rm -rf /tmp/hopr-nodes /tmp/hoprd-it-* /tmp/hopr-chain || true
-          pkill -f hoprd || true
-          pkill -f bloklid || true
-          pkill -f anvil || true
-      - name: Setup Nix
-        uses: hoprnet/hopr-workflows/actions/setup-nix@5477bd53d62ac15c4804b31fbd55966b29a43997 # setup-nix-v2
-        with:
-          cachix_cache_name: hoprnet
-          cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
+          rm -f result-hoprd result-localcluster result-bloklid result-foundry || true
+      # Same reason as pr.yaml: the checkout git-cleans the workspace, so a target
+      # dir inside it is rebuilt from scratch on every run of a persistent box.
+      - name: Point cargo at a persistent target dir
+        run: |
+          dir="${HOME}/.cache/hoprd-test/cargo-target-${RUNNER_NAME}"
+          mkdir -p "${dir}"
+          echo "CARGO_TARGET_DIR=${dir}" >> "${GITHUB_ENV}"
+      # Deliberately NOT `hopr-workflows/actions/setup-nix` here. That action falls
+      # back to `install-nix-action` when `nix` is not on PATH, which needs root —
+      # and the `runner` user has no sudo, so it dies with "sudo: a password is
+      # required" after a screenful of installer output. On this box nix is part of
+      # the machine, installed by gitops/ansible, so the job's job is to *find* it,
+      # not to install it. The profile path is checked explicitly because a
+      # multi-user install exports nix through /etc/profile.d/nix.sh, which a
+      # non-login job shell never sources.
+      - name: Locate nix
+        run: |
+          if command -v nix >/dev/null 2>&1; then
+            echo "nix already on PATH: $(command -v nix)"
+            exit 0
+          fi
+          for d in /nix/var/nix/profiles/default/bin "${HOME}/.nix-profile/bin"; do
+            if [ -x "${d}/nix" ]; then
+              echo "found nix in ${d}; adding to PATH"
+              echo "${d}" >> "${GITHUB_PATH}"
+              exit 0
+            fi
+          done
+          echo "::error::nix is not installed on this runner. It is a prerequisite of the box, not of the workflow — install it from gitops/ansible (multi-user) and put its profile bin dir on the runner user's PATH. See runner/README.md." >&2
+          exit 1
+      # Nix evaluation shells out to the `git` BINARY to fetch git dependencies
+      # (hoprd's flake pulls hopr-lib from github.com/hoprnet/hoprnet), and the
+      # hoprnet dev shell does not provide one — it inherits whatever the host has.
+      # A box without git therefore fails deep inside a derivation eval with
+      # `executing "git": No such file or directory`, long after everything else
+      # looked fine. Note `actions/checkout` does NOT catch this for us: it falls
+      # back to a tarball download when git is missing, so the checkout succeeds
+      # and hides the gap. Take git from nix so this holds on any box.
+      - name: Ensure git is on PATH
+        run: |
+          if command -v git >/dev/null 2>&1; then
+            echo "git already on PATH: $(git --version)"
+            exit 0
+          fi
+          echo "git absent — taking it from nixpkgs"
+          echo "$(nix build --no-link --print-out-paths nixpkgs#git)/bin" >> "${GITHUB_PATH}"
+      # Nix is pre-installed, so nothing here configures the `hoprnet` Cachix
+      # substituter — it has to be in /etc/nix/nix.conf on the box. A missing one
+      # does not fail, it just turns every run into a from-source hopr-lib build,
+      # so surface it instead of letting the timeout explain it.
+      - name: Check the hoprnet substituter is configured
+        run: |
+          nix --version
+          # Do NOT swallow stderr here. `nix config show` is itself a nix-command
+          # subcommand, so when that feature was disabled this printed an empty
+          # list and the check below reported "substituter absent" — which was a
+          # guess dressed up as a finding. Distinguish the two cases explicitly.
+          if ! subs=$(nix config show substituters 2>&1); then
+            echo "::warning::could not read nix substituters, so the cache state is unknown: ${subs}"
+            exit 0
+          fi
+          echo "substituters: ${subs}"
+          case "${subs}" in
+          *hoprnet*) echo "hoprnet cache present" ;;
+          *) echo "::warning::hoprnet Cachix substituter absent — this run will compile hopr-lib from source. Configure it in /etc/nix/nix.conf on the runner (see runner/README.md)." ;;
+          esac
+      # Build the human description of *why* this run happened, for the failure
+      # notification. Done in a step rather than inline in the Zulip `content` because
+      # the three trigger types carry the information in three different places, and
+      # `env.PROJECT || 'manual run'` collapsed two of them into a wrong answer: a
+      # PR-label run reported itself as "manual run" with an empty rev.
+      #
+      # Event fields are passed through `env:` and read as shell variables — never
+      # interpolated into the script body. A branch name or PR title is
+      # attacker-controlled on a fork PR, and `${{ }}` inside `run:` would splice it
+      # into the shell.
+      - name: Describe this run
+        if: always()
+        env:
+          EVENT: ${{ github.event_name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          PR_REF: ${{ github.event.pull_request.head.ref }}
+        run: |
+          case "${EVENT}" in
+          pull_request)
+            echo "TRIGGER=PR [#${PR_NUMBER}](${PR_URL}) (\`${PR_REF}\`)"
+            ;;
+          repository_dispatch)
+            if [ -n "${OVERRIDE_REV}" ] && [ -n "${PROJECT}" ]; then
+              echo "TRIGGER=merge to \`${PROJECT}\` ([\`${OVERRIDE_REV:0:8}\`](https://github.com/hoprnet/${PROJECT}/commit/${OVERRIDE_REV}))"
+            else
+              echo "TRIGGER=dispatch (project=\`${PROJECT:-unset}\`)"
+            fi
+            ;;
+          *)
+            if [ -n "${PROJECT}" ]; then
+              echo "TRIGGER=manual run (project=\`${PROJECT}\`)"
+            else
+              echo "TRIGGER=manual run"
+            fi
+            ;;
+          esac >>"${GITHUB_ENV}"
       - name: Resolve versions, build stack, run test
         run: nix develop github:hoprnet/hoprnet --command bash scripts/integration/run.sh
+      # The console now carries a summary; this is where the detail lives when a run
+      # goes red. Only on failure, so a green run stores nothing.
+      - name: Upload logs
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: integration-logs-${{ github.run_id }}-${{ github.run_attempt }}
+          # hoprd_<i>.log lives under the per-run cluster dir; the chain logs under
+          # the chain data dir; nix-build.log next to the checkout.
+          path: |
+            nix-build.log
+            /tmp/hopr-chain/*.log
+            /tmp/hoprd-it-*/**/*.log
+            /tmp/hopr-nodes/**/*.log
+          if-no-files-found: warn
+          retention-days: 14
       - name: Notify failure (Zulip)
         if: failure()
         uses: zulip/github-actions-zulip/send-message@bd8ec52de371d139ae8313661b7d8318c19266aa # v2.0.1
@@ -75,12 +223,29 @@ jobs:
           type: "stream"
           to: "HOPRd"
           topic: "integration"
+          # Reports the versions that actually ran, not the dispatch inputs — those
+          # are empty for every trigger except a merge dispatch. `unresolved` means the
+          # job died before run.sh got as far as resolving them (a runner/setup problem
+          # rather than a stack problem), which is itself the useful signal.
           content: |
-            Integration throughput test FAILED for ${{ env.PROJECT || 'manual run' }} (rev: ${{ env.OVERRIDE_REV }}) — [run](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})
+            **Integration throughput test FAILED** — ${{ env.TRIGGER }}
+            * hoprd `${{ env.RESOLVED_HOPRD || 'unresolved' }}`
+            * edge-client `${{ env.RESOLVED_EDGLI || 'unresolved' }}`
+            * blokli `${{ env.RESOLVED_BLOKLI || 'unresolved' }}`
+            [Run #${{ github.run_number }}](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}) · logs are attached to the run as an artifact.
       - name: Post-run hygiene
         if: always()
         run: |
+          pkill -f "${GITHUB_WORKSPACE}/result-" || true
           rm -rf /tmp/hopr-nodes /tmp/hoprd-it-* /tmp/hopr-chain || true
-          pkill -f hoprd || true
-          pkill -f bloklid || true
-          pkill -f anvil || true
+      # Nothing reclaims the nix store on a persistent runner, and each run adds a
+      # fresh hoprd/blokli closure. GC only when the disk is actually tight, so the
+      # common case keeps its warm store and does not re-fetch from Cachix.
+      - name: Reclaim nix store if low on disk
+        if: always()
+        run: |
+          free_gb=$(df -BG --output=avail /nix 2>/dev/null | tail -1 | tr -dc '0-9')
+          echo "free space on /nix: ${free_gb:-unknown} GB"
+          if [ -n "${free_gb}" ] && [ "${free_gb}" -lt 50 ]; then
+            nix-collect-garbage --delete-older-than 7d || true
+          fi

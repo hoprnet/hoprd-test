@@ -79,4 +79,3 @@ debug-assertions = true
 [profile.flamegraph]
 inherits = "release"
 debug = true
-
