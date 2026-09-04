@@ -168,10 +168,10 @@ differ in spec, give this workflow its own label.
 
 Set under Settings → Secrets and variables → Actions:
 
-| Secret                         | Used for                                |
-| ------------------------------ | --------------------------------------- |
-| `CACHIX_AUTH_TOKEN`            | hoprnet nix cache (avoid full compiles) |
-| `ZULIP_API_KEY`, `ZULIP_EMAIL` | red-run notification                    |
+| Secret                         | Used for                                   |
+| ------------------------------ | ------------------------------------------ |
+| `CACHIX_AUTH_TOKEN`            | hoprnet nix cache (avoid full compiles)    |
+| `ZULIP_API_KEY`, `ZULIP_EMAIL` | red-run notification (HOPRd / integration) |
 
 The `bloklid-anvil` image is in a **public** GCP Artifact Registry repo
 (`hoprassociation/docker-images`, `allUsers` reader) — no registry credentials
@@ -220,6 +220,26 @@ To close the loop, hoprd's `merge.yaml` needs a `repository-dispatch` step
 guarded on `github.event.pull_request.base.ref == vars.MAINTENANCE_RELEASE_BRANCH`
 (that variable is already `release/4.1`), so a v5 `main` merge does not fire a v4
 gate.
+
+### The failure notification
+
+A red run posts to Zulip (stream **HOPRd**, topic **integration**) naming the
+trigger and the three versions that actually ran, e.g.
+
+```text
+**Integration throughput test FAILED** — PR [#22](…) (`em/hookup-ci`)
+* hoprd `release/4.1`
+* edge-client `main (58564a22)`
+* blokli `release/0.13`
+[Run #48](…) · logs are attached to the run as an artifact.
+```
+
+The versions come from `run.sh`, which writes `RESOLVED_*` to `$GITHUB_ENV` once it
+has resolved them — **not** from the dispatch inputs. Those inputs only ever carry
+the triggering project's rev, so a manual or PR-label run had nothing to report and
+the message used to read `for manual run (rev: )`. `unresolved` in a bullet means the
+job died before `run.sh` got that far, which points at the runner rather than the
+stack.
 
 ## Triggering / validating
 

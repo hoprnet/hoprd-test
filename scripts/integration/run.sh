@@ -109,6 +109,23 @@ echo "  hoprd        = ${HOPRD_REF} (line ${HOPRD_LINE})"
 echo "  edge-client  = ${EDGLI_REF} (${EDGLI_SHA})"
 echo "  blokli       = ${BLOKLI_REF} (Jura/v4 line, moving branch)"
 
+# Hand the resolved versions to the workflow so a failure notification can report
+# what actually ran. The dispatch inputs are no good for this: they only ever carry
+# the triggering project's rev, so a manual or PR-label run has nothing to report and
+# used to render an empty "(rev: )". These are always populated once resolution got
+# this far, and they cover all three projects rather than just one.
+if [ -n "${GITHUB_ENV:-}" ]; then
+  # A merge dispatch makes HOPRD_REF a full sha; abbreviate it so the notification
+  # does not carry 40 characters that the trigger line already shows.
+  hoprd_display="${HOPRD_REF}"
+  [[ ${HOPRD_REF} =~ ^[0-9a-f]{40}$ ]] && hoprd_display="${HOPRD_REF:0:8}"
+  {
+    echo "RESOLVED_HOPRD=${hoprd_display}"
+    echo "RESOLVED_EDGLI=${EDGLI_REF} (${EDGLI_SHA:0:8})"
+    echo "RESOLVED_BLOKLI=${BLOKLI_REF}"
+  } >>"${GITHUB_ENV}"
+fi
+
 # ── Build everything, keeping the build chatter off the console ──
 # `nix build -L` emits every derivation's build log: ~20k lines for one run, which
 # buries the few dozen lines anyone actually reads. Keep `-L` (the detail is what

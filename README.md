@@ -279,7 +279,9 @@ rev via the dispatch; `hoprd` otherwise defaults to the **v4 line** and
 change against the current tip of the other and the current 0.13 blokli. `run.sh` builds `hoprd` + `hoprd-localcluster` from the hoprd ref, builds
 the blokli chain from the release, pins `edgli` to the resolved edge-client sha,
 runs the tests against a fresh flake chain per scenario (`run-binchain.sh`), and
-notifies Zulip on red. Nothing is committed back.
+notifies Zulip on red — naming the trigger and the resolved hoprd/edge-client/blokli
+versions, not the dispatch inputs (see [`runner/README.md`](runner/README.md)).
+Nothing is committed back.
 
 ### hoprd v4 / v5
 
