@@ -331,7 +331,7 @@ async fn edgli_entry_deposits_should_be_swept_into_the_exit_safe() -> anyhow::Re
     //
     // `unwrap_or(0)` and not `== Some(0)`, which is the opposite of how the unlabelled families are
     // read here. `deposit_tracking` is a *labelled* counter and a label set materialises only once
-    // it is first incremented, so a run where nothing timed out has no `{result="timeout"}` series
+    // it is first incremented, so a run where nothing timed out has no `{outcome="timeout"}` series
     // at all. Absent therefore means the event never happened — the build-has-no-telemetry reading
     // of absent is already ruled out by `observable()` above.
     assert_eq!(

@@ -269,11 +269,11 @@ impl PixCounters {
     ///
     /// Absent means something different here than for the unlabelled families. A label set on a
     /// `MultiCounter` materialises only when it is first incremented, so a run in which no deposit
-    /// timed out has no `{result="timeout"}` series at all — `None` is "it never happened", not
+    /// timed out has no `{outcome="timeout"}` series at all — `None` is "it never happened", not
     /// "nothing was measuring". Read this with `unwrap_or(0)` once [`Self::observable`] has ruled
     /// out the missing-telemetry case; demanding `Some(0)` fails every healthy run.
-    pub fn deposit_tracking(&self, result: &str) -> Option<u64> {
-        self.get(&format!("{DEPOSIT_TRACKING}/{result}"))
+    pub fn deposit_tracking(&self, outcome: &str) -> Option<u64> {
+        self.get(&format!("{DEPOSIT_TRACKING}/{outcome}"))
     }
 
     /// Deposits the Exit confirmed in time.
@@ -382,16 +382,24 @@ pub fn sample_entry() -> PixCounters {
 }
 
 /// The label whose value keys a series apart from its siblings.
-const RESULT_LABEL: &str = "result";
+///
+/// Copied from hopr-strategy's own declaration —
+/// `MultiCounter::new("hopr_strategy_pix_deposit_tracking_total", …, &["outcome"])`, incremented
+/// with `&["confirmed"]` and `&["timeout"]`. Worth recording where it comes from, because reading
+/// the label *by name* is new: this used to take the first label value whatever it was called,
+/// which worked, and so left the name free to be wrong everywhere it was written down. It was —
+/// `result`, in the fixture below and in four doc comments — and nothing noticed until the lookup
+/// started depending on it.
+const OUTCOME_LABEL: &str = "outcome";
 
 /// The value of the label named `name` in a Prometheus label set (`a="1",b="2"`).
 ///
-/// By name rather than by position. `{result="timeout"}` and `{session_id="…",result="timeout"}`
-/// are the same series to anything reading `result`, and two *different* keys to anything taking
-/// the first value it finds — which is what this used to do. One label added ahead of `result`
-/// upstream would then have folded `confirmed` and `timeout` onto a single key, reporting a
-/// Session whose every deposit timed out as one whose every deposit landed. Nothing emits such a
-/// label today; the point is that acquiring one stays harmless.
+/// By name rather than by position. `{outcome="timeout"}` and `{session_id="…",outcome="timeout"}`
+/// are the same series to anything reading `outcome`, and two *different* keys to anything taking
+/// the first value it finds. One label added ahead of `outcome` upstream would then have folded
+/// `confirmed` and `timeout` onto a single key, reporting a Session whose every deposit timed out
+/// as one whose every deposit landed. Nothing emits such a label today; the point is that
+/// acquiring one stays harmless.
 ///
 /// Splits on `,`, so a label whose *value* contained one would be misread. None of the
 /// `hopr_strategy_pix_*` labels do — they are enum-like outcome names.
@@ -404,8 +412,8 @@ fn label_value<'a>(labels: &'a str, name: &str) -> Option<&'a str> {
 
 /// Read every `hopr_strategy_pix_*` sample out of a Prometheus text exposition.
 ///
-/// Labelled series are keyed `<family>/<result>` so `deposit_tracking{result="confirmed"}` and
-/// `{result="timeout"}` stay apart — they mean opposite things, and summing them would report a
+/// Labelled series are keyed `<family>/<outcome>` so `deposit_tracking{outcome="confirmed"}` and
+/// `{outcome="timeout"}` stay apart — they mean opposite things, and summing them would report a
 /// Session whose every deposit timed out as one whose every deposit landed.
 fn parse(body: &str) -> PixCounters {
     const PREFIX: &str = "hopr_strategy_pix_";
@@ -424,9 +432,9 @@ fn parse(body: &str) -> PixCounters {
             .split_once('{')
             .and_then(|(_, rest)| rest.split_once('}'))
         {
-            Some((labels, _)) => match label_value(labels, RESULT_LABEL) {
-                Some(result) => format!("{name}/{result}"),
-                // A labelled family carrying no `result` keys on its whole label set. Not on the
+            Some((labels, _)) => match label_value(labels, OUTCOME_LABEL) {
+                Some(outcome) => format!("{name}/{outcome}"),
+                // A labelled family carrying no `outcome` keys on its whole label set. Not on the
                 // family alone, which would sum series that mean different things — the mistake
                 // this function exists to avoid.
                 None => format!("{name}/{labels}"),
@@ -452,14 +460,18 @@ fn parse(body: &str) -> PixCounters {
 mod tests {
     use super::*;
 
+    /// Label names here are hopr-strategy's, not invented: `deposit_tracking` is declared
+    /// `&["outcome"]`. It read `result` until an end-to-end run caught it, which it could only do
+    /// once [`OUTCOME_LABEL`] made the name load-bearing — a fixture that agrees with itself
+    /// proves nothing about the exposition it stands in for.
     const EXPOSITION: &str = r#"
 # HELP hopr_strategy_pix_deposits_total Deposits made
 # TYPE hopr_strategy_pix_deposits_total counter
 hopr_strategy_pix_deposits_total 7
 hopr_strategy_pix_deposits_failed_total 0
 hopr_strategy_pix_deposits_over_budget_total 1
-hopr_strategy_pix_deposit_tracking_total{result="confirmed"} 5
-hopr_strategy_pix_deposit_tracking_total{result="timeout"} 2
+hopr_strategy_pix_deposit_tracking_total{outcome="confirmed"} 5
+hopr_strategy_pix_deposit_tracking_total{outcome="timeout"} 2
 hopr_strategy_pix_keys_recovered_total 5
 hopr_strategy_pix_sweeps_total 4.0
 hopr_packets_count{type="forwarded"} 99999
@@ -487,29 +499,55 @@ hopr_packets_count{type="forwarded"} 99999
         assert_eq!(c.deposits_timed_out(), Some(2));
     }
 
-    /// ...including when a label is added ahead of `result`.
+    /// ...including when a label is added ahead of `outcome`.
     ///
     /// Positional extraction keys both series on the *first* value it finds, which for
-    /// `{session_id="s1",result=...}` is `s1` for the confirmed series and `s1` for the timed-out
+    /// `{session_id="s1",outcome=...}` is `s1` for the confirmed series and `s1` for the timed-out
     /// one — so they sum, and the inversion the test above guards against arrives by way of an
     /// upstream label nobody here changed. Nothing emits one today.
     #[test]
-    fn a_label_ahead_of_result_should_not_merge_the_outcomes() {
+    fn a_label_ahead_of_the_outcome_should_not_merge_the_two() {
         let c = parse(&format!(
-            "{DEPOSIT_TRACKING}{{session_id=\"s1\",result=\"confirmed\"}} 5\n\
-             {DEPOSIT_TRACKING}{{session_id=\"s1\",result=\"timeout\"}} 2\n"
+            "{DEPOSIT_TRACKING}{{session_id=\"s1\",outcome=\"confirmed\"}} 5\n\
+             {DEPOSIT_TRACKING}{{session_id=\"s1\",outcome=\"timeout\"}} 2\n"
         ));
         assert_eq!(c.deposits_confirmed(), Some(5));
         assert_eq!(c.deposits_timed_out(), Some(2));
     }
 
-    /// A healthy run has no `{result="timeout"}` series at all, because a `MultiCounter` label set
+    /// A label set that carries no `outcome` at all must not collapse onto the bare family.
+    ///
+    /// The `None` arm is reachable by any labelled `hopr_strategy_pix_*` family — `deposit_data`
+    /// is one, also `&["outcome"]` today — and keying such a family on its name alone would sum
+    /// series that mean different things, which is the whole failure this parser is shaped around.
+    #[test]
+    fn a_labelled_family_without_an_outcome_should_stay_split() {
+        let c = parse(
+            "hopr_strategy_pix_made_up_total{phase=\"a\"} 3\n\
+             hopr_strategy_pix_made_up_total{phase=\"b\"} 4\n",
+        );
+        assert_eq!(
+            c.get("hopr_strategy_pix_made_up_total/phase=\"a\""),
+            Some(3)
+        );
+        assert_eq!(
+            c.get("hopr_strategy_pix_made_up_total/phase=\"b\""),
+            Some(4)
+        );
+        assert_eq!(
+            c.get("hopr_strategy_pix_made_up_total"),
+            None,
+            "the two must not have been summed onto the bare family"
+        );
+    }
+
+    /// A healthy run has no `{outcome="timeout"}` series at all, because a `MultiCounter` label set
     /// materialises only on first increment. An assertion demanding `Some(0)` there fails every
     /// passing run — which is how the first end-to-end run of `tests/pix.rs` failed, after the
     /// protocol had in fact completed six full cycles.
     #[test]
     fn an_outcome_that_never_occurred_should_read_as_absent_not_zero() {
-        let healthy = parse(&format!("{DEPOSIT_TRACKING}{{result=\"confirmed\"}} 7\n"));
+        let healthy = parse(&format!("{DEPOSIT_TRACKING}{{outcome=\"confirmed\"}} 7\n"));
         assert_eq!(healthy.deposits_confirmed(), Some(7));
         assert_eq!(healthy.deposits_timed_out(), None);
         assert!(
