@@ -209,17 +209,47 @@ dispatch fired on a `main` merge now fails fast with
 mismatched stack. When v5 gets its own line, run this workflow twice with
 different `HOPRD_LINE` values rather than loosening the check.
 
-### The merge hook is not wired yet
+### How the upstream repos call in
 
-`integration.yaml` listens for `repository_dispatch[integration]`, but as of
-2026-09-02 **no** workflow in hoprd, edge-client, or blokli references hoprd-test
-— nothing fires that event, and `HOPRD_TEST_DISPATCH_TOKEN` is untested. So the
-only live triggers today are `workflow_dispatch` and the `run-integration` label.
+| Repo        | When                                                       | Behaviour                                                                               |
+| ----------- | ---------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| hoprd       | merge to `vars.MAINTENANCE_RELEASE_BRANCH` (`release/4.1`) | **Blocks.** Runs before `build-docker`, so a red gate means no image, no tag, no deploy |
+| edge-client | merge to `main`                                            | Fire-and-forget; failure reported by the Zulip message below                            |
+| blokli      | merge to `release/0.13`                                    | Fire-and-forget; same                                                                   |
+| all three   | PR labelled `run-integration`                              | Waits, so the verdict is a check on that PR                                             |
 
-To close the loop, hoprd's `merge.yaml` needs a `repository-dispatch` step
-guarded on `github.event.pull_request.base.ref == vars.MAINTENANCE_RELEASE_BRANCH`
-(that variable is already `release/4.1`), so a v5 `main` merge does not fire a v4
-gate.
+Two mechanisms, deliberately:
+
+- **Fire-and-forget** uses `repository_dispatch`. Right where there is nothing to
+  gate — edge-client has no image, and blokli's own image is not held back — since
+  blocking would only park a runner for the 30–40 minutes the test takes.
+- **Waiting** uses `workflow_dispatch` with a `marker` input. A caller cannot
+  otherwise identify its own run: `gh workflow run` returns no run id, the API does
+  not expose a run's dispatch inputs, and "newest run" is a race because three
+  repos dispatch here and the `integration` concurrency group makes runs queue
+  rather than start. So the caller passes a unique marker, `run-name` puts it in the
+  run title, and the caller polls for the run whose title carries it.
+
+**hoprd's gate is scoped to the v4 line on purpose.** hoprd-test only supports v4
+(its crate pins hoprnet `release/4.0`) and rejects a rev off that line, so pointing
+the gate at `main` (v5) would fail every merge. Keying on
+`vars.MAINTENANCE_RELEASE_BRANCH` rather than a literal branch means a bump to
+`release/4.2` needs no workflow edit.
+
+**A PR head is `ahead` of the line, not contained in it.** The containment check in
+`run.sh` accepts `identical`/`behind`/`ahead` and rejects only `diverged` — without
+`ahead` the label-triggered PR runs, which is exactly what the upstream repos fire,
+would all be refused.
+
+### Prerequisites in the upstream repos
+
+- **`run-integration` label** — present in hoprd, edge-client and blokli.
+- **`HOPRD_TEST_DISPATCH_TOKEN`** — needs **`actions: write`** on hoprd-test to
+  dispatch _and_ **`actions: read`** to list and watch runs. A dispatch-only token
+  makes a waiting gate fire the run and then fail with
+  `never found a run tagged …`, which looks like a hoprd-test problem but is not.
+  It is not a repo-level secret in any of the four repos, so it must be an org
+  secret; verify it is visible to all three before relying on the gates.
 
 ### The failure notification
 

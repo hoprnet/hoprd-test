@@ -1,25 +1,42 @@
 name: Integration throughput test
 # Runs the 0-hop + 1-hop throughput test (full stack). Triggered by:
-#   * a merge to main of hoprd / edge-client (repository_dispatch),
+#   * hoprd merging to its v4 line, blokli merging to release/0.13, or edge-client
+#     merging to main — and by a `run-integration` label on a PR in any of them
+#     (all via workflow_dispatch / repository_dispatch from those repos),
 #   * manual workflow_dispatch,
 #   * a hoprd-test PR labelled `run-integration` (to test changes to this repo).
-# The chain is always the head of blokli's `release/0.13` branch (the Jura/v4
-# line), built from its flake per run (no docker image, no merge-testing).
+# Each triggering project supplies its own rev; the other two use the defaults in
+# scripts/integration/run.sh.
 on:
   repository_dispatch:
     types: [integration]
   workflow_dispatch:
     inputs:
       project:
-        description: "Triggering project (hoprd | edge-client); empty = hoprd v4 line + edge-client main, blokli release/0.13"
+        description: "Triggering project (hoprd | edge-client | blokli); empty = hoprd v4 line + edge-client main + blokli release/0.13"
         required: false
         default: ""
       rev:
-        description: "Git rev override (for hoprd or edge-client)"
+        description: "Git rev override for the triggering project"
+        required: false
+        default: ""
+      marker:
+        # An upstream gate has to block on ITS run, but `gh workflow run` does not
+        # return a run id and the API does not expose dispatch inputs on a run. So
+        # the caller passes a unique marker, `run-name` below puts it in the run
+        # title, and the caller polls for the run whose title carries it. Matching
+        # on "newest run" instead is a race: several repos dispatch here, and the
+        # `integration` concurrency group makes runs queue rather than start.
+        description: "Opaque tag echoed into the run name, so a caller can find this run"
         required: false
         default: ""
   pull_request:
     types: [labeled, synchronize, reopened]
+run-name: >-
+  ${{ inputs.marker != '' && format('Integration [{0}]', inputs.marker)
+
+      || (github.event_name == 'repository_dispatch' && format('Integration ({0} {1})', github.event.client_payload.project, github.event.client_payload.rev)
+      || 'Integration throughput test') }}
 # PR events: one group per PR, cancel-in-progress (a new push supersedes the
 # previous run of that PR). Dispatch/manual: a single shared group that never
 # cancels, so those runs stack and execute one after another.
@@ -175,26 +192,27 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_URL: ${{ github.event.pull_request.html_url }}
           PR_REF: ${{ github.event.pull_request.head.ref }}
+          MARKER: ${{ inputs.marker }}
         run: |
-          case "${EVENT}" in
-          pull_request)
-            echo "TRIGGER=PR [#${PR_NUMBER}](${PR_URL}) (\`${PR_REF}\`)"
-            ;;
-          repository_dispatch)
-            if [ -n "${OVERRIDE_REV}" ] && [ -n "${PROJECT}" ]; then
-              echo "TRIGGER=merge to \`${PROJECT}\` ([\`${OVERRIDE_REV:0:8}\`](https://github.com/hoprnet/${PROJECT}/commit/${OVERRIDE_REV}))"
-            else
-              echo "TRIGGER=dispatch (project=\`${PROJECT:-unset}\`)"
-            fi
-            ;;
-          *)
-            if [ -n "${PROJECT}" ]; then
-              echo "TRIGGER=manual run (project=\`${PROJECT}\`)"
-            else
-              echo "TRIGGER=manual run"
-            fi
-            ;;
-          esac >>"${GITHUB_ENV}"
+          # Keyed on what was actually supplied rather than on the event name. The
+          # upstream gates arrive as `workflow_dispatch` (that is the only trigger
+          # that can carry a marker and so be waited on), so switching on the event
+          # would have labelled every hoprd merge gate a "manual run".
+          if [ "${EVENT}" = "pull_request" ]; then
+            # A PR in THIS repo.
+            echo "TRIGGER=hoprd-test PR [#${PR_NUMBER}](${PR_URL}) (\`${PR_REF}\`)"
+          elif [ -n "${PROJECT}" ] && [ -n "${OVERRIDE_REV}" ]; then
+            # A gate or label run from hoprd / edge-client / blokli. MARKER is set
+            # only by the waiting callers, which is what distinguishes their runs
+            # from someone filling the same inputs in by hand.
+            where="dispatch"
+            [ -n "${MARKER}" ] && where="gate"
+            echo "TRIGGER=${where} for \`${PROJECT}\` ([\`${OVERRIDE_REV:0:8}\`](https://github.com/hoprnet/${PROJECT}/commit/${OVERRIDE_REV}))"
+          elif [ -n "${PROJECT}" ]; then
+            echo "TRIGGER=manual run (project=\`${PROJECT}\`, no rev)"
+          else
+            echo "TRIGGER=manual run"
+          fi >>"${GITHUB_ENV}"
       - name: Resolve versions, build stack, run test
         run: nix develop github:hoprnet/hoprnet --command bash scripts/integration/run.sh
       # The console now carries a summary; this is where the detail lives when a run
