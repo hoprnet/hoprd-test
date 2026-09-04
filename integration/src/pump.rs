@@ -335,14 +335,16 @@ const IO_CHUNK: usize = 64 * 1024;
 /// Per-chunk delay to cap the send rate at `HOPRD_PUMP_MBPS` MB/s. Blasting a large
 /// payload saturates the node's rayon packet pool on CPU-constrained CI runners
 /// (decode timeouts → heavy loss). Unset or ≤0 = unpaced.
-fn send_pace_per_chunk() -> Option<Duration> {
+///
+/// Takes the chunk actually being offered rather than assuming [`IO_CHUNK`]. The delay is per
+/// write, so deriving it from a different size than the writer uses scales the offered rate by
+/// their ratio — at `PumpOpts::chunk` of 512 that is 1/128 of the requested MB/s, silently.
+fn send_pace_per_chunk(chunk: usize) -> Option<Duration> {
     let mbps: f64 = std::env::var("HOPRD_PUMP_MBPS").ok()?.parse().ok()?;
     if mbps <= 0.0 {
         return None;
     }
-    Some(Duration::from_secs_f64(
-        IO_CHUNK as f64 / (mbps * 1_000_000.0),
-    ))
+    Some(Duration::from_secs_f64(chunk as f64 / (mbps * 1_000_000.0)))
 }
 /// If no bytes arrive for this long after the first byte, the return transfer is
 /// considered finished (UDP loopback gives no EOF; lost tail bytes never arrive).
@@ -527,7 +529,10 @@ pub async fn pump_halves(
 ) -> anyhow::Result<Transfer> {
     let expected = sha256_digest(payload);
     let total_bytes = payload.len();
-    let pace = opts.pace.or_else(send_pace_per_chunk);
+    // Zero would spin forever offering nothing, so an explicit 0 falls back rather than hanging.
+    // Resolved before the pace, which the environment expresses per chunk.
+    let chunk = opts.chunk.filter(|c| *c > 0).unwrap_or(IO_CHUNK);
+    let pace = opts.pace.or_else(|| send_pace_per_chunk(chunk));
 
     // Everything is stamped against the moment the pump started, not the first byte back. On a
     // recovering stream the interval between the two *is* the outage, and timing from the first
@@ -537,8 +542,6 @@ pub async fn pump_halves(
     // measure from. Written once by the writer, read on the reader's poll cadence.
     let offer_completed_ms = std::sync::atomic::AtomicU64::new(OFFER_IN_FLIGHT);
 
-    // Zero would spin forever offering nothing, so an explicit 0 falls back rather than hanging.
-    let chunk = opts.chunk.filter(|c| *c > 0).unwrap_or(IO_CHUNK);
     let send = async {
         let mut offset = 0;
         while offset < payload.len() {

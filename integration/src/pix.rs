@@ -381,9 +381,30 @@ pub fn sample_entry() -> PixCounters {
     }
 }
 
+/// The label whose value keys a series apart from its siblings.
+const RESULT_LABEL: &str = "result";
+
+/// The value of the label named `name` in a Prometheus label set (`a="1",b="2"`).
+///
+/// By name rather than by position. `{result="timeout"}` and `{session_id="…",result="timeout"}`
+/// are the same series to anything reading `result`, and two *different* keys to anything taking
+/// the first value it finds — which is what this used to do. One label added ahead of `result`
+/// upstream would then have folded `confirmed` and `timeout` onto a single key, reporting a
+/// Session whose every deposit timed out as one whose every deposit landed. Nothing emits such a
+/// label today; the point is that acquiring one stays harmless.
+///
+/// Splits on `,`, so a label whose *value* contained one would be misread. None of the
+/// `hopr_strategy_pix_*` labels do — they are enum-like outcome names.
+fn label_value<'a>(labels: &'a str, name: &str) -> Option<&'a str> {
+    labels.split(',').find_map(|pair| {
+        let (key, value) = pair.split_once('=')?;
+        (key.trim() == name).then_some(value.trim().trim_matches('"'))
+    })
+}
+
 /// Read every `hopr_strategy_pix_*` sample out of a Prometheus text exposition.
 ///
-/// Labelled series are keyed `<family>/<label value>` so `deposit_tracking{result="confirmed"}` and
+/// Labelled series are keyed `<family>/<result>` so `deposit_tracking{result="confirmed"}` and
 /// `{result="timeout"}` stay apart — they mean opposite things, and summing them would report a
 /// Session whose every deposit timed out as one whose every deposit landed.
 fn parse(body: &str) -> PixCounters {
@@ -399,10 +420,16 @@ fn parse(body: &str) -> PixCounters {
         if !name.starts_with(PREFIX) {
             continue;
         }
-        let key = match line.split_once('{') {
-            Some((_, rest)) => match rest.split_once('"').and_then(|(_, r)| r.split_once('"')) {
-                Some((label, _)) => format!("{name}/{label}"),
-                None => name.to_string(),
+        let key = match line
+            .split_once('{')
+            .and_then(|(_, rest)| rest.split_once('}'))
+        {
+            Some((labels, _)) => match label_value(labels, RESULT_LABEL) {
+                Some(result) => format!("{name}/{result}"),
+                // A labelled family carrying no `result` keys on its whole label set. Not on the
+                // family alone, which would sum series that mean different things — the mistake
+                // this function exists to avoid.
+                None => format!("{name}/{labels}"),
             },
             None => name.to_string(),
         };
@@ -456,6 +483,22 @@ hopr_packets_count{type="forwarded"} 99999
     #[test]
     fn the_two_deposit_tracking_outcomes_should_stay_separate() {
         let c = parse(EXPOSITION);
+        assert_eq!(c.deposits_confirmed(), Some(5));
+        assert_eq!(c.deposits_timed_out(), Some(2));
+    }
+
+    /// ...including when a label is added ahead of `result`.
+    ///
+    /// Positional extraction keys both series on the *first* value it finds, which for
+    /// `{session_id="s1",result=...}` is `s1` for the confirmed series and `s1` for the timed-out
+    /// one — so they sum, and the inversion the test above guards against arrives by way of an
+    /// upstream label nobody here changed. Nothing emits one today.
+    #[test]
+    fn a_label_ahead_of_result_should_not_merge_the_outcomes() {
+        let c = parse(&format!(
+            "{DEPOSIT_TRACKING}{{session_id=\"s1\",result=\"confirmed\"}} 5\n\
+             {DEPOSIT_TRACKING}{{session_id=\"s1\",result=\"timeout\"}} 2\n"
+        ));
         assert_eq!(c.deposits_confirmed(), Some(5));
         assert_eq!(c.deposits_timed_out(), Some(2));
     }

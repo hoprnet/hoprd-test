@@ -57,10 +57,16 @@ trap stop_chain EXIT INT TERM
 # produce, so it points HOPRD_BIN at a cargo target directory. A pattern that misses leaves the
 # previous scenario's nodes running and stealing CPU from the next one.
 reap_nodes_and_settle() {
+  # `pkill -f` and `pgrep -f` read their argument as an ERE, and HOPRD_BIN is now an arbitrary
+  # path. A `+`, `(` or `[` anywhere in it either stops the pattern matching — the case the
+  # comment above is about — or makes pgrep error, which `|| break` then reads as "all gone" and
+  # skips the settle entirely. Escaped once here and reused.
+  local bin_re
+  bin_re="$(printf '%s' "${HOPRD_BIN}" | sed 's/[][\.^$*+?(){}|]/\\&/g')"
   pkill -f "hoprd-localcluster" 2>/dev/null || true
-  pkill -f "${HOPRD_BIN}" 2>/dev/null || true
+  pkill -f "${bin_re}" 2>/dev/null || true
   for _ in $(seq 1 30); do
-    pgrep -f "${HOPRD_BIN}|hoprd-localcluster" >/dev/null 2>&1 || break
+    pgrep -f "${bin_re}|hoprd-localcluster" >/dev/null 2>&1 || break
     sleep 1
   done
   sleep 5

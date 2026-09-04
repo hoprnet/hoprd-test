@@ -82,24 +82,56 @@ echo "building blokli chain from release ${BLOKLI_REF} ..."
 nix build -L "github:hoprnet/blokli/${BLOKLI_REF}#bloklid" --out-link "${REPO_ROOT}/result-bloklid"
 nix build -L "nixpkgs#foundry" --out-link "${REPO_ROOT}/result-foundry"
 
-# ── Pin edgli to the resolved sha and refresh the lockfile ──
+# ── Pin edgli to the resolved sha, and hopr-lib to whatever that edgli pins ──
 echo "pinning edgli to ${EDGLI_SHA} ..."
+# Read through `gh api` for the reason resolve_sha gives: git-over-https is unusable in the dev
+# shell. Needed because our `hopr-lib` must name the rev edgli resolves, and only edge-client's
+# own manifest says which that is.
+EDGLI_MANIFEST="$(gh api "repos/hoprnet/edge-client/contents/Cargo.toml?ref=${EDGLI_SHA}" \
+  --jq '.content' 2>/dev/null | base64 -d)" || true
+[ -n "${EDGLI_MANIFEST}" ] || {
+  echo "could not read edge-client's Cargo.toml at ${EDGLI_SHA}" >&2
+  exit 1
+}
+export EDGLI_MANIFEST
 python3 - "$CRATE_CARGO" "$EDGLI_SHA" <<'PY'
-import re, sys
+import os, re, sys
 path, rev = sys.argv[1], sys.argv[2]
 src = open(path).read()
 # Replaces whichever ref the manifest carries with `rev = "<sha>"`. Both forms have to be handled:
 # CI always pins a concrete sha, for reproducibility and because a dispatch supplies one, but the
 # committed manifest tracks a branch so the default does not drift behind what CI tests. Matching
 # only `rev` meant this exited on every run once the manifest moved to `branch`.
-new, n = re.subn(r'(edgli\s*=\s*\{[^}]*?\b)(?:rev|branch)(\s*=\s*")[^"]*(")',
+src, n = re.subn(r'(edgli\s*=\s*\{[^}]*?\b)(?:rev|branch)(\s*=\s*")[^"]*(")',
                  rf'\g<1>rev\g<2>{rev}\g<3>', src, count=1)
 if n == 0:
     sys.exit(f"run.sh: no edgli rev/branch entry matched in {path} — the dependency "
              "stanza changed shape; refusing to run against a stale pin")
-open(path, 'w').write(new)
+
+# `hopr-lib` has to name the rev edgli itself resolves. Pinning only edgli leaves the two free to
+# disagree, and cargo then locks *two* hopr-libs — and with them two `hopr-strategy`s, whose
+# counters are registered in the same process and incremented by nobody. `tests/pix.rs` reads that
+# as a full set of zeroes and concludes the entry never deposited, so a skew here is worse than a
+# hard stop. edgli is authoritative (see the manifest's own hopr-lib comment), so follow its pin
+# rather than demand the committed one already match: a dispatch that moved edge-client onto a new
+# hoprnet rev should still run.
+upstream = re.search(r'^hopr-lib\s*=\s*\{[^}]*?\brev\s*=\s*"([0-9a-f]{7,40})"',
+                     os.environ['EDGLI_MANIFEST'], re.M | re.S)
+if not upstream:
+    sys.exit(f"run.sh: edge-client at {rev} pins hopr-lib by something other than a git rev — "
+             f"align {path} by hand; see its hopr-lib comment")
+hopr_lib_rev = upstream.group(1)
+src, n = re.subn(r'(hopr-lib\s*=\s*\{[^}]*?\b)(?:rev|branch)(\s*=\s*")[^"]*(")',
+                 rf'\g<1>rev\g<2>{hopr_lib_rev}\g<3>', src, count=1)
+if n == 0:
+    sys.exit(f"run.sh: no hopr-lib rev/branch entry matched in {path} — refusing to run with it "
+             "possibly off edgli's hoprnet rev")
+
+open(path, 'w').write(src)
+print(f"  edgli    -> {rev}")
+print(f"  hopr-lib -> {hopr_lib_rev} (edge-client's own pin)")
 PY
-(cd "${REPO_ROOT}/integration" && cargo update -p edgli)
+(cd "${REPO_ROOT}/integration" && cargo update -p edgli -p hopr-lib)
 
 # ── Run the test against a fresh flake-built chain per scenario ──
 # run-binchain.sh starts/stops bloklid+anvil per scenario (HOPRD_CHAIN_URL) and
