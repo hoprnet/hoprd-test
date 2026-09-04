@@ -8,6 +8,13 @@ name: PR
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
+  # Required status checks are evaluated on the MERGE GROUP once a merge queue is
+  # enabled, not on the pull request. A check that only runs on `pull_request` never
+  # reports for a queue candidate, so requiring it would park every entry until the
+  # queue's max-wait elapsed and then evict it. These jobs therefore have to run
+  # here too — they are cheap, and running them against the candidate is the point.
+  merge_group:
+    types: [checks_requested]
 permissions:
   contents: read
 concurrency:
@@ -23,6 +30,11 @@ env:
 jobs:
   validate-pr-title:
     name: Validate title
+    # PR-only: a queue candidate has no pull request, so
+    # `github.event.pull_request` is null and the action below has nothing to read.
+    # Consequently do NOT make this a required check — it cannot report on a merge
+    # group. Conventional-commit enforcement stays a pre-queue check.
+    if: github.event_name == 'pull_request'
     runs-on: depot-ubuntu-24.04
     permissions:
       pull-requests: read
