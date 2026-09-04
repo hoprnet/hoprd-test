@@ -6,8 +6,9 @@
 # Version model — no stored state, no commits:
 #   * the triggering project (PROJECT) uses the rev from the dispatch;
 #   * hoprd defaults to the v4 release line (see below), edge-client to main HEAD;
-#   * blokli is ALWAYS the head of its `release/0.13` branch (the Jura/v4 line),
-#     built from its flake — no docker image, no unreleased-merge testing.
+#   * blokli defaults to the head of its `release/0.13` branch (the Jura/v4 line),
+#     built from its flake — no docker image. A blokli dispatch overrides it with
+#     the merged/PR rev, same as the other two.
 # So a hoprd/edge-client merge is tested against the current tip of the other and
 # the current Jura blokli.
 #
@@ -19,7 +20,7 @@
 # any dispatched hoprd rev is required to be contained in it.
 #
 # Inputs (env):
-#   PROJECT          hoprd | edge-client | "" (manual = all defaults)
+#   PROJECT          hoprd | edge-client | blokli | "" (manual = all defaults)
 #   OVERRIDE_REV     git rev for PROJECT when it is hoprd or edge-client
 #   HOPRD_LINE       hoprd release line the rev must belong to (default: release/4.1)
 #   HOPRD_REF        default hoprd ref       (default: ${HOPRD_LINE})
@@ -41,7 +42,10 @@ EDGLI_REF="${EDGLI_REF:-main}"
 case "${PROJECT:-}" in
 hoprd) HOPRD_REF="${OVERRIDE_REV:?OVERRIDE_REV required for PROJECT=hoprd}" ;;
 edge-client) EDGLI_REF="${OVERRIDE_REV:?OVERRIDE_REV required for PROJECT=edge-client}" ;;
-blokli) echo "PROJECT=blokli: merge-testing dropped — running hoprd ${HOPRD_LINE} / edge-client main against blokli ${BLOKLI_REF:-release/0.13}" ;;
+# blokli merge-testing is back on: blokli now gates its own merges to release/0.13,
+# so a dispatch from it must actually build the dispatched rev rather than the
+# branch head. Set here and consumed by the BLOKLI_REF default further down.
+blokli) BLOKLI_REF="${OVERRIDE_REV:?OVERRIDE_REV required for PROJECT=blokli}" ;;
 "" | manual) echo "no PROJECT override — hoprd at ${HOPRD_LINE}, edge-client at main, blokli at ${BLOKLI_REF:-release/0.13}" ;;
 *)
   echo "unknown PROJECT '${PROJECT}'" >&2
@@ -85,18 +89,23 @@ BLOKLI_REF="${BLOKLI_REF:-release/0.13}"
 # Reject a hoprd rev from the wrong side of the v4/v5 split. A merge dispatch from
 # hoprd `main` carries a v5 sha, which pairs with a v4 hopr-lib only by accident;
 # fail fast with the reason rather than after a 40-minute build + a red gate.
-# `compare/<line>...<rev>` reports "identical"/"behind" when <rev> is contained in
-# <line>, and "ahead"/"diverged" when it is not.
+#
+# `compare/<line>...<rev>` reports, from the line's point of view:
+#   identical / behind — the rev is contained in the line
+#   ahead             — the rev CONTAINS the line plus new commits, i.e. a branch or
+#                       PR head based on it. Accepted: that is precisely the
+#                       label-triggered PR case, which hoprd fires with its PR head.
+#   diverged          — the rev is off the line entirely (a v5 `main` sha). Rejected.
 if [ "${HOPRD_SKIP_LINE_CHECK:-0}" != "1" ] && [ "${HOPRD_REF}" != "${HOPRD_LINE}" ]; then
   status="$(gh api "repos/hoprnet/hoprd/compare/${HOPRD_LINE}...${HOPRD_REF}" --jq '.status' 2>/dev/null || true)"
   case "${status}" in
-  identical | behind) ;;
+  identical | behind | ahead) ;;
   "")
     echo "could not compare hoprd ref '${HOPRD_REF}' against '${HOPRD_LINE}'" >&2
     exit 1
     ;;
   *)
-    echo "hoprd ref '${HOPRD_REF}' is not contained in '${HOPRD_LINE}' (compare: ${status})." >&2
+    echo "hoprd ref '${HOPRD_REF}' is not on the '${HOPRD_LINE}' line (compare: ${status})." >&2
     echo "This test targets the hoprd v4 line — the integration crate pins hoprnet release/4.0." >&2
     echo "Set HOPRD_LINE to the intended line, or HOPRD_SKIP_LINE_CHECK=1 to run anyway." >&2
     exit 1

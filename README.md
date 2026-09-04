@@ -7,12 +7,15 @@ pumps a payload through **0-hop and 1-hop UDP sessions** to the exit node's
 built-in loopback — measuring goodput and datagram loss.
 
 It is the gate for the **hoprd v4 line** (`release/4.1`) against `edge-client`
-`main`, runs on a dedicated self-hosted Hetzner runner (label `hetzner`), and **gates the
-hoprd → first-network deploy**. The chain is always the latest `blokli` release,
-built from its flake per run. Today's live triggers are a manual dispatch and the
-`run-integration` label on a hoprd-test PR; the `repository_dispatch` merge hook
-is implemented here but **not yet fired** by hoprd / edge-client (see
-[`runner/README.md`](runner/README.md)).
+`main` and blokli `release/0.13`, and runs on a dedicated self-hosted Hetzner
+runner (label `hetzner`).
+
+It is wired into all three upstream repos: a hoprd merge to its v4 line **blocks**
+on it before the docker image is built or tagged, so a red gate means nothing gets
+promoted or deployed; edge-client (`main`) and blokli (`release/0.13`) fire it on
+merge and are told about failures via Zulip; and a PR in any of the three labelled
+`run-integration` runs it as a check on that PR. Details and the token/permission
+prerequisites are in [`runner/README.md`](runner/README.md).
 
 - Test crate: [`integration/`](integration/)
 - CI workflow: [`.github/workflows/integration.yaml`](.github/workflows/integration.yaml)
