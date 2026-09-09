@@ -415,10 +415,34 @@ run_suite() { # target, then any scenarios to HOLD OUT of it
 }
 
 echo "running integration tests (binary chain) ..."
-# EXPERIMENT BRANCH — do not merge. Runs ONE held-out scenario and nothing else, to
-# test whether it still fails on the runner with no other scenario before it. It
-# fails on the runner and passes locally both in isolation and in the full
-# 8-scenario sequence, so this isolates the runner from the sequence.
-SCENARIOS=a_symmetric_session_should_survive_relayer_loss run_suite return_path
+run_suite integration
+run_suite return_path
+run_suite exit_origination
+# Gated: `upload_survival` reproduces the sustained-upload return-path collapse and therefore FAILS
+# against release/4.0 until the reply-opener LRU fix (hoprnet#8417) lands there. Wiring it in now
+# would turn the nightly red every run. Enable once that fix is in release/4.0 — at which point the
+# test flips to passing and becomes a genuine regression guard.
+
+# Entry-side PIX: v5 only (`edgli/pix-test` has no v4 counterpart).
+if [ "${PIX_SUITE}" = "1" ]; then
+  export HOPRD_BIN="${PIX_BIN}"
+  run_suite pix
+
+  # `pix_shapes` additionally needs a localcluster that takes `--pix-config`: the bare
+  # `--enable-pix` is a 32-packet demo cycle that no traffic shape fits inside. Probed on the
+  # binary, the same way the deposit pool is, rather than assumed from the ref.
+  if pix_check_localcluster "${REPO_ROOT}/result-localcluster/bin/hoprd-localcluster" 2>/dev/null; then
+    # The geometry spike gets its own run, because a cluster serves one binary invocation and
+    # libtest orders the rest alphabetically: if the geometry cannot complete one cycle, no
+    # shape after it can be read.
+    spike=the_profile_geometry_completes_a_cycle
+    SCENARIOS="${spike}" run_suite pix_shapes
+    run_suite pix_shapes "${spike}"
+  else
+    echo "::error::the hoprd-localcluster built from '${HOPRD_REF}' has no --pix-config, so the" >&2
+    echo "pix_shapes suite cannot state its geometry. Use a newer hoprd ref." >&2
+    suite_rc=1
+  fi
+fi
 
 exit "${suite_rc}"
