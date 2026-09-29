@@ -345,6 +345,27 @@ gh workflow run integration.yaml -R hoprnet/hopr-integration-tests \
 # empty inputs → the v4 line, every ref at its branch head
 ```
 
+### Breaking upstream changes (companion PRs)
+
+An upstream PR that breaks the tests (API change, new config field) cannot merge on its own:
+its gate runs the tests from `main`. Pair it with a tests PR, and link the two by adding one line
+to each PR description:
+
+```
+Requires: hoprnet/hopr-integration-tests#50   # in the edge-client / hoprd / blokli PR
+Requires: hoprnet/edge-client#186             # in the hopr-integration-tests PR
+```
+
+1. Open the tests PR, adapted to the new API, and label it `run-integration`. While the upstream
+   PR is open, the matching line (`main` = v5, `release/*` = v4) builds that PR's head.
+2. Queue the upstream PR. Its gate sends `tests_pr`, so the run checks out the tests PR head. It
+   must be an open PR from a branch of this repo; fork PRs are refused.
+3. Queue the tests PR once the upstream PR has merged. This repo's merge queue refuses while a
+   `Requires:` target is still open, so `main` never gets ahead of upstream.
+
+The description is read when a run starts, so re-queue or re-label after editing it. Manually:
+`-f tests_pr=<N>`.
+
 Runs on the self-hosted **`hetzner`** runner, provisioned from the gitops repo
 (`ansible/playbooks/install-github-hetzner-runner.yaml`). Nix and the `hoprnet`
 Cachix substituter must be present **on the box** — the `setup-nix` action skips
