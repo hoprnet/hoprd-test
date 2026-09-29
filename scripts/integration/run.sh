@@ -288,7 +288,19 @@ for dep, keypat in (("hopr-lib", KEY), ("hopr-strategy", r'\bversion\s*=\s*"[^"]
 
 open(path, 'w').write(src)
 PY
-(cd "${REPO_ROOT}/integration" && cargo update -p edgli -p hopr-lib)
+# Test the hoprnet edge-client locks, not the branch tip: a hoprnet merge must reach us through an
+# edge-client lock bump, which its gate then tests.
+EDGLI_HOPRLIB_REV="$(gh api -H "Accept: application/vnd.github.raw" \
+  "repos/hoprnet/edge-client/contents/Cargo.lock?ref=${EDGLI_SHA}" 2>/dev/null |
+  sed -n '/^name = "hopr-lib"$/,/^source/ s/.*#\([0-9a-f]\{40\}\)"$/\1/p')" || true
+[ -n "${EDGLI_HOPRLIB_REV}" ] || {
+  echo "could not read edge-client's locked hopr-lib rev at ${EDGLI_SHA}" >&2
+  exit 1
+}
+echo "  hopr-lib pinned to edge-client's lock: ${EDGLI_HOPRLIB_REV}"
+(cd "${REPO_ROOT}/integration" &&
+  cargo update -p edgli &&
+  cargo update -p hopr-lib --precise "${EDGLI_HOPRLIB_REV}")
 
 # Two copies is invisible at runtime: readings come back all-zero rather than erroring,
 # which is exactly what `tests/pix.rs` reads as "never deposited". Catch it here.
