@@ -39,9 +39,9 @@ const HOPS: usize = 1;
 
 /// Bytes per write.
 ///
-/// Chosen so a write is one HOPR packet and no SURB can piggyback on it, which is what leaves the
-/// balancer as the only SURB source and therefore the only thing sizing the return pipeline. Same
-/// reasoning as `session_pix_soak.rs`'s identical constant.
+/// Under `SESSION_MTU`, so a write is one HOPR packet. It was also chosen so no SURB could
+/// piggyback on it, but at a 3246 B payload several fit; what keeps the balancer sizing the return
+/// pipeline now is `max_surbs_per_data_packet: 1`, set in `IntegrationEnv::open_pix_session_with`.
 const CHUNK: usize = 900;
 
 /// Send pace, one chunk per this — the profile's packet rate expressed as a delay.
@@ -386,7 +386,7 @@ async fn an_idle_session_completes_its_cycle_on_exit_fill() -> anyhow::Result<()
     let (mut rx, mut tx) = tokio::io::split(session);
 
     // Enough keep-alives to span the aim point, and nothing else. At 32 bytes every 25 s this is
-    // ~28 packets over nine minutes against a cycle of 81 920 — the application cannot be what
+    // ~58 packets over 22.5 minutes against a cycle of 81 920 — the application cannot be what
     // finishes it, which is what makes the assertion below about fill.
     let keepalives = (aim_point.as_secs() / 25 + 4) as usize;
     let payload = pump::tagged_payload(0, keepalives * 32);
@@ -816,7 +816,11 @@ async fn a_mixed_session_sustains_its_cycles() -> anyhow::Result<()> {
         bulk.arrival_pct()
     );
 
-    let delta = await_sweeps(&exit, &before, 2, sweep_budget(1)).await?;
+    // The bulk phase finishes cycle 1 and leaves cycle 2 part-served, so fill finishes it, aiming at
+    // `0.75 x MAX_RECOVERY_TIME` from the cycle's start. That start lies inside the bulk phase, so
+    // the aim point measured from here bounds it. At 1800 s it is 1350 s, past `sweep_budget(1)`.
+    let fill_aim = shapes::MAX_RECOVERY_TIME.mul_f64(shapes::FILL_FINISH_FRACTION);
+    let delta = await_sweeps(&exit, &before, 2, sweep_budget(1).max(fill_aim)).await?;
     assert_eq!(
         0,
         delta.deposits_timed_out().unwrap_or(0),

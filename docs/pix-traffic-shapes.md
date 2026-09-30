@@ -63,15 +63,16 @@ at a rate a 1-hop local cluster carries comfortably. The deployed 4608 x 80 at 1
 | SURB buffer                     | 4 800 SURBs (5.9 % of `E`)     | 19 264 (5.2 %) |
 | free credit (`parts x surplus`) | 16 384                         | 73 728         |
 | `max_served_without_progress`   | 2048 (credit covers the queue) | 2048           |
-| `max_recovery_time`             | **12 min**                     | 2 h            |
-| fill rate an idle cycle needs   | 120 packets/s                  | 72 packets/s   |
+| `max_recovery_time`             | **30 min**                     | 2 h            |
+| fill rate an idle cycle needs   | 64 packets/s                   | 72 packets/s   |
 | `fill.max_rate`                 | 250                            | 250            |
 
 `max_recovery_time` is the one deliberate departure. It is no longer only a backstop: since the
 Exit fills a cycle the application left unfinished, it is also the idle tariff, and an idle
 scenario spends `0.75 x` it. Two hours is not a thing a test can wait out. The value still clears
-the floor `validate_incoming_session_pix_config` enforces (`quota_range_max / 180 packets/s` =
-535 s), so it is a legal configuration rather than a test-only escape hatch.
+the floor `validate_incoming_session_pix_config` enforces (`quota_range_max / 57 packets/s` =
+1685 s at the 3246 B payload, 1.5 Mbps in packets), so it is a legal configuration rather than a
+test-only escape hatch. It was 12 min, against a 535 s floor, until the payload tripled.
 
 ## Results
 

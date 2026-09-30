@@ -23,7 +23,7 @@
 //!
 //! # What is deliberately unlike production
 //!
-//! [`MAX_RECOVERY_TIME`] is 12 minutes rather than two hours. It is the deadline a funded cycle
+//! [`MAX_RECOVERY_TIME`] is 30 minutes rather than two hours. It is the deadline a funded cycle
 //! must recover within — and, since the Exit fills a cycle the application has left unfinished
 //! rather than letting it strand, it is also the idle tariff: a Session with no traffic completes
 //! at `0.75 x` it. Two hours is not a thing a test can wait out. The value is still above the
@@ -107,15 +107,17 @@ pub const MAX_DEPOSIT_WAIT: Duration = Duration::from_secs(30);
 /// Two constraints, from opposite directions:
 ///
 /// * **Above** `quota_range_max / ASSUMED_SESSION_PACKET_RATE`, which
-///   `validate_incoming_session_pix_config` enforces at load. That rate is 180 packets/s — 1.5 Mbps,
-///   deliberately the loosest useful bound, since a slower Session is the one needing the longest
-///   deadline. At [`QUOTA_RANGE_MAX`] the floor is ~533 s.
+///   `validate_incoming_session_pix_config` enforces at load. That rate is 1.5 Mbps in packets —
+///   57 packets/s at a 3246 B payload, 180 at the old 1038 B — deliberately the loosest useful
+///   bound, since a slower Session is the one needing the longest deadline. At [`QUOTA_RANGE_MAX`]
+///   the floor is ~1685 s, and no window containing [`CYCLE_PACKETS`] gets it under ~1438 s.
 /// * **Small enough to wait out.** A Session with no application traffic completes its cycle on
 ///   Exit fill at `0.75 x` this, so it is what an idle scenario spends. Production's two hours
 ///   would make that scenario a 90-minute one.
 ///
-/// Twelve minutes clears the floor with margin and puts the idle aim point at nine.
-pub const MAX_RECOVERY_TIME: Duration = Duration::from_secs(720);
+/// Thirty minutes clears the floor with margin and puts the idle aim point at 22.5. It was twelve
+/// until the 3246 B payload cut the assumed packet rate to a third.
+pub const MAX_RECOVERY_TIME: Duration = Duration::from_secs(1800);
 
 /// Fraction of [`MAX_RECOVERY_TIME`] at which Exit fill aims to have the cycle finished.
 ///
@@ -124,9 +126,9 @@ pub const FILL_FINISH_FRACTION: f64 = 0.75;
 
 /// Ceiling on the Exit's self-generated fill traffic, packets/s.
 ///
-/// Upstream's default. An idle cycle here needs `E x 1.05 / (0.75 x 720 s)` = 120 packets/s, so
-/// this is twice the requirement; the validator separately refuses a ceiling below what a cycle of
-/// [`QUOTA_RANGE_MAX`] needs, which is 187 packets/s.
+/// Upstream's default. An idle cycle here needs `E x 1.05 / (0.75 x 1800 s)` = 64 packets/s, so
+/// this is four times the requirement; the validator separately refuses a ceiling below what a
+/// cycle of [`QUOTA_RANGE_MAX`] needs, which is 75 packets/s.
 pub const FILL_MAX_RATE: u32 = 250;
 
 // ── Admission window ─────────────────────────────────────────────────────────
@@ -192,11 +194,17 @@ const _: () = assert!(
     "SURB buffer is too deep relative to a cycle"
 );
 
+/// Upstream's `ASSUMED_SESSION_PACKET_RATE`, which hopr-lib does not re-export: 1.5 Mbps in packets.
+/// Derived rather than written out, because it moves with the payload size — a literal 180 here
+/// let a profile that hoprd refuses at load pass every unit test.
+const ASSUMED_SESSION_PACKET_RATE: u64 = 1_500_000 / 8 / PACKET_PAYLOAD_SIZE as u64;
+
 /// The recovery deadline must clear a whole cycle at the widest accepted quota, measured at
-/// upstream's `ASSUMED_SESSION_PACKET_RATE` of 180 packets/s. `validate_incoming_session_pix_config`
-/// refuses the configuration otherwise, at load, before any Session is opened.
+/// [`ASSUMED_SESSION_PACKET_RATE`]. `validate_incoming_session_pix_config` refuses the configuration
+/// otherwise, at load, before any Session is opened.
 const _: () = assert!(
-    MAX_RECOVERY_TIME.as_secs() >= QUOTA_RANGE_MAX / PACKET_PAYLOAD_SIZE as u64 / 180,
+    MAX_RECOVERY_TIME.as_secs()
+        >= (QUOTA_RANGE_MAX / PACKET_PAYLOAD_SIZE as u64).div_ceil(ASSUMED_SESSION_PACKET_RATE),
     "max_recovery_time cannot cover a cycle at the widest accepted quota"
 );
 
@@ -499,7 +507,7 @@ mod tests {
             "num_ssa_parts: 1024",
             "ssa_part_size: 64",
             "additional_shares: 16",
-            "max_recovery_time: 720s",
+            "max_recovery_time: 1800s",
             "max_deposit_wait: 30s",
             "fill_enabled: true",
             "fill_max_rate: 250",

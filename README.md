@@ -420,6 +420,10 @@ The tests PR pins `Cargo.v5.lock` to edgli `ddec291` and hopr-lib `a065fa2`, and
 
 - `always_max_out_surbs: true` becomes `max_surbs_per_data_packet: usize::MAX` on v5. That keeps
   the old meaning of no per-packet SURB cap; the new default of `1` would change the test.
+  Except on PIX sessions, which take `1`: at 3246 B a small write has room for several SURBs,
+  each carrying a share of the SSA it was minted in, and an uncapped supply buries the next
+  SSA's shares under the current one's. `just pix` failed exactly so, with the Exit closing
+  on `recovery_idle` in cycle 2. `1` stops piggybacking at the balancer's target.
 - `EdgeStrategyKind::Pix` now takes a `Box`, and `PixEntryConfig` has gained `state_dir`, which is
   `None` here because the secp256k1 pool ignores it.
 - `PRICE_PER_BYTE` drops from `0.0001` to `0.000032`, the same rescale hoprd#187 gives the

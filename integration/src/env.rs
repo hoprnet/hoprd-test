@@ -475,7 +475,12 @@ impl IntegrationEnv {
             forward_path: HopRouting::try_from(forward_hops)?,
             return_path: HopRouting::try_from(return_hops)?,
             capabilities: SessionCapability::Segmentation | SessionCapability::NoDelay,
-            max_surbs_per_data_packet: usize::MAX,
+            // Not `usize::MAX`, as the throughput sessions use: at a 3246 B payload a small write
+            // has room for several SURBs, each carrying a share of the SSA it was minted in, and
+            // an uncapped supply buries the next SSA's shares under the current one's — cycle 2
+            // then never recovers. `1` is upstream's gate on the balancer's target, which keeps
+            // the buffer at the depth the balancer was given.
+            max_surbs_per_data_packet: 1,
             surb_management: Some(surb_management),
             ..Default::default()
         };
