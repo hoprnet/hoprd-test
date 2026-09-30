@@ -63,7 +63,7 @@ impl ExtraStrategies {
                 max_ssa_allocation = %pix.strategy.max_ssa_allocation,
                 "entry will run the PIX deposit strategy"
             );
-            cfg.strategies.push(EdgeStrategyKind::Pix(pix));
+            cfg.strategies.push(EdgeStrategyKind::Pix(Box::new(pix)));
         }
         // With every optional strategy compiled out there is nothing to append, and the argument
         // would read as unused.
