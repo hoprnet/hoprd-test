@@ -95,6 +95,7 @@ jobs:
           TESTS_PR: ${{ inputs.tests_pr || github.event.client_payload.tests_pr }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           MQ_REF: ${{ github.event.merge_group.head_ref }}
+          MQ_SHA: ${{ github.event.merge_group.head_sha }}
         run: |
           set -euo pipefail
           refs='{"v4":{},"v5":{}}'
@@ -112,13 +113,19 @@ jobs:
             echo "Tests from #${TESTS_PR} at \`${sha}\`" >>"${GITHUB_STEP_SUMMARY}"
           fi
 
-          pr="${PR_NUMBER}"
+          # On a dispatch the tests PR lists the rest of the change-set; see README.
+          pr="${PR_NUMBER:-${TESTS_PR}}"
           if [ -z "${pr}" ] && [[ ${MQ_REF} =~ /pr-([0-9]+)- ]]; then pr="${BASH_REMATCH[1]}"; fi
           if [ -n "${pr}" ]; then
             body="$(gh pr view "${pr}" -R "${GITHUB_REPOSITORY}" --json body -q .body)"
             while read -r repo num; do
-              read -r state base sha < <(gh pr view "${num}" -R "hoprnet/${repo}" \
-                --json state,baseRefName,headRefOid -q '"\(.state) \(.baseRefName) \(.headRefOid)"')
+              read -r state base sha fork < <(gh pr view "${num}" -R "hoprnet/${repo}" \
+                --json state,baseRefName,headRefOid,isCrossRepository \
+                -q '"\(.state) \(.baseRefName) \(.headRefOid) \(.isCrossRepository)"')
+              if [ "${fork}" != false ]; then
+                echo "::error::hoprnet/${repo}#${num} is a fork PR; its head must not run on the self-hosted box" >&2
+                exit 1
+              fi
               case "${base}" in
               main) line=v5 ;;
               release/*) line=v4 ;;
@@ -150,6 +157,28 @@ jobs:
               refs="$(jq -c --arg l "${line}" --arg k "${var}" --arg v "${sha}" '.[$l][$k] = $v' <<<"${refs}")"
               echo "${line}: ${var}=${sha} (hoprnet/${repo}#${num})" | tee -a "${GITHUB_STEP_SUMMARY}"
             done < <(grep -oP '^Requires: hoprnet/\K(hoprd|edge-client|blokli)#[0-9]+' <<<"${body}" | tr '#' ' ')
+          fi
+
+          # This repo merges last, so its locks must already sit on the edge-client branch they name.
+          if [ "${EVENT}" = merge_group ]; then
+            for lock in Cargo.lock Cargo.v5.lock; do
+              read -r branch rev < <(gh api -H "Accept: application/vnd.github.raw" \
+                "repos/${GITHUB_REPOSITORY}/contents/integration/${lock}?ref=${MQ_SHA}" |
+                sed -n '/^name = "edgli"$/,/^source/ s/.*?branch=\([^#]*\)#\([0-9a-f]\{40\}\)"$/\1 \2/p') || true
+              if [ -z "${rev:-}" ]; then
+                echo "::error::no branch-pinned edgli in integration/${lock}" >&2
+                exit 1
+              fi
+              branch="${branch//%2F//}"
+              status="$(gh api "repos/hoprnet/edge-client/compare/${branch}...${rev}" -q .status)"
+              case "${status}" in
+              identical | behind) ;;
+              *)
+                echo "::error::${lock} pins edgli ${rev}, which is not on edge-client ${branch} (${status}); re-pin with \`cargo update -p edgli\`" >&2
+                exit 1
+                ;;
+              esac
+            done
           fi
 
           {

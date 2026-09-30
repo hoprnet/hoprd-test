@@ -366,6 +366,21 @@ Requires: hoprnet/edge-client#186             # in the hopr-integration-tests PR
 The description is read when a run starts, so re-queue or re-label after editing it. Manually:
 `-f tests_pr=<N>`.
 
+**Change spanning several upstream repos** (for example a hoprnet wire change that hoprd and
+edge-client must both pick up): the tests PR is the hub. It lists every upstream PR, and each
+upstream PR lists only the tests PR. Every gate run then sees the whole set: its own candidate,
+plus the other upstream PRs through the tests PR.
+
+1. Open all PRs. In the tests PR, pin `Cargo.v5.lock` to the edge-client PR head
+   (`cargo update -p edgli --precise <sha>`, with the v5 files swapped in), or `pr.yaml` fails.
+   Label the tests PR `run-integration`; that run is the check of the whole set.
+2. Queue the upstream PRs one after another, in any order.
+3. Re-pin the tests PR to the edge-client branch (`cargo update -p edgli`) and queue it last. Its
+   queue refuses while a lock names an edgli commit that is not on that branch.
+
+Until the last PR merges, other v5 queue entries see a mixed stack and fail, so run the queues
+back to back. `run.sh` warns when hoprd and edge-client lock different hoprnet revisions.
+
 Runs on the self-hosted **`hetzner`** runner, provisioned from the gitops repo
 (`ansible/playbooks/install-github-hetzner-runner.yaml`). Nix and the `hoprnet`
 Cachix substituter must be present **on the box** — the `setup-nix` action skips

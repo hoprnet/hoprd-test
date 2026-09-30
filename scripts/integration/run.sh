@@ -290,14 +290,21 @@ open(path, 'w').write(src)
 PY
 # Test the hoprnet edge-client locks, not the branch tip: a hoprnet merge must reach us through an
 # edge-client lock bump, which its gate then tests.
-EDGLI_HOPRLIB_REV="$(gh api -H "Accept: application/vnd.github.raw" \
-  "repos/hoprnet/edge-client/contents/Cargo.lock?ref=${EDGLI_SHA}" 2>/dev/null |
-  sed -n '/^name = "hopr-lib"$/,/^source/ s/.*#\([0-9a-f]\{40\}\)"$/\1/p')" || true
+locked_hoprlib_rev() { # repo ref
+  gh api -H "Accept: application/vnd.github.raw" "repos/hoprnet/$1/contents/Cargo.lock?ref=$2" 2>/dev/null |
+    sed -n '/^name = "hopr-lib"$/,/^source/ s/.*#\([0-9a-f]\{40\}\)"$/\1/p'
+}
+EDGLI_HOPRLIB_REV="$(locked_hoprlib_rev edge-client "${EDGLI_SHA}")" || true
 [ -n "${EDGLI_HOPRLIB_REV}" ] || {
   echo "could not read edge-client's locked hopr-lib rev at ${EDGLI_SHA}" >&2
   exit 1
 }
 echo "  hopr-lib pinned to edge-client's lock: ${EDGLI_HOPRLIB_REV}"
+# The cluster's nodes and the edgli entry must speak the same wire format (packet size, SURBs).
+HOPRD_HOPRLIB_REV="$(locked_hoprlib_rev hoprd "${HOPRD_REF}")" || true
+if [ "${HOPRD_HOPRLIB_REV}" != "${EDGLI_HOPRLIB_REV}" ]; then
+  echo "::warning::hoprd locks hoprnet ${HOPRD_HOPRLIB_REV:-unknown}, edge-client ${EDGLI_HOPRLIB_REV}; a wire change between them breaks every session" >&2
+fi
 (cd "${REPO_ROOT}/integration" &&
   cargo update -p edgli &&
   cargo update -p hopr-lib --precise "${EDGLI_HOPRLIB_REV}")
