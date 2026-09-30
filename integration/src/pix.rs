@@ -148,6 +148,7 @@ pub fn entry_config(budget: HoprBalance) -> anyhow::Result<edgli::PixEntryConfig
             max_deposit_tracking_time: MAX_DEPOSIT_TRACKING_TIME,
             ..Default::default()
         },
+        state_dir: None,
     })
 }
 

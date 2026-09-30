@@ -392,6 +392,7 @@ pub fn entry_config() -> anyhow::Result<edgli::PixEntryConfig> {
             max_deposit_tracking_time: Duration::from_secs(40),
             ..Default::default()
         },
+        state_dir: None,
     })
 }
 
