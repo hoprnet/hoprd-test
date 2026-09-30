@@ -371,15 +371,65 @@ edge-client must both pick up): the tests PR is the hub. It lists every upstream
 upstream PR lists only the tests PR. Every gate run then sees the whole set: its own candidate,
 plus the other upstream PRs through the tests PR.
 
-1. Open all PRs. In the tests PR, pin `Cargo.v5.lock` to the edge-client PR head
-   (`cargo update -p edgli --precise <sha>`, with the v5 files swapped in), or `pr.yaml` fails.
+1. Open all PRs, then pin the tests PR's `Cargo.v5.lock` to the edge-client PR head, or `pr.yaml`
+   builds against edge-client `main` and fails. Move `hopr-lib` too: it is also a direct
+   dependency here, and it must be the revision that edge-client locks.
    Label the tests PR `run-integration`; that run is the check of the whole set.
 2. Queue the upstream PRs one after another, in any order.
-3. Re-pin the tests PR to the edge-client branch (`cargo update -p edgli`) and queue it last. Its
-   queue refuses while a lock names an edgli commit that is not on that branch.
+3. Re-pin the tests PR to the edge-client branch, and queue it last. Its queue refuses while a lock
+   names an edgli commit that is not on that branch. A squash merge produces a new commit, so a
+   re-pin is always needed.
+
+```bash
+# step 1: <edgli> = edge-client PR head, <hoprnet> = the hopr-lib rev its Cargo.lock names
+nix develop github:hoprnet/hoprnet -c bash scripts/integration/with-v5-deps.sh bash -c \
+  'cd integration && cargo update -p edgli --precise <edgli> &&
+   cargo update -p hopr-lib --precise <hoprnet> && cp Cargo.lock Cargo.v5.lock'
+# step 3: the same, with `cargo update -p edgli` and the rev edge-client `main` now locks
+```
 
 Until the last PR merges, other v5 queue entries see a mixed stack and fail, so run the queues
 back to back. `run.sh` warns when hoprd and edge-client lock different hoprnet revisions.
+
+**What the tests PR adapts.** The tests are built against the edge-client API, and they size
+parts of PIX by the packet payload. So a hoprnet change usually reaches this repo in three
+places:
+
+- API changes: renamed or new fields in `HoprSessionClientConfig`, `PixEntryConfig` and
+  `EdgeStrategyKind`. `env.rs` is compiled on both lines, so a field that exists on only one of
+  them goes behind `#[cfg(feature = "v5")]` / `#[cfg(not(feature = "v5"))]`.
+- Values tied to the payload size: the demo deposit price (`pix::PRICE_PER_BYTE`) against
+  `MAX_SSA_ALLOCATION`, and the traffic-shape quota window in `shapes.rs`, which is counted in
+  packets so that it follows `PACKET_PAYLOAD_SIZE`.
+- The lock, as above.
+
+Check both lines before opening the PR. v5 needs the swap helper:
+`bash scripts/integration/with-v5-deps.sh cargo test --manifest-path integration/Cargo.toml --all-features --lib`,
+then the same without the helper for v4.
+
+**Worked example: the 3246 B packet payload** (hoprnet `a065fa2`, payload 1038 → 3246 B). The set
+is edge-client#190, hoprd#187 and the tests PR. Descriptions:
+
+```
+Requires: hoprnet/hopr-integration-tests#<N>   # edge-client#190 and hoprd#187
+Requires: hoprnet/edge-client#190              # tests PR
+Requires: hoprnet/hoprd#187                    # tests PR
+```
+
+The tests PR pins `Cargo.v5.lock` to edgli `ddec291` and hopr-lib `a065fa2`, and adapts:
+
+- `always_max_out_surbs: true` becomes `max_surbs_per_data_packet: usize::MAX` on v5. That keeps
+  the old meaning of no per-packet SURB cap; the new default of `1` would change the test.
+- `EdgeStrategyKind::Pix` now takes a `Box`, and `PixEntryConfig` has gained `state_dir`, which is
+  `None` here because the secp256k1 pool ignores it.
+- `PRICE_PER_BYTE` drops from `0.0001` to `0.000032`, the same rescale hoprd#187 gives the
+  localcluster demo. Unchanged, a deposit would cost ~10.39 wxHOPR, above the 10 wxHOPR ceiling,
+  and every PIX Session would die on its deposit deadline.
+- The `shapes.rs` quota window moves from 60–100 MB to 58 000–96 000 packets. The cycle is
+  81 920 packets either way, but it is now ~266 MB, not 85 MB.
+
+Merge order: the label run on the tests PR first, then hoprd#187 and edge-client#190 through their
+queues, then re-pin the tests PR and queue it.
 
 Runs on the self-hosted **`hetzner`** runner, provisioned from the gitops repo
 (`ansible/playbooks/install-github-hetzner-runner.yaml`). Nix and the `hoprnet`

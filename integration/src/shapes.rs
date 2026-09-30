@@ -109,7 +109,7 @@ pub const MAX_DEPOSIT_WAIT: Duration = Duration::from_secs(30);
 /// * **Above** `quota_range_max / ASSUMED_SESSION_PACKET_RATE`, which
 ///   `validate_incoming_session_pix_config` enforces at load. That rate is 180 packets/s — 1.5 Mbps,
 ///   deliberately the loosest useful bound, since a slower Session is the one needing the longest
-///   deadline. At [`QUOTA_RANGE_MAX`] the floor is ~535 s.
+///   deadline. At [`QUOTA_RANGE_MAX`] the floor is ~533 s.
 /// * **Small enough to wait out.** A Session with no application traffic completes its cycle on
 ///   Exit fill at `0.75 x` this, so it is what an idle scenario spends. Production's two hours
 ///   would make that scenario a 90-minute one.
@@ -126,13 +126,16 @@ pub const FILL_FINISH_FRACTION: f64 = 0.75;
 ///
 /// Upstream's default. An idle cycle here needs `E x 1.05 / (0.75 x 720 s)` = 120 packets/s, so
 /// this is twice the requirement; the validator separately refuses a ceiling below what a cycle of
-/// [`QUOTA_RANGE_MAX`] needs, which is 188 packets/s.
+/// [`QUOTA_RANGE_MAX`] needs, which is 187 packets/s.
 pub const FILL_MAX_RATE: u32 = 250;
 
 // ── Admission window ─────────────────────────────────────────────────────────
 
 /// Lower bound of the quota window the Exit accepts.
-pub const QUOTA_RANGE_MIN: u64 = 60_000_000;
+///
+/// Counted in packets, like [`QUOTA_PER_SSA`], so the window moves with the payload size: in bytes
+/// it was 60-100 MB, which the 1038 -> 3246 B payload change put the quota (~266 MB) outside of.
+pub const QUOTA_RANGE_MIN: u64 = 58_000 * PACKET_PAYLOAD_SIZE as u64;
 
 /// Upper bound of the quota window the Exit accepts.
 ///
@@ -140,7 +143,7 @@ pub const QUOTA_RANGE_MIN: u64 = 60_000_000;
 /// move the window — the Exit refuses a Session whose offered quota falls outside it. It is also
 /// what both remaining validator floors are computed against, so widening it further tightens
 /// [`MAX_RECOVERY_TIME`] and [`FILL_MAX_RATE`].
-pub const QUOTA_RANGE_MAX: u64 = 100_000_000;
+pub const QUOTA_RANGE_MAX: u64 = 96_000 * PACKET_PAYLOAD_SIZE as u64;
 
 // ── Session sizing (Entry side) ──────────────────────────────────────────────
 
@@ -260,7 +263,7 @@ pub fn fill_enabled() -> bool {
 /// Only the fields this profile has a reason to move are named; everything else stays at the
 /// localcluster demo default, which is what keeps the settlement values consistent with a geometry
 /// that is 2 500x the demo one. `price_per_byte` and the two spend ceilings are stated because the
-/// deposit scales with the quota: at the demo price a cycle here would cost 8 503 wxHOPR against a
+/// deposit scales with the quota: at the demo price a cycle here would cost ~8 500 wxHOPR against a
 /// 10 wxHOPR per-deposit ceiling, and every deposit would be refused.
 pub fn cluster_pix_yaml() -> String {
     // One deposit is `price_per_byte x quota`, so the ceiling and the window are both derived from
@@ -306,7 +309,7 @@ safe_deposit_float: \"{float:.4} wxHOPR\"
 /// wxHOPR per byte of quota, on both sides: what the Exit requires and the Entry pays.
 ///
 /// Two orders of magnitude below the deployed 5.33e-8, because the cluster funds each node's Safe
-/// from a fixed pot and a run here has to afford [`BUDGETED_CYCLES`] cycles of an 85 MB quota out
+/// from a fixed pot and a run here has to afford [`BUDGETED_CYCLES`] cycles of a ~266 MB quota out
 /// of it. Nothing in the protocol reads the absolute figure — it is the *product* with the quota
 /// that both sides check — so a scaled price measures the same exchange.
 pub const PRICE_PER_BYTE_WXHOPR: f64 = 1e-9;
@@ -392,6 +395,7 @@ pub fn entry_config() -> anyhow::Result<edgli::PixEntryConfig> {
             max_deposit_tracking_time: Duration::from_secs(40),
             ..Default::default()
         },
+        // Only the Curvy pool keeps durable state; `pix-test` selects secp256k1, which ignores it.
         state_dir: None,
     })
 }
@@ -430,7 +434,11 @@ mod tests {
     #[test]
     fn the_profile_arithmetic_holds() {
         assert_eq!(81_920, CYCLE_PACKETS);
+        // The payload is 1038 B on the v4 line and 3246 B on v5.
+        #[cfg(not(feature = "v5"))]
         assert_eq!(85_032_960, QUOTA_PER_SSA);
+        #[cfg(feature = "v5")]
+        assert_eq!(265_912_320, QUOTA_PER_SSA);
         assert_eq!(273, NOMINAL_CYCLE_SECS);
         assert_eq!(4_800, DEFAULT_SURB_BUFFER);
         assert_eq!(16_384, FREE_CREDIT);

@@ -364,7 +364,11 @@ impl IntegrationEnv {
                     // up/runner.rs). A too-low SURB mint ceiling starves the exit's
                     // return path under sustained downlink; provision it like production.
                     capabilities: SessionCapability::Segmentation | SessionCapability::NoDelay,
+                    #[cfg(not(feature = "v5"))]
                     always_max_out_surbs: true,
+                    // v5 replaced the flag with a per-packet cap; uncapped is what `true` meant.
+                    #[cfg(feature = "v5")]
+                    max_surbs_per_data_packet: usize::MAX,
                     surb_management: balance_surbs.then_some(SurbBalancerConfig {
                         // gnosis main: 10 MB response buffer, 16 Mb/s SURB upstream.
                         target_surb_buffer_size: 10_000_000 / SESSION_MTU as u64,
@@ -471,7 +475,7 @@ impl IntegrationEnv {
             forward_path: HopRouting::try_from(forward_hops)?,
             return_path: HopRouting::try_from(return_hops)?,
             capabilities: SessionCapability::Segmentation | SessionCapability::NoDelay,
-            always_max_out_surbs: true,
+            max_surbs_per_data_packet: usize::MAX,
             surb_management: Some(surb_management),
             ..Default::default()
         };
