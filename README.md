@@ -429,8 +429,12 @@ The tests PR pins `Cargo.v5.lock` to edgli `ddec291` and hopr-lib `a065fa2`, and
 - `PRICE_PER_BYTE` drops from `0.0001` to `0.000032`, the same rescale hoprd#187 gives the
   localcluster demo. Unchanged, a deposit would cost ~10.39 wxHOPR, above the 10 wxHOPR ceiling,
   and every PIX Session would die on its deposit deadline.
-- The `shapes.rs` quota window moves from 60–100 MB to 58 000–96 000 packets. The cycle is
-  81 920 packets either way, but it is now ~266 MB, not 85 MB.
+- The `shapes.rs` quota window is now counted in packets, so it follows the payload.
+- The traffic-shape profile halves its geometry at the same cycle length (512 parts at 150
+  packets/s) and sets `fill_finish_fraction: 0.6`, which hoprd#187 exposes for it. hoprd derives
+  the floor on `max_recovery_time` from 1.5 Mbps, so the bigger payload tripled it (hoprnet#8469).
+  Halving the quota brings it to 843 s, under a 15 min deadline, and 0.6 puts fill's aim point back
+  at 540 s. Without both, the shapes suite needs a 30 min deadline and takes ~2 h.
 
 Merge order: the label run on the tests PR first, then hoprd#187 and edge-client#190 through their
 queues, then re-pin the tests PR and queue it.

@@ -5,7 +5,7 @@
 //! that question and the wrong size for this one: a single 64 KiB write spans two such cycles, so
 //! there is no shape a cycle can be observed *inside*.
 //!
-//! These scenarios run at [`crate::shapes`]' profile — a cycle of 81 920 packets, ~4.5 min nominal
+//! These scenarios run at [`crate::shapes`]' profile — a cycle of 40 960 packets, ~4.5 min nominal
 //! — and ask whether a Session sustains its cycles under the traffic a VPN client actually
 //! produces: idle with keep-alives, bursty browsing, sustained download, sustained upload, and the
 //! three in sequence on one Session.
@@ -258,10 +258,10 @@ async fn drain_for(
 /// The spike: does a cluster at this geometry admit the Session and complete a cycle at all?
 ///
 /// Everything else in this file rests on that, and none of it had ever been run — `tests/pix.rs`
-/// exercises a cycle 2 500x smaller, and hoprd's own soak a different geometry again through a
+/// exercises a cycle 1 280x smaller, and hoprd's own soak a different geometry again through a
 /// different harness. What this proves, in order: `--pix-config` reaches the nodes, the Entry's
 /// announced quota lands inside the window the Exit was given, the deposit clears a per-deposit
-/// ceiling derived from a price two orders of magnitude below the demo's, and a cycle of 81 920
+/// ceiling derived from a price two orders of magnitude below the demo's, and a cycle of 40 960
 /// packets recovers and sweeps within three nominal cycle lengths.
 ///
 /// A failure here is a configuration failure, not a shape failure, which is why it is separate:
@@ -386,7 +386,7 @@ async fn an_idle_session_completes_its_cycle_on_exit_fill() -> anyhow::Result<()
     let (mut rx, mut tx) = tokio::io::split(session);
 
     // Enough keep-alives to span the aim point, and nothing else. At 32 bytes every 25 s this is
-    // ~58 packets over 22.5 minutes against a cycle of 81 920 — the application cannot be what
+    // ~25 packets over nine minutes against a cycle of 40 960 — the application cannot be what
     // finishes it, which is what makes the assertion below about fill.
     let keepalives = (aim_point.as_secs() / 25 + 4) as usize;
     let payload = pump::tagged_payload(0, keepalives * 32);
@@ -818,7 +818,8 @@ async fn a_mixed_session_sustains_its_cycles() -> anyhow::Result<()> {
 
     // The bulk phase finishes cycle 1 and leaves cycle 2 part-served, so fill finishes it, aiming at
     // `0.75 x MAX_RECOVERY_TIME` from the cycle's start. That start lies inside the bulk phase, so
-    // the aim point measured from here bounds it. At 1800 s it is 1350 s, past `sweep_budget(1)`.
+    // the aim point measured from here bounds it. It is 540 s at this profile, inside
+    // `sweep_budget(1)`, but a profile with a later aim point must not cut the wait short.
     let fill_aim = shapes::MAX_RECOVERY_TIME.mul_f64(shapes::FILL_FINISH_FRACTION);
     let delta = await_sweeps(&exit, &before, 2, sweep_budget(1).max(fill_aim)).await?;
     assert_eq!(
