@@ -118,6 +118,11 @@ jobs:
           if [ -z "${pr}" ] && [[ ${MQ_REF} =~ /pr-([0-9]+)- ]]; then pr="${BASH_REMATCH[1]}"; fi
           if [ -n "${pr}" ]; then
             body="$(gh pr view "${pr}" -R "${GITHUB_REPOSITORY}" --json body -q .body)"
+            companions="$(grep -oP '^\s*Requires: hoprnet/\K(hoprd|edge-client|blokli)#[0-9]+' <<<"${body}" | tr '#' ' ' || true)"
+            if [ -z "${companions}" ] && grep -qP '^\s*Requires:' <<<"${body}"; then
+              echo "::error::#${pr} has a Requires: line that does not parse as 'Requires: hoprnet/<hoprd|edge-client|blokli>#<n>'" >&2
+              exit 1
+            fi
             while read -r repo num; do
               read -r state base sha fork < <(gh pr view "${num}" -R "hoprnet/${repo}" \
                 --json state,baseRefName,headRefOid,isCrossRepository \
@@ -156,7 +161,7 @@ jobs:
               esac
               refs="$(jq -c --arg l "${line}" --arg k "${var}" --arg v "${sha}" '.[$l][$k] = $v' <<<"${refs}")"
               echo "${line}: ${var}=${sha} (hoprnet/${repo}#${num})" | tee -a "${GITHUB_STEP_SUMMARY}"
-            done < <(grep -oP '^Requires: hoprnet/\K(hoprd|edge-client|blokli)#[0-9]+' <<<"${body}" | tr '#' ' ')
+            done < <(printf '%s\n' "${companions}" | sed '/^$/d')
           fi
 
           # This repo merges last, so its locks must already sit on the edge-client branch they name.
