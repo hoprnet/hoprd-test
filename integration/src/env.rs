@@ -366,9 +366,9 @@ impl IntegrationEnv {
                     capabilities: SessionCapability::Segmentation | SessionCapability::NoDelay,
                     #[cfg(not(feature = "v5"))]
                     always_max_out_surbs: true,
-                    // v5 replaced the flag with a per-packet cap; uncapped is what `true` meant.
+                    // gnosis documents `true` as 2 SURBs per packet and `false` as 1.
                     #[cfg(feature = "v5")]
-                    max_surbs_per_data_packet: usize::MAX,
+                    max_surbs_per_data_packet: if balance_surbs { 2 } else { 1 },
                     surb_management: balance_surbs.then_some(SurbBalancerConfig {
                         // gnosis main: 10 MB response buffer, 16 Mb/s SURB upstream.
                         target_surb_buffer_size: 10_000_000 / SESSION_MTU as u64,

@@ -74,6 +74,11 @@ const SURB_PSEUDONYM_LIFETIME: Duration = Duration::from_secs(30);
 
 const SURB_LIFETIME_ENV: &str = "HOPR_INTERNAL_SURB_PSEUDONYM_LIFETIME_MS";
 
+/// Above the lifetime: each keep-alive pops a SURB, and the store's idle timer resets on every pop.
+const SURB_NOTIFY_PERIOD: Duration = Duration::from_secs(60);
+
+const SURB_NOTIFY_PERIOD_ENV: &str = "HOPR_SESSION_SURB_BALANCE_NOTIFY_PERIOD_MS";
+
 /// What the exit logs when a return route had no SURB for the whole resolution wait.
 ///
 /// Its presence is the proof that the fault this scenario builds actually reached the code under
@@ -85,7 +90,7 @@ const STARVATION_EVIDENCE: &str = "no SURB for its return path within the wait";
 
 /// How long to wait for the exit to notice the SURBs are gone and emit a keep-alive into the void.
 ///
-/// The exit notifies its SURB level on `surb_balance_notify_period`, 60 s by default, so the first
+/// The exit notifies its SURB level on `surb_balance_notify_period`, set to 60 s here, so the first
 /// unresolvable packet lands somewhere in the 30–90 s after the session is abandoned. Waiting the
 /// full period plus the lifetime plus a margin makes the window deterministic.
 const WEDGE_WINDOW: Duration = Duration::from_secs(105);
@@ -133,6 +138,10 @@ async fn exit_should_keep_originating_when_a_return_path_becomes_unresolvable() 
         (
             SURB_LIFETIME_ENV.to_string(),
             SURB_PSEUDONYM_LIFETIME.as_millis().to_string(),
+        ),
+        (
+            SURB_NOTIFY_PERIOD_ENV.to_string(),
+            SURB_NOTIFY_PERIOD.as_millis().to_string(),
         ),
         // The Session-layer lines that say whether the exit's keep-alive was ever spawned and
         // whether its SURBs expired are `debug`. Without them a run that does not reproduce cannot
