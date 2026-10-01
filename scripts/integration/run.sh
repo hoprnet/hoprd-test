@@ -109,7 +109,7 @@ v4)
 v5)
   HOPRD_LINE="${HOPRD_LINE:-main}"
   EDGLI_REF="${EDGLI_REF:-main}"
-  BLOKLI_DEFAULT="v0.14.0"
+  BLOKLI_DEFAULT="release/0.14"
   ;;
 *)
   echo "unknown LINE '${LINE}' (expected v4 or v5)" >&2
@@ -154,7 +154,7 @@ EDGLI_SHA="$(resolve_sha hoprnet/edge-client "${EDGLI_REF}")"
 }
 
 # blokli tracks the `release/0.13` BRANCH — the line the Jura (v4) network runs,
-# agreed with the blokli team. Deliberately a moving branch and not a resolved
+# agreed with the blokli team — and `release/0.14` on v5. Deliberately a moving branch and not a resolved
 # release number, so patch releases land without an edit here; `--refresh` on its
 # build below is what makes that actually take effect.
 #

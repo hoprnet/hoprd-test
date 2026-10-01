@@ -23,11 +23,11 @@ hoprnet := env_var_or_default("HOPRNET_SHELL", "github:hoprnet/hoprnet")
 # scripts/integration/run.sh, whose header carries the branch table. The lines are not mixable.
 line := env_var_or_default("LINE", "v4")
 
-# Blokli ref for the image-free binary chain. v0.14.0 is the first release whose contract
-# addresses carry `service_registry`, which the v5 chain API requires: against v0.13.0 or earlier
+# Blokli branch for the image-free binary chain. v5 needs 0.14+: its contract addresses carry
+# `service_registry`, which the v5 chain API requires; against v0.13.0 or earlier
 # `hoprd-localcluster` exits during bootstrap with "contract addresses not a valid JSON: missing
 # field `service_registry`". Override: `just blokli_ref=… build-chain`, or set BLOKLI_REF.
-blokli_ref := env_var_or_default("BLOKLI_REF", if line == "v5" { "v0.14.0" } else { "release/0.13" })
+blokli_ref := env_var_or_default("BLOKLI_REF", if line == "v5" { "release/0.14" } else { "release/0.13" })
 
 # hoprd branch the binaries are built from (override: `just hoprd_ref=… build`, or HOPRD_REF).
 hoprd_ref := env_var_or_default("HOPRD_REF", if line == "v5" { "main" } else { "release/4.1" })
@@ -216,7 +216,7 @@ lint:
 ci:
     nix develop {{hoprnet}} -c bash scripts/integration/run.sh
 
-# Same, on the v5 line: hoprd/edge-client `main`, blokli v0.14.0, PIX suite included.
+# Same, on the v5 line: hoprd/edge-client `main`, blokli `release/0.14`, PIX suite included.
 # run.sh swaps `integration/Cargo.v5.toml` in for the run and restores it on exit.
 ci-v5:
     LINE=v5 nix develop {{hoprnet}} -c bash scripts/integration/run.sh

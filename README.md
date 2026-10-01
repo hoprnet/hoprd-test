@@ -13,7 +13,7 @@ only the dependency set differs — and runs on a dedicated self-hosted Hetzner 
 |                  | hoprd         | hoprnet       | edge-client   | blokli         | PIX suite |
 | ---------------- | ------------- | ------------- | ------------- | -------------- | --------- |
 | **v4** (default) | `release/4.1` | `release/4.0` | `release/4.1` | `release/0.13` | no        |
-| **v5**           | `main`        | `master`      | `main`        | `v0.14.0`      | yes       |
+| **v5**           | `main`        | `master`      | `main`        | `release/0.14` | yes       |
 
 Pick one with `LINE=v4`/`LINE=v5` (`just ci` / `just ci-v5`, or the `line` input on
 `integration.yaml`). The two are not mixable: a v4 blokli cannot bootstrap a v5
@@ -160,11 +160,11 @@ Goodput (`mbps`) is logged but not gated.
 
 ## Running the test
 
-The chain is anvil + bloklid built from the **blokli flake at its latest release**
-(`github:hoprnet/blokli/<tag>#bloklid`, currently `v0.14.0`, the first with the
+The chain is anvil + bloklid built from the **blokli flake at the line's release branch**
+(`github:hoprnet/blokli/<branch>#bloklid`: `release/0.14` on v5, 0.14 being the first with the
 `service_registry` contract address the current `hoprd-localcluster` requires), started by
-`scripts/integration/lib.sh chain_up` and attached via `--chain-url`. It pins a concrete blokli
-release rather than a floating docker tag.
+`scripts/integration/lib.sh chain_up` and attached via `--chain-url`. It tracks the blokli
+branch rather than a floating docker tag.
 
 ### Quickstart (`just`)
 
@@ -236,7 +236,7 @@ nix build -L github:hoprnet/hoprd#binary-hoprd-localcluster --out-link result-lo
 For the chain, build blokli (anvil + bloklid) from its release tag (Cachix-cached):
 
 ```bash
-nix build -L 'github:hoprnet/blokli/v0.14.0#bloklid' --out-link result-bloklid   # a blokli release (CI resolves the latest per run)
+nix build -L --refresh 'github:hoprnet/blokli/release/0.14#bloklid' --out-link result-bloklid   # the line's blokli branch
 nix build -L 'nixpkgs#foundry'                       --out-link result-foundry   # anvil
 ```
 
