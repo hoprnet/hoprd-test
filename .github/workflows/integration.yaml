@@ -74,7 +74,7 @@ concurrency:
   group: ${{ github.event_name == 'pull_request' && format('integration-pr-{0}', github.event.pull_request.number) || 'integration' }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
-  # On a hosted runner so `gh`/`jq` need not exist on the hetzner box. See README "Breaking upstream changes".
+  # On a hosted runner so `gh` need not exist on the hetzner box. See README "Breaking upstream changes".
   companions:
     name: Resolve companion PRs
     if: >-
@@ -86,19 +86,15 @@ jobs:
       pull-requests: read
     outputs:
       tests_sha: ${{ steps.resolve.outputs.tests_sha }}
-      refs: ${{ steps.resolve.outputs.refs }}
     steps:
       - id: resolve
         env:
           GH_TOKEN: ${{ github.token }}
           EVENT: ${{ github.event_name }}
           TESTS_PR: ${{ inputs.tests_pr || github.event.client_payload.tests_pr }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          MQ_REF: ${{ github.event.merge_group.head_ref }}
           MQ_SHA: ${{ github.event.merge_group.head_sha }}
         run: |
           set -euo pipefail
-          refs='{"v4":{},"v5":{}}'
           tests_sha=""
 
           # Fork heads must never reach the self-hosted box through an upstream PR description.
@@ -111,57 +107,6 @@ jobs:
             fi
             tests_sha="${sha}"
             echo "Tests from #${TESTS_PR} at \`${sha}\`" >>"${GITHUB_STEP_SUMMARY}"
-          fi
-
-          # On a dispatch the tests PR lists the rest of the change-set; see README.
-          pr="${PR_NUMBER:-${TESTS_PR}}"
-          if [ -z "${pr}" ] && [[ ${MQ_REF} =~ /pr-([0-9]+)- ]]; then pr="${BASH_REMATCH[1]}"; fi
-          if [ -n "${pr}" ]; then
-            body="$(gh pr view "${pr}" -R "${GITHUB_REPOSITORY}" --json body -q .body)"
-            companions="$(grep -oP '^\s*Requires: hoprnet/\K(hoprd|edge-client|blokli)#[0-9]+' <<<"${body}" | tr '#' ' ' || true)"
-            if [ -z "${companions}" ] && grep -qP '^\s*Requires:' <<<"${body}"; then
-              echo "::error::#${pr} has a Requires: line that does not parse as 'Requires: hoprnet/<hoprd|edge-client|blokli>#<n>'" >&2
-              exit 1
-            fi
-            while read -r repo num; do
-              read -r state base sha fork < <(gh pr view "${num}" -R "hoprnet/${repo}" \
-                --json state,baseRefName,headRefOid,isCrossRepository \
-                -q '"\(.state) \(.baseRefName) \(.headRefOid) \(.isCrossRepository)"')
-              if [ "${fork}" != false ]; then
-                echo "::error::hoprnet/${repo}#${num} is a fork PR; its head must not run on the self-hosted box" >&2
-                exit 1
-              fi
-              case "${base}" in
-              main) line=v5 ;;
-              release/*) line=v4 ;;
-              *)
-                echo "::error::hoprnet/${repo}#${num} targets '${base}', which maps to no line" >&2
-                exit 1
-                ;;
-              esac
-              case "${state}" in
-              MERGED)
-                echo "hoprnet/${repo}#${num} is merged: ${line} uses the ${base} head"
-                continue
-                ;;
-              OPEN) ;;
-              *)
-                echo "::error::hoprnet/${repo}#${num} is ${state}" >&2
-                exit 1
-                ;;
-              esac
-              if [ "${EVENT}" = merge_group ]; then
-                echo "::error::merge hoprnet/${repo}#${num} first: main must not get ahead of ${repo}" >&2
-                exit 1
-              fi
-              case "${repo}" in
-              edge-client) var=EDGLI_REF ;;
-              hoprd) var=HOPRD_REF ;;
-              blokli) var=BLOKLI_REF ;;
-              esac
-              refs="$(jq -c --arg l "${line}" --arg k "${var}" --arg v "${sha}" '.[$l][$k] = $v' <<<"${refs}")"
-              echo "${line}: ${var}=${sha} (hoprnet/${repo}#${num})" | tee -a "${GITHUB_STEP_SUMMARY}"
-            done < <(printf '%s\n' "${companions}" | sed '/^$/d')
           fi
 
           # This repo merges last, so its locks must already sit on the edge-client branch they name.
@@ -188,7 +133,6 @@ jobs:
 
           {
             echo "tests_sha=${tests_sha}"
-            echo "refs=${refs}"
           } >>"${GITHUB_OUTPUT}"
   integration:
     name: Integration throughput (${{ matrix.line }})
@@ -229,9 +173,9 @@ jobs:
       # also the line a dispatched rev must be contained in — that is what rejects a v5
       # sha sent at v4. A repo variable pins it for BOTH lines, rarely what you want.
       HOPRD_LINE: ${{ vars.HOPRD_LINE }}
-      HOPRD_REF: ${{ fromJSON(needs.companions.outputs.refs)[matrix.line].HOPRD_REF || vars.HOPRD_REF }}
-      EDGLI_REF: ${{ fromJSON(needs.companions.outputs.refs)[matrix.line].EDGLI_REF || vars.EDGLI_REF }}
-      BLOKLI_REF: ${{ fromJSON(needs.companions.outputs.refs)[matrix.line].BLOKLI_REF || vars.BLOKLI_REF }}
+      HOPRD_REF: ${{ vars.HOPRD_REF }}
+      EDGLI_REF: ${{ vars.EDGLI_REF }}
+      BLOKLI_REF: ${{ vars.BLOKLI_REF }}
       # Narrow on purpose. At `info,edgli=debug` a two-scenario run emitted ~6900
       # lines to surface ~44 useful ones; the whole hopr-lib/edgli stack narrates
       # every packet. `hoprd_integration_test` is where the measurements live

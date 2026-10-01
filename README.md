@@ -366,6 +366,9 @@ Requires: hoprnet/edge-client#186             # in the hopr-integration-tests PR
 The description is read when a run starts, so re-queue or re-label after editing it. Manually:
 `-f tests_pr=<N>`.
 
+`scripts/integration/run.sh` resolves the `Requires:` lines, from the tests PR's checkout. A gate
+runs `main`'s workflow, but still picks up a change to this mechanism made in the tests PR.
+
 **Change spanning several upstream repos** (for example a hoprnet wire change that hoprd and
 edge-client must both pick up): the tests PR is the hub. It lists every upstream PR, and each
 upstream PR lists only the tests PR. Every gate run then sees the whole set: its own candidate,

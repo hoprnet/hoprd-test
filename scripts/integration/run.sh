@@ -29,8 +29,77 @@ CRATE_LOCK="${REPO_ROOT}/integration/Cargo.lock"
 SUFFIX="${NIX_SYSTEM_SUFFIX:+-${NIX_SYSTEM_SUFFIX}}"
 SYSTEM="${NIX_SYSTEM_SUFFIX:-$(nix eval --raw --impure --expr builtins.currentSystem)}"
 
-# Per-line defaults; an explicit env override still wins.
 LINE="${LINE:-v4}"
+
+# The tests PR names the rest of a breaking change-set in `Requires:` lines; see README. Resolved
+# here rather than in the workflow: a dispatch runs main's workflow, but this script from the PR.
+companion_source_pr() {
+  [ -n "${GITHUB_EVENT_PATH:-}" ] || return 0
+  python3 - "${GITHUB_EVENT_PATH}" <<'PY'
+import json, re, sys
+
+event = json.load(open(sys.argv[1]))
+pr = ((event.get("client_payload") or {}).get("tests_pr")
+      or (event.get("inputs") or {}).get("tests_pr")
+      or (event.get("pull_request") or {}).get("number"))
+if not pr:
+    queued = re.search(r"/pr-([0-9]+)-", (event.get("merge_group") or {}).get("head_ref", ""))
+    pr = queued and queued.group(1)
+print(pr or "")
+PY
+}
+COMPANION_SOURCE_PR="$(companion_source_pr)"
+if [ -n "${COMPANION_SOURCE_PR}" ]; then
+  body="$(gh pr view "${COMPANION_SOURCE_PR}" -R "${GITHUB_REPOSITORY}" --json body -q .body)"
+  companions="$(sed -nE 's/^[[:space:]]*Requires: hoprnet\/(hoprd|edge-client|blokli)#([0-9]+).*/\1 \2/p' <<<"${body}")"
+  if [ -z "${companions}" ] && grep -qE '^[[:space:]]*Requires:' <<<"${body}"; then
+    echo "::error::#${COMPANION_SOURCE_PR} has a Requires: line that does not parse as 'Requires: hoprnet/<hoprd|edge-client|blokli>#<n>'" >&2
+    exit 1
+  fi
+  while read -r repo num; do
+    [ -n "${repo}" ] || continue
+    read -r state base sha fork < <(gh pr view "${num}" -R "hoprnet/${repo}" \
+      --json state,baseRefName,headRefOid,isCrossRepository \
+      -q '"\(.state) \(.baseRefName) \(.headRefOid) \(.isCrossRepository)"')
+    if [ "${fork}" != false ]; then
+      echo "::error::hoprnet/${repo}#${num} is a fork PR; its head must not run on the self-hosted box" >&2
+      exit 1
+    fi
+    case "${base}" in
+    main) line=v5 ;;
+    release/*) line=v4 ;;
+    *)
+      echo "::error::hoprnet/${repo}#${num} targets '${base}', which maps to no line" >&2
+      exit 1
+      ;;
+    esac
+    case "${state}" in
+    MERGED)
+      echo "hoprnet/${repo}#${num} is merged: ${line} uses the ${base} head"
+      continue
+      ;;
+    OPEN) ;;
+    *)
+      echo "::error::hoprnet/${repo}#${num} is ${state}" >&2
+      exit 1
+      ;;
+    esac
+    if [ "${GITHUB_EVENT_NAME:-}" = merge_group ]; then
+      echo "::error::merge hoprnet/${repo}#${num} first: main must not get ahead of ${repo}" >&2
+      exit 1
+    fi
+    [ "${line}" = "${LINE}" ] || continue
+    case "${repo}" in
+    edge-client) EDGLI_REF="${sha}" ;;
+    hoprd) HOPRD_REF="${sha}" ;;
+    blokli) BLOKLI_REF="${sha}" ;;
+    esac
+    echo "companion: ${repo} at ${sha} (hoprnet/${repo}#${num}, from #${COMPANION_SOURCE_PR})" |
+      tee -a "${GITHUB_STEP_SUMMARY:-/dev/null}"
+  done <<<"${companions}"
+fi
+
+# Per-line defaults; an explicit env override still wins.
 case "${LINE}" in
 v4)
   HOPRD_LINE="${HOPRD_LINE:-release/4.1}"
