@@ -83,6 +83,8 @@ const PIX_RESPONSE_BUFFER_BYTES: u64 = 16_000;
 #[cfg(feature = "v5")]
 const PIX_MAX_SURB_UPSTREAM_BITS: u64 = 20_000_000;
 
+/// Local checks are cheap in-process/loopback calls; a coarse interval only adds dead time.
+const LOCAL_POLL: Duration = Duration::from_millis(500);
 const PEER_DISCOVERY_TIMEOUT: Duration = Duration::from_secs(120);
 const LOCAL_CHANNEL_OPEN_TIMEOUT: Duration = Duration::from_secs(120);
 const EXIT_PEER_PROBE_TIMEOUT: Duration = Duration::from_secs(120);
@@ -836,7 +838,7 @@ async fn await_edgli_exit_peer_ready(edgli: &Edgli, target: Address) -> anyhow::
 async fn await_edgli_peers_connected(edgli: &Edgli, min_peers: usize) -> anyhow::Result<()> {
     poll_until(
         PEER_DISCOVERY_TIMEOUT,
-        Duration::from_secs(3),
+        LOCAL_POLL,
         "Edgli peer discovery",
         || async {
             let peers = edgli.connected_peer_addresses().await?;
@@ -853,7 +855,7 @@ async fn await_edgli_channels_open(
 ) -> anyhow::Result<()> {
     poll_until(
         timeout,
-        Duration::from_secs(5),
+        LOCAL_POLL,
         "Edgli channel open",
         || async {
             let channels: Vec<ChannelEntry> = edgli.my_outgoing_channels().await?;
