@@ -301,13 +301,15 @@ impl IntegrationEnv {
 
     /// Open an unreliable (`Segmentation`-only, no retransmission) session over
     /// `hops` relays to the exit node's built-in loopback service. Rate control
-    /// is left ON.
+    /// is left ON. Returned already warmed up (see `warm_up`): this can block for up to
+    /// `WARM_UP_TIMEOUT` (120 s) and fails if the session never round-trips.
     pub async fn open_unreliable_session(&self, hops: usize) -> anyhow::Result<HoprSession> {
         warm_up(self.open_unreliable_session_paths(hops, hops).await?.0).await
     }
 
     /// As [`Self::open_unreliable_session`], but with the forward and return hop counts
-    /// chosen independently; also returns the exit address.
+    /// chosen independently; also returns the exit address. No warm-up: the caller gets the
+    /// session cold and must establish a baseline itself.
     ///
     /// A 0-hop forward paired with a 1-hop return isolates the return direction: the only
     /// packets any cluster node then forwards are replies travelling `exit → relayer →
