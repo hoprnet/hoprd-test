@@ -29,8 +29,77 @@ CRATE_LOCK="${REPO_ROOT}/integration/Cargo.lock"
 SUFFIX="${NIX_SYSTEM_SUFFIX:+-${NIX_SYSTEM_SUFFIX}}"
 SYSTEM="${NIX_SYSTEM_SUFFIX:-$(nix eval --raw --impure --expr builtins.currentSystem)}"
 
-# Per-line defaults; an explicit env override still wins.
 LINE="${LINE:-v4}"
+
+# The tests PR names the rest of a breaking change-set in `Requires:` lines; see README. Resolved
+# here rather than in the workflow: a dispatch runs main's workflow, but this script from the PR.
+companion_source_pr() {
+  [ -n "${GITHUB_EVENT_PATH:-}" ] || return 0
+  python3 - "${GITHUB_EVENT_PATH}" <<'PY'
+import json, re, sys
+
+event = json.load(open(sys.argv[1]))
+pr = ((event.get("client_payload") or {}).get("tests_pr")
+      or (event.get("inputs") or {}).get("tests_pr")
+      or (event.get("pull_request") or {}).get("number"))
+if not pr:
+    queued = re.search(r"/pr-([0-9]+)-", (event.get("merge_group") or {}).get("head_ref", ""))
+    pr = queued and queued.group(1)
+print(pr or "")
+PY
+}
+COMPANION_SOURCE_PR="$(companion_source_pr)"
+if [ -n "${COMPANION_SOURCE_PR}" ]; then
+  body="$(gh pr view "${COMPANION_SOURCE_PR}" -R "${GITHUB_REPOSITORY}" --json body -q .body)"
+  companions="$(sed -nE 's/^[[:space:]]*Requires: hoprnet\/(hoprd|edge-client|blokli)#([0-9]+).*/\1 \2/p' <<<"${body}")"
+  if [ -z "${companions}" ] && grep -qE '^[[:space:]]*Requires:' <<<"${body}"; then
+    echo "::error::#${COMPANION_SOURCE_PR} has a Requires: line that does not parse as 'Requires: hoprnet/<hoprd|edge-client|blokli>#<n>'" >&2
+    exit 1
+  fi
+  while read -r repo num; do
+    [ -n "${repo}" ] || continue
+    read -r state base sha fork < <(gh pr view "${num}" -R "hoprnet/${repo}" \
+      --json state,baseRefName,headRefOid,isCrossRepository \
+      -q '"\(.state) \(.baseRefName) \(.headRefOid) \(.isCrossRepository)"')
+    if [ "${fork}" != false ]; then
+      echo "::error::hoprnet/${repo}#${num} is a fork PR; its head must not run on the self-hosted box" >&2
+      exit 1
+    fi
+    case "${base}" in
+    main) line=v5 ;;
+    release/*) line=v4 ;;
+    *)
+      echo "::error::hoprnet/${repo}#${num} targets '${base}', which maps to no line" >&2
+      exit 1
+      ;;
+    esac
+    case "${state}" in
+    MERGED)
+      echo "hoprnet/${repo}#${num} is merged: ${line} uses the ${base} head"
+      continue
+      ;;
+    OPEN) ;;
+    *)
+      echo "::error::hoprnet/${repo}#${num} is ${state}" >&2
+      exit 1
+      ;;
+    esac
+    if [ "${GITHUB_EVENT_NAME:-}" = merge_group ]; then
+      echo "::error::merge hoprnet/${repo}#${num} first: main must not get ahead of ${repo}" >&2
+      exit 1
+    fi
+    [ "${line}" = "${LINE}" ] || continue
+    case "${repo}" in
+    edge-client) EDGLI_REF="${sha}" ;;
+    hoprd) HOPRD_REF="${sha}" ;;
+    blokli) BLOKLI_REF="${sha}" ;;
+    esac
+    echo "companion: ${repo} at ${sha} (hoprnet/${repo}#${num}, from #${COMPANION_SOURCE_PR})" |
+      tee -a "${GITHUB_STEP_SUMMARY:-/dev/null}"
+  done <<<"${companions}"
+fi
+
+# Per-line defaults; an explicit env override still wins.
 case "${LINE}" in
 v4)
   HOPRD_LINE="${HOPRD_LINE:-release/4.1}"
@@ -40,7 +109,7 @@ v4)
 v5)
   HOPRD_LINE="${HOPRD_LINE:-main}"
   EDGLI_REF="${EDGLI_REF:-main}"
-  BLOKLI_DEFAULT="v0.14.0"
+  BLOKLI_DEFAULT="release/0.14"
   ;;
 *)
   echo "unknown LINE '${LINE}' (expected v4 or v5)" >&2
@@ -85,7 +154,7 @@ EDGLI_SHA="$(resolve_sha hoprnet/edge-client "${EDGLI_REF}")"
 }
 
 # blokli tracks the `release/0.13` BRANCH — the line the Jura (v4) network runs,
-# agreed with the blokli team. Deliberately a moving branch and not a resolved
+# agreed with the blokli team — and `release/0.14` on v5. Deliberately a moving branch and not a resolved
 # release number, so patch releases land without an edit here; `--refresh` on its
 # build below is what makes that actually take effect.
 #
@@ -290,14 +359,21 @@ open(path, 'w').write(src)
 PY
 # Test the hoprnet edge-client locks, not the branch tip: a hoprnet merge must reach us through an
 # edge-client lock bump, which its gate then tests.
-EDGLI_HOPRLIB_REV="$(gh api -H "Accept: application/vnd.github.raw" \
-  "repos/hoprnet/edge-client/contents/Cargo.lock?ref=${EDGLI_SHA}" 2>/dev/null |
-  sed -n '/^name = "hopr-lib"$/,/^source/ s/.*#\([0-9a-f]\{40\}\)"$/\1/p')" || true
+locked_hoprlib_rev() { # repo ref
+  gh api -H "Accept: application/vnd.github.raw" "repos/hoprnet/$1/contents/Cargo.lock?ref=$2" 2>/dev/null |
+    sed -n '/^name = "hopr-lib"$/,/^source/ s/.*#\([0-9a-f]\{40\}\)"$/\1/p'
+}
+EDGLI_HOPRLIB_REV="$(locked_hoprlib_rev edge-client "${EDGLI_SHA}")" || true
 [ -n "${EDGLI_HOPRLIB_REV}" ] || {
   echo "could not read edge-client's locked hopr-lib rev at ${EDGLI_SHA}" >&2
   exit 1
 }
 echo "  hopr-lib pinned to edge-client's lock: ${EDGLI_HOPRLIB_REV}"
+# The cluster's nodes and the edgli entry must speak the same wire format (packet size, SURBs).
+HOPRD_HOPRLIB_REV="$(locked_hoprlib_rev hoprd "${HOPRD_REF}")" || true
+if [ "${HOPRD_HOPRLIB_REV}" != "${EDGLI_HOPRLIB_REV}" ]; then
+  echo "::warning::hoprd locks hoprnet ${HOPRD_HOPRLIB_REV:-unknown}, edge-client ${EDGLI_HOPRLIB_REV}; a wire change between them breaks every session" >&2
+fi
 (cd "${REPO_ROOT}/integration" &&
   cargo update -p edgli &&
   cargo update -p hopr-lib --precise "${EDGLI_HOPRLIB_REV}")

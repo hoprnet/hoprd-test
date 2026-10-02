@@ -21,14 +21,20 @@
 //! depth, and of the fill rate against the recovery deadline. So this profile keeps a ~4.5 min
 //! cycle and drops the rate to something a 1-hop local cluster carries comfortably.
 //!
+//! The same argument sets the *size* of the cycle: at a fixed length, halving the parts and the
+//! rate together leaves every ratio where it was and halves the quota, which is what
+//! `validate_incoming_session_pix_config` sizes the recovery floor against. The 3246 B payload
+//! tripled that floor for an unchanged geometry, so the profile went from 1024 parts at 300
+//! packets/s to 512 at 150 rather than to a 30-minute deadline.
+//!
 //! # What is deliberately unlike production
 //!
-//! [`MAX_RECOVERY_TIME`] is 12 minutes rather than two hours. It is the deadline a funded cycle
+//! [`MAX_RECOVERY_TIME`] is 15 minutes rather than two hours. It is the deadline a funded cycle
 //! must recover within — and, since the Exit fills a cycle the application has left unfinished
 //! rather than letting it strand, it is also the idle tariff: a Session with no traffic completes
-//! at `0.75 x` it. Two hours is not a thing a test can wait out. The value is still above the
-//! floor `validate_incoming_session_pix_config` enforces, so this is a legal configuration rather
-//! than a test-only escape hatch — see [`MAX_RECOVERY_TIME`].
+//! at [`FILL_FINISH_FRACTION`] `x` it, 0.6 here against upstream's 0.75. Two hours is not a thing a
+//! test can wait out. Both values pass the checks `validate_incoming_session_pix_config` makes, so
+//! this is a legal configuration rather than a test-only escape hatch — see [`MAX_RECOVERY_TIME`].
 //!
 //! A local cluster also has sub-millisecond transit, so the *absolute* buffer depth here is not
 //! transferable to a deployment: a shallower buffer suffices when the round trip is a memcpy. Runs
@@ -50,7 +56,10 @@ use edgli::hopr_lib::exports::transport::{PACKET_PAYLOAD_SIZE, SESSION_MTU, SURB
 /// A multiple of 256, which is upstream's `SHARE_EMISSION_WINDOW`: the generator walks polynomials
 /// in blocks of that size, so a count that is not a whole number of blocks narrows the last window
 /// and makes the emission order less uniform than the one production sees.
-pub const PIX_POLYS: usize = 1024;
+///
+/// Halved from 1024 together with [`TARGET_PACKET_RATE`], which keeps the cycle length and so every
+/// ratio below, and halves the quota the recovery floor is computed from — see the module docs.
+pub const PIX_POLYS: usize = 512;
 
 /// Shares needed to reconstruct one polynomial — the deployed threshold, unchanged.
 pub const PIX_SHARES: usize = 64;
@@ -75,12 +84,13 @@ pub const QUOTA_PER_SSA: u64 = CYCLE_PACKETS * PACKET_PAYLOAD_SIZE as u64;
 
 // ── Rate and the cycle it implies ────────────────────────────────────────────
 
-/// Return packets per second the shapes are sized against (~2.5 Mbps).
+/// Return packets per second the shapes are sized against (~3.9 Mbps at a 3246 B payload).
 ///
 /// Well under the 4000 datagrams/s hoprd's own soak drives through a comparable cluster, because
 /// the subject here is a *shape* rather than a throughput ceiling: a rate that saturates the
-/// runner turns every scenario into a measurement of the runner.
-pub const TARGET_PACKET_RATE: u64 = 300;
+/// runner turns every scenario into a measurement of the runner. Halved with [`PIX_POLYS`], so a
+/// cycle still lasts ~273 s.
+pub const TARGET_PACKET_RATE: u64 = 150;
 
 /// Nominal seconds per cycle, `E / R`.
 ///
@@ -107,32 +117,40 @@ pub const MAX_DEPOSIT_WAIT: Duration = Duration::from_secs(30);
 /// Two constraints, from opposite directions:
 ///
 /// * **Above** `quota_range_max / ASSUMED_SESSION_PACKET_RATE`, which
-///   `validate_incoming_session_pix_config` enforces at load. That rate is 180 packets/s — 1.5 Mbps,
-///   deliberately the loosest useful bound, since a slower Session is the one needing the longest
-///   deadline. At [`QUOTA_RANGE_MAX`] the floor is ~535 s.
+///   `validate_incoming_session_pix_config` enforces at load. That rate is 1.5 Mbps in packets —
+///   57 packets/s at a 3246 B payload, 180 at the old 1038 B — deliberately the loosest useful
+///   bound, since a slower Session is the one needing the longest deadline. At [`QUOTA_RANGE_MAX`]
+///   the floor is 843 s.
 /// * **Small enough to wait out.** A Session with no application traffic completes its cycle on
-///   Exit fill at `0.75 x` this, so it is what an idle scenario spends. Production's two hours
-///   would make that scenario a 90-minute one.
+///   Exit fill at [`FILL_FINISH_FRACTION`] `x` this, so it sets what an idle scenario spends.
+///   Production's two hours would make that scenario a 90-minute one.
 ///
-/// Twelve minutes clears the floor with margin and puts the idle aim point at nine.
-pub const MAX_RECOVERY_TIME: Duration = Duration::from_secs(720);
+/// Fifteen minutes clears the floor. The aim point is placed by the fraction rather than by this.
+pub const MAX_RECOVERY_TIME: Duration = Duration::from_secs(900);
 
 /// Fraction of [`MAX_RECOVERY_TIME`] at which Exit fill aims to have the cycle finished.
 ///
-/// Upstream's default, restated because the idle scenario's deadline is derived from it.
-pub const FILL_FINISH_FRACTION: f64 = 0.75;
+/// 0.6 against upstream's 0.75, which puts the aim point at 540 s, the nine minutes the idle,
+/// browsing and upload scenarios have always waited. [`MAX_RECOVERY_TIME`] cannot go back to the
+/// twelve minutes that produced that at 0.75, because it has to clear the load-time floor; the
+/// fraction is what an operator can move instead (hoprd's `fill_finish_fraction`). The cost is a
+/// higher fill rate, which [`FILL_MAX_RATE`] clears with room to spare.
+pub const FILL_FINISH_FRACTION: f64 = 0.6;
 
 /// Ceiling on the Exit's self-generated fill traffic, packets/s.
 ///
-/// Upstream's default. An idle cycle here needs `E x 1.05 / (0.75 x 720 s)` = 120 packets/s, so
-/// this is twice the requirement; the validator separately refuses a ceiling below what a cycle of
-/// [`QUOTA_RANGE_MAX`] needs, which is 188 packets/s.
+/// Upstream's default. An idle cycle here needs `E x 1.05 / (0.6 x 900 s)` = 80 packets/s, so
+/// this is three times the requirement; the validator separately refuses a ceiling below what a
+/// cycle of [`QUOTA_RANGE_MAX`] needs, which is 94 packets/s.
 pub const FILL_MAX_RATE: u32 = 250;
 
 // ── Admission window ─────────────────────────────────────────────────────────
 
 /// Lower bound of the quota window the Exit accepts.
-pub const QUOTA_RANGE_MIN: u64 = 60_000_000;
+///
+/// Counted in packets, like [`QUOTA_PER_SSA`], so the window moves with the payload size rather
+/// than a payload change putting the quota outside it.
+pub const QUOTA_RANGE_MIN: u64 = 29_000 * PACKET_PAYLOAD_SIZE as u64;
 
 /// Upper bound of the quota window the Exit accepts.
 ///
@@ -140,7 +158,7 @@ pub const QUOTA_RANGE_MIN: u64 = 60_000_000;
 /// move the window — the Exit refuses a Session whose offered quota falls outside it. It is also
 /// what both remaining validator floors are computed against, so widening it further tightens
 /// [`MAX_RECOVERY_TIME`] and [`FILL_MAX_RATE`].
-pub const QUOTA_RANGE_MAX: u64 = 100_000_000;
+pub const QUOTA_RANGE_MAX: u64 = 48_000 * PACKET_PAYLOAD_SIZE as u64;
 
 // ── Session sizing (Entry side) ──────────────────────────────────────────────
 
@@ -189,11 +207,17 @@ const _: () = assert!(
     "SURB buffer is too deep relative to a cycle"
 );
 
+/// Upstream's `ASSUMED_SESSION_PACKET_RATE`, which hopr-lib does not re-export: 1.5 Mbps in packets.
+/// Derived rather than written out, because it moves with the payload size — a literal 180 here
+/// let a profile that hoprd refuses at load pass every unit test.
+const ASSUMED_SESSION_PACKET_RATE: u64 = 1_500_000 / 8 / PACKET_PAYLOAD_SIZE as u64;
+
 /// The recovery deadline must clear a whole cycle at the widest accepted quota, measured at
-/// upstream's `ASSUMED_SESSION_PACKET_RATE` of 180 packets/s. `validate_incoming_session_pix_config`
-/// refuses the configuration otherwise, at load, before any Session is opened.
+/// [`ASSUMED_SESSION_PACKET_RATE`]. `validate_incoming_session_pix_config` refuses the configuration
+/// otherwise, at load, before any Session is opened.
 const _: () = assert!(
-    MAX_RECOVERY_TIME.as_secs() >= QUOTA_RANGE_MAX / PACKET_PAYLOAD_SIZE as u64 / 180,
+    MAX_RECOVERY_TIME.as_secs()
+        >= (QUOTA_RANGE_MAX / PACKET_PAYLOAD_SIZE as u64).div_ceil(ASSUMED_SESSION_PACKET_RATE),
     "max_recovery_time cannot cover a cycle at the widest accepted quota"
 );
 
@@ -227,7 +251,7 @@ pub fn surb_buffer_target() -> u64 {
 ///
 /// Upstream's 2048 by default, and at this profile that is covered by construction: when a cycle
 /// recovers, the SURBs still queued carry *its* shares, and the drain is credited as liveness up
-/// to [`FREE_CREDIT`] — 16 384 here against a queue of [`surb_buffer_target`]. A profile whose
+/// to [`FREE_CREDIT`] — 8 192 here against a queue of [`surb_buffer_target`]. A profile whose
 /// buffer outgrew the credit would have to raise this, because the gate blocking part-way through
 /// the drain stops the very SURB spending that was draining it.
 pub fn max_served_without_progress() -> u64 {
@@ -259,8 +283,8 @@ pub fn fill_enabled() -> bool {
 ///
 /// Only the fields this profile has a reason to move are named; everything else stays at the
 /// localcluster demo default, which is what keeps the settlement values consistent with a geometry
-/// that is 2 500x the demo one. `price_per_byte` and the two spend ceilings are stated because the
-/// deposit scales with the quota: at the demo price a cycle here would cost 8 503 wxHOPR against a
+/// that is 1 280x the demo one. `price_per_byte` and the two spend ceilings are stated because the
+/// deposit scales with the quota: at the demo price a cycle here would cost ~8 500 wxHOPR against a
 /// 10 wxHOPR per-deposit ceiling, and every deposit would be refused.
 pub fn cluster_pix_yaml() -> String {
     // One deposit is `price_per_byte x quota`, so the ceiling and the window are both derived from
@@ -279,6 +303,7 @@ max_recovery_time: {recovery}s
 max_served_without_progress: {served}
 fill_enabled: {fill}
 fill_max_rate: {fill_rate}
+fill_finish_fraction: {fill_finish}
 price_per_byte: \"{price:.10} wxHOPR\"
 max_ssa_allocation: \"{allocation:.4} wxHOPR\"
 max_spend_per_window: \"{budget:.4} wxHOPR\"
@@ -295,6 +320,7 @@ safe_deposit_float: \"{float:.4} wxHOPR\"
         served = max_served_without_progress(),
         fill = fill_enabled(),
         fill_rate = FILL_MAX_RATE,
+        fill_finish = FILL_FINISH_FRACTION,
         price = PRICE_PER_BYTE_WXHOPR,
         // Twice one deposit, so a single cycle can never be refused for being marginally over.
         allocation = per_cycle_wxhopr * 2.0,
@@ -306,7 +332,7 @@ safe_deposit_float: \"{float:.4} wxHOPR\"
 /// wxHOPR per byte of quota, on both sides: what the Exit requires and the Entry pays.
 ///
 /// Two orders of magnitude below the deployed 5.33e-8, because the cluster funds each node's Safe
-/// from a fixed pot and a run here has to afford [`BUDGETED_CYCLES`] cycles of an 85 MB quota out
+/// from a fixed pot and a run here has to afford [`BUDGETED_CYCLES`] cycles of a ~133 MB quota out
 /// of it. Nothing in the protocol reads the absolute figure — it is the *product* with the quota
 /// that both sides check — so a scaled price measures the same exchange.
 pub const PRICE_PER_BYTE_WXHOPR: f64 = 1e-9;
@@ -368,7 +394,7 @@ pub fn per_cycle() -> anyhow::Result<crate::HoprBalance> {
 ///
 /// Separate from `pix::entry_config` rather than parameterising it, because every value here is
 /// derived from the profile above: the price is two orders of magnitude below the demo's, and the
-/// per-deposit ceiling has to clear a quota 2 500x larger. Sharing one function would mean a
+/// per-deposit ceiling has to clear a quota 1 280x larger. Sharing one function would mean a
 /// scenario silently taking the demo price against this geometry, which refuses every deposit for
 /// being over `max_ssa_allocation`.
 #[cfg(feature = "v5")]
@@ -392,6 +418,7 @@ pub fn entry_config() -> anyhow::Result<edgli::PixEntryConfig> {
             max_deposit_tracking_time: Duration::from_secs(40),
             ..Default::default()
         },
+        // Only the Curvy pool keeps durable state; `pix-test` selects secp256k1, which ignores it.
         state_dir: None,
     })
 }
@@ -429,11 +456,15 @@ mod tests {
     /// this is what catches a geometry edited without re-deriving what depends on it.
     #[test]
     fn the_profile_arithmetic_holds() {
-        assert_eq!(81_920, CYCLE_PACKETS);
-        assert_eq!(85_032_960, QUOTA_PER_SSA);
+        assert_eq!(40_960, CYCLE_PACKETS);
+        // The payload is 1038 B on the v4 line and 3246 B on v5.
+        #[cfg(not(feature = "v5"))]
+        assert_eq!(42_516_480, QUOTA_PER_SSA);
+        #[cfg(feature = "v5")]
+        assert_eq!(132_956_160, QUOTA_PER_SSA);
         assert_eq!(273, NOMINAL_CYCLE_SECS);
-        assert_eq!(4_800, DEFAULT_SURB_BUFFER);
-        assert_eq!(16_384, FREE_CREDIT);
+        assert_eq!(2_400, DEFAULT_SURB_BUFFER);
+        assert_eq!(8_192, FREE_CREDIT);
     }
 
     /// The buffer must be a small fraction of a cycle — the ratio production runs at, and the one
@@ -488,13 +519,14 @@ mod tests {
     fn the_rendered_yaml_carries_the_geometry() {
         let yaml = cluster_pix_yaml();
         for key in [
-            "num_ssa_parts: 1024",
+            "num_ssa_parts: 512",
             "ssa_part_size: 64",
             "additional_shares: 16",
-            "max_recovery_time: 720s",
+            "max_recovery_time: 900s",
             "max_deposit_wait: 30s",
             "fill_enabled: true",
             "fill_max_rate: 250",
+            "fill_finish_fraction: 0.6",
         ] {
             assert!(yaml.contains(key), "missing `{key}` in:\n{yaml}");
         }

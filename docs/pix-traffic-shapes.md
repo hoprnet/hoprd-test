@@ -8,12 +8,12 @@ Run them with:
 
 ```bash
 HOPRD_SRC=../hoprd-shapes just pix-shapes            # all of them, hours
-HOPRD_SRC=../hoprd-shapes just pix-shapes <scenario> # one, ~12-20 min
+HOPRD_SRC=../hoprd-shapes just pix-shapes <scenario> # one, ~8-15 min
 ```
 
 `HOPRD_SRC` must be a hoprd carrying the `--pix-config` seam. `just pix-shapes` refuses to run
 without it, because a `hoprd-localcluster` that ignores `--pix-config` silently runs the demo
-geometry and every assertion below would then be measuring a cycle 2 500x smaller than it claims.
+geometry and every assertion below would then be measuring a cycle 1 280x smaller than it claims.
 Exit-side PIX fill (hoprnet#8396) is no longer a condition worth stating: it has been on hoprd
 `main` since hoprd#166.
 
@@ -46,10 +46,13 @@ whether it builds at `master`'s tip.
 ## The profile
 
 ```
-parts 1024 x (threshold 64 + surplus 16)   E     = 81 920 packets/cycle
-R     = 300 packets/s  (~2.5 Mbps)         cycle = 273 s nominal
-quota = 81 920 x 1038                            = 85 032 960 B (81.1 MiB)
+parts 512 x (threshold 64 + surplus 16)    E     = 40 960 packets/cycle
+R     = 150 packets/s  (~3.9 Mbps)         cycle = 273 s nominal
+quota = 40 960 x 3246                            = 132 956 160 B (126.8 MiB)
 ```
+
+Until the 3246 B payload this was 1024 parts at 300 packets/s. Halving both keeps the cycle length,
+so every ratio below is unchanged, and halves the quota that the recovery floor is computed from.
 
 **Not the deployed geometry, and deliberately so.** What governs PIX is ratios, not rates: the
 client's SURB buffer is `16 x R` and a cycle is `cycle_seconds x R`, so `buffer / E = 16 /
@@ -60,22 +63,45 @@ at a rate a 1-hop local cluster carries comfortably. The deployed 4608 x 80 at 1
 
 | quantity                        | value                          | deployed       |
 | ------------------------------- | ------------------------------ | -------------- |
-| SURB buffer                     | 4 800 SURBs (5.9 % of `E`)     | 19 264 (5.2 %) |
-| free credit (`parts x surplus`) | 16 384                         | 73 728         |
+| SURB buffer                     | 2 400 SURBs (5.9 % of `E`)     | 19 264 (5.2 %) |
+| free credit (`parts x surplus`) | 8 192                          | 73 728         |
 | `max_served_without_progress`   | 2048 (credit covers the queue) | 2048           |
-| `max_recovery_time`             | **12 min**                     | 2 h            |
-| fill rate an idle cycle needs   | 120 packets/s                  | 72 packets/s   |
+| `max_recovery_time`             | **15 min**                     | 2 h            |
+| `fill.finish_fraction`          | **0.6** (aim point 540 s)      | 0.75           |
+| fill rate an idle cycle needs   | 80 packets/s                   | 72 packets/s   |
 | `fill.max_rate`                 | 250                            | 250            |
 
-`max_recovery_time` is the one deliberate departure. It is no longer only a backstop: since the
-Exit fills a cycle the application left unfinished, it is also the idle tariff, and an idle
-scenario spends `0.75 x` it. Two hours is not a thing a test can wait out. The value still clears
-the floor `validate_incoming_session_pix_config` enforces (`quota_range_max / 180 packets/s` =
-535 s), so it is a legal configuration rather than a test-only escape hatch.
+`max_recovery_time` and `fill.finish_fraction` are the deliberate departures. The deadline is no
+longer only a backstop: since the Exit fills a cycle the application left unfinished, it is also
+the idle tariff, and an idle scenario spends `finish_fraction x` it. Two hours is not a thing a
+test can wait out. 15 min clears the floor `validate_incoming_session_pix_config` enforces
+(`quota_range_max / 57 packets/s` = 843 s at the 3246 B payload, 1.5 Mbps in packets; see
+hoprnet#8469), and 0.6 puts the aim point at 540 s, what the idle, browsing and upload shapes have
+always waited. Both are legal configuration rather than a test-only escape hatch; the fraction is
+hoprd's `fill_finish_fraction`, exposed for this in hoprd#187.
 
 ## Results
 
-Measured on a 3-node local cluster, 1 hop, binary chain.
+Measured on a 3-node local cluster, 1 hop, binary chain, at the previous profile (1024 parts at
+300 packets/s, 1038 B payload, 12 min deadline at the upstream fraction) on 2026-09-23. The ratios
+the profile is built on are unchanged, so the conclusions carry over; the absolute bytes, rates
+and deposits halve.
+
+**At the current profile** (512 x 80 at 150 packets/s, 3246 B payload, 15 min deadline, fill
+fraction 0.6), measured 2026-10-01 against hoprd#187 and hoprnet `a065fa2`: all six pass in
+**63 min of test time**, 72 min wall clock including the hoprd build and a chain boot per
+invocation. Per scenario, cluster bring-up included:
+
+| scenario       | time  |
+| -------------- | ----- |
+| geometry spike | 533 s |
+| browsing       | 700 s |
+| download       | 545 s |
+| mixed          | 881 s |
+| idle           | 640 s |
+| upload         | 502 s |
+
+The table below is the earlier profile's.
 
 Counters are the Exit's `hopr_strategy_pix_*` delta over the scenario; **paid** is the rise in the
 Exit's _Safe balance_, read from the chain. Those two columns were read at hoprnet **`57b5e679`**.

@@ -13,7 +13,7 @@ only the dependency set differs — and runs on a dedicated self-hosted Hetzner 
 |                  | hoprd         | hoprnet       | edge-client   | blokli         | PIX suite |
 | ---------------- | ------------- | ------------- | ------------- | -------------- | --------- |
 | **v4** (default) | `release/4.1` | `release/4.0` | `release/4.1` | `release/0.13` | no        |
-| **v5**           | `main`        | `master`      | `main`        | `v0.14.0`      | yes       |
+| **v5**           | `main`        | `master`      | `main`        | `release/0.14` | yes       |
 
 Pick one with `LINE=v4`/`LINE=v5` (`just ci` / `just ci-v5`, or the `line` input on
 `integration.yaml`). The two are not mixable: a v4 blokli cannot bootstrap a v5
@@ -160,11 +160,11 @@ Goodput (`mbps`) is logged but not gated.
 
 ## Running the test
 
-The chain is anvil + bloklid built from the **blokli flake at its latest release**
-(`github:hoprnet/blokli/<tag>#bloklid`, currently `v0.14.0`, the first with the
+The chain is anvil + bloklid built from the **blokli flake at the line's release branch**
+(`github:hoprnet/blokli/<branch>#bloklid`: `release/0.14` on v5, 0.14 being the first with the
 `service_registry` contract address the current `hoprd-localcluster` requires), started by
-`scripts/integration/lib.sh chain_up` and attached via `--chain-url`. It pins a concrete blokli
-release rather than a floating docker tag.
+`scripts/integration/lib.sh chain_up` and attached via `--chain-url`. It tracks the blokli
+branch rather than a floating docker tag.
 
 ### Quickstart (`just`)
 
@@ -236,7 +236,7 @@ nix build -L github:hoprnet/hoprd#binary-hoprd-localcluster --out-link result-lo
 For the chain, build blokli (anvil + bloklid) from its release tag (Cachix-cached):
 
 ```bash
-nix build -L 'github:hoprnet/blokli/v0.14.0#bloklid' --out-link result-bloklid   # a blokli release (CI resolves the latest per run)
+nix build -L --refresh 'github:hoprnet/blokli/release/0.14#bloklid' --out-link result-bloklid   # the line's blokli branch
 nix build -L 'nixpkgs#foundry'                       --out-link result-foundry   # anvil
 ```
 
@@ -365,6 +365,82 @@ Requires: hoprnet/edge-client#186             # in the hopr-integration-tests PR
 
 The description is read when a run starts, so re-queue or re-label after editing it. Manually:
 `-f tests_pr=<N>`.
+
+`scripts/integration/run.sh` resolves the `Requires:` lines, from the tests PR's checkout. A gate
+runs `main`'s workflow, but still picks up a change to this mechanism made in the tests PR.
+
+**Change spanning several upstream repos** (for example a hoprnet wire change that hoprd and
+edge-client must both pick up): the tests PR is the hub. It lists every upstream PR, and each
+upstream PR lists only the tests PR. Every gate run then sees the whole set: its own candidate,
+plus the other upstream PRs through the tests PR.
+
+1. Open all PRs, then pin the tests PR's `Cargo.v5.lock` to the edge-client PR head, or `pr.yaml`
+   builds against edge-client `main` and fails. Move `hopr-lib` too: it is also a direct
+   dependency here, and it must be the revision that edge-client locks.
+   Label the tests PR `run-integration`; that run is the check of the whole set.
+2. Queue the upstream PRs one after another, in any order.
+3. Re-pin the tests PR to the edge-client branch, and queue it last. Its queue refuses while a lock
+   names an edgli commit that is not on that branch. A squash merge produces a new commit, so a
+   re-pin is always needed.
+
+```bash
+# step 1: <edgli> = edge-client PR head, <hoprnet> = the hopr-lib rev its Cargo.lock names
+nix develop github:hoprnet/hoprnet -c bash scripts/integration/with-v5-deps.sh bash -c \
+  'cd integration && cargo update -p edgli --precise <edgli> &&
+   cargo update -p hopr-lib --precise <hoprnet> && cp Cargo.lock Cargo.v5.lock'
+# step 3: the same, with `cargo update -p edgli` and the rev edge-client `main` now locks
+```
+
+Until the last PR merges, other v5 queue entries see a mixed stack and fail, so run the queues
+back to back. `run.sh` warns when hoprd and edge-client lock different hoprnet revisions.
+
+**What the tests PR adapts.** The tests are built against the edge-client API, and they size
+parts of PIX by the packet payload. So a hoprnet change usually reaches this repo in three
+places:
+
+- API changes: renamed or new fields in `HoprSessionClientConfig`, `PixEntryConfig` and
+  `EdgeStrategyKind`. `env.rs` is compiled on both lines, so a field that exists on only one of
+  them goes behind `#[cfg(feature = "v5")]` / `#[cfg(not(feature = "v5"))]`.
+- Values tied to the payload size: the demo deposit price (`pix::PRICE_PER_BYTE`) against
+  `MAX_SSA_ALLOCATION`, and the traffic-shape quota window in `shapes.rs`, which is counted in
+  packets so that it follows `PACKET_PAYLOAD_SIZE`.
+- The lock, as above.
+
+Check both lines before opening the PR. v5 needs the swap helper:
+`bash scripts/integration/with-v5-deps.sh cargo test --manifest-path integration/Cargo.toml --all-features --lib`,
+then the same without the helper for v4.
+
+**Worked example: the 3246 B packet payload** (hoprnet `a065fa2`, payload 1038 → 3246 B). The set
+is edge-client#190, hoprd#187 and the tests PR. Descriptions:
+
+```
+Requires: hoprnet/hopr-integration-tests#<N>   # edge-client#190 and hoprd#187
+Requires: hoprnet/edge-client#190              # tests PR
+Requires: hoprnet/hoprd#187                    # tests PR
+```
+
+The tests PR pins `Cargo.v5.lock` to edgli `ddec291` and hopr-lib `a065fa2`, and adapts:
+
+- `always_max_out_surbs: true` becomes `max_surbs_per_data_packet: usize::MAX` on v5. That keeps
+  the old meaning of no per-packet SURB cap; the new default of `1` would change the test.
+  Except on PIX sessions, which take `1`: at 3246 B a small write has room for several SURBs,
+  each carrying a share of the SSA it was minted in, and an uncapped supply buries the next
+  SSA's shares under the current one's. `just pix` failed exactly so, with the Exit closing
+  on `recovery_idle` in cycle 2. `1` stops piggybacking at the balancer's target.
+- `EdgeStrategyKind::Pix` now takes a `Box`, and `PixEntryConfig` has gained `state_dir`, which is
+  `None` here because the secp256k1 pool ignores it.
+- `PRICE_PER_BYTE` drops from `0.0001` to `0.000032`, the same rescale hoprd#187 gives the
+  localcluster demo. Unchanged, a deposit would cost ~10.39 wxHOPR, above the 10 wxHOPR ceiling,
+  and every PIX Session would die on its deposit deadline.
+- The `shapes.rs` quota window is now counted in packets, so it follows the payload.
+- The traffic-shape profile halves its geometry at the same cycle length (512 parts at 150
+  packets/s) and sets `fill_finish_fraction: 0.6`, which hoprd#187 exposes for it. hoprd derives
+  the floor on `max_recovery_time` from 1.5 Mbps, so the bigger payload tripled it (hoprnet#8469).
+  Halving the quota brings it to 843 s, under a 15 min deadline, and 0.6 puts fill's aim point back
+  at 540 s. Without both, the shapes suite needs a 30 min deadline and takes ~2 h.
+
+Merge order: the label run on the tests PR first, then hoprd#187 and edge-client#190 through their
+queues, then re-pin the tests PR and queue it.
 
 Runs on the self-hosted **`hetzner`** runner, provisioned from the gitops repo
 (`ansible/playbooks/install-github-hetzner-runner.yaml`). Nix and the `hoprnet`

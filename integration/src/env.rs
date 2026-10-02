@@ -364,7 +364,11 @@ impl IntegrationEnv {
                     // up/runner.rs). A too-low SURB mint ceiling starves the exit's
                     // return path under sustained downlink; provision it like production.
                     capabilities: SessionCapability::Segmentation | SessionCapability::NoDelay,
+                    #[cfg(not(feature = "v5"))]
                     always_max_out_surbs: true,
+                    // gnosis documents `true` as 2 SURBs per packet and `false` as 1.
+                    #[cfg(feature = "v5")]
+                    max_surbs_per_data_packet: if balance_surbs { 2 } else { 1 },
                     surb_management: balance_surbs.then_some(SurbBalancerConfig {
                         // gnosis main: 10 MB response buffer, 16 Mb/s SURB upstream.
                         target_surb_buffer_size: 10_000_000 / SESSION_MTU as u64,
@@ -471,7 +475,12 @@ impl IntegrationEnv {
             forward_path: HopRouting::try_from(forward_hops)?,
             return_path: HopRouting::try_from(return_hops)?,
             capabilities: SessionCapability::Segmentation | SessionCapability::NoDelay,
-            always_max_out_surbs: true,
+            // Not `usize::MAX`, as the throughput sessions use: at a 3246 B payload a small write
+            // has room for several SURBs, each carrying a share of the SSA it was minted in, and
+            // an uncapped supply buries the next SSA's shares under the current one's — cycle 2
+            // then never recovers. `1` is upstream's gate on the balancer's target, which keeps
+            // the buffer at the depth the balancer was given.
+            max_surbs_per_data_packet: 1,
             surb_management: Some(surb_management),
             ..Default::default()
         };

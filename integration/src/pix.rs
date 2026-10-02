@@ -54,9 +54,11 @@ pub const PIX_ADDITIONAL_SHARES: usize = 2;
 
 /// Charged per byte of the agreed quota. One deposit is `PRICE_PER_BYTE × quota_per_ssa`.
 ///
-/// With the dimensions above the quota is `8 × (2 + 2) × 1038` ≈ 33.2 kB, so a deposit is
-/// ~3.32 wxHOPR — unambiguous in a balance delta without being large.
-pub const PRICE_PER_BYTE: &str = "0.0001 wxHOPR";
+/// With the dimensions above the quota is `8 × (2 + 2) × 3246` ≈ 103.9 kB, so a deposit is
+/// ~3.32 wxHOPR: unambiguous in a balance delta, well under [`MAX_SSA_ALLOCATION`]. Scaled with
+/// the packet payload (1038 → 3246 B), as hoprd's localcluster did; at the old 0.0001 a deposit
+/// would be ~10.39 wxHOPR, above the ceiling, and the strategy would refuse every one.
+pub const PRICE_PER_BYTE: &str = "0.000032 wxHOPR";
 
 /// Ceiling on a single deposit. Must exceed `PRICE_PER_BYTE × quota` or the strategy refuses to
 /// deposit at all and the Exit closes the Session on its deposit deadline.
@@ -148,6 +150,7 @@ pub fn entry_config(budget: HoprBalance) -> anyhow::Result<edgli::PixEntryConfig
             max_deposit_tracking_time: MAX_DEPOSIT_TRACKING_TIME,
             ..Default::default()
         },
+        // Only the Curvy pool keeps durable state; `pix-test` selects secp256k1, which ignores it.
         state_dir: None,
     })
 }
