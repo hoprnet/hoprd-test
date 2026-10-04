@@ -1,7 +1,11 @@
 self-hosted-runner:
   labels:
-    # Hosted (depot) runners for PR checks, the integration test, and the legacy
-    # k6 build-docker workflow.
+    # Hosted (depot) runners: PR title validation and the fmt/clippy job. Anything
+    # that only compiles can live on a throwaway VM.
     - depot-ubuntu-24.04
     - depot-ubuntu-24.04-4
-    - depot-ubuntu-24.04-8
+    # The self-hosted Hetzner box, provisioned by gitops/ansible
+    # (playbooks/install-github-hetzner-runner.yaml). Everything that EXECUTES a
+    # test lands here — the unit tests and the whole integration throughput gate —
+    # so results come from one known machine. See runner/README.md.
+    - hetzner

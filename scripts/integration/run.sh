@@ -3,36 +3,130 @@
 # link edgli, and run the integration throughput test against a fresh flake-built
 # chain per scenario (no docker image).
 #
-# Version model — no stored state, no commits:
-#   * the triggering project (PROJECT) uses the rev from the dispatch;
-#   * hoprd/edge-client otherwise default to their main HEAD;
-#   * blokli is ALWAYS the latest GitHub release (resolved per run), built from
-#     its flake — no floating docker tag, no unreleased-merge testing.
-# So a hoprd/edge-client merge is tested against the current tip of the other and
-# the latest blokli release.
+# No stored state: the dispatching project supplies its rev, everything else resolves to the
+# head of its branch on LINE. The lines are NOT mixable; README has the branch table.
 #
 # Inputs (env):
-#   PROJECT          hoprd | edge-client | "" (manual = all defaults)
+#   LINE             v4 | v5 — which release line to test (default: v4)
+#   PROJECT          hoprd | edge-client | blokli | "" (manual = all defaults)
 #   OVERRIDE_REV     git rev for PROJECT when it is hoprd or edge-client
-#   HOPRD_REF        default hoprd ref       (default: main)
-#   EDGLI_REF        default edge-client ref (default: main)
-#   BLOKLI_REF       blokli release override (default: latest release tag)
-#   NIX_SYSTEM_SUFFIX    nix output arch suffix (default: x86_64-linux)
+#   HOPRD_LINE       hoprd release line the rev must belong to (default: per LINE)
+#   HOPRD_REF        default hoprd ref       (default: ${HOPRD_LINE})
+#   EDGLI_REF        default edge-client ref (default: per LINE)
+#   BLOKLI_REF       blokli ref override     (default: per LINE)
+#   HOPRD_SKIP_LINE_CHECK  set to 1 to run a hoprd rev outside HOPRD_LINE anyway
+#   NIX_SYSTEM_SUFFIX    cross-build to this nix system (default: empty = build for this machine)
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+# shellcheck source=scripts/integration/lib.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+REPO_ROOT="${LIB_ROOT}"
 CRATE_CARGO="${REPO_ROOT}/integration/Cargo.toml"
-ARCH="${NIX_SYSTEM_SUFFIX:-x86_64-linux}"
+CRATE_LOCK="${REPO_ROOT}/integration/Cargo.lock"
+# Bare flake names resolve to this system, and `binary-hoprd-localcluster` has no per-system
+# alias at all — only an x86_64-linux one. So suffix nothing by default; NIX_SYSTEM_SUFFIX is a
+# cross-build override (CI sets it to keep building the musl outputs), not a default.
+SUFFIX="${NIX_SYSTEM_SUFFIX:+-${NIX_SYSTEM_SUFFIX}}"
+SYSTEM="${NIX_SYSTEM_SUFFIX:-$(nix eval --raw --impure --expr builtins.currentSystem)}"
 
-HOPRD_REF="${HOPRD_REF:-main}"
-EDGLI_REF="${EDGLI_REF:-main}"
+LINE="${LINE:-v4}"
 
-# The triggering project overrides its own rev; the other defaults to main.
+# The tests PR names the rest of a breaking change-set in `Requires:` lines; see README. Resolved
+# here rather than in the workflow: a dispatch runs main's workflow, but this script from the PR.
+companion_source_pr() {
+  [ -n "${GITHUB_EVENT_PATH:-}" ] || return 0
+  python3 - "${GITHUB_EVENT_PATH}" <<'PY'
+import json, re, sys
+
+event = json.load(open(sys.argv[1]))
+pr = ((event.get("client_payload") or {}).get("tests_pr")
+      or (event.get("inputs") or {}).get("tests_pr")
+      or (event.get("pull_request") or {}).get("number"))
+if not pr:
+    queued = re.search(r"/pr-([0-9]+)-", (event.get("merge_group") or {}).get("head_ref", ""))
+    pr = queued and queued.group(1)
+print(pr or "")
+PY
+}
+COMPANION_SOURCE_PR="$(companion_source_pr)"
+if [ -n "${COMPANION_SOURCE_PR}" ]; then
+  body="$(gh pr view "${COMPANION_SOURCE_PR}" -R "${GITHUB_REPOSITORY}" --json body -q .body)"
+  companions="$(sed -nE 's/^[[:space:]]*Requires: hoprnet\/(hoprd|edge-client|blokli)#([0-9]+).*/\1 \2/p' <<<"${body}")"
+  if [ -z "${companions}" ] && grep -qE '^[[:space:]]*Requires:' <<<"${body}"; then
+    echo "::error::#${COMPANION_SOURCE_PR} has a Requires: line that does not parse as 'Requires: hoprnet/<hoprd|edge-client|blokli>#<n>'" >&2
+    exit 1
+  fi
+  while read -r repo num; do
+    [ -n "${repo}" ] || continue
+    read -r state base sha fork < <(gh pr view "${num}" -R "hoprnet/${repo}" \
+      --json state,baseRefName,headRefOid,isCrossRepository \
+      -q '"\(.state) \(.baseRefName) \(.headRefOid) \(.isCrossRepository)"')
+    if [ "${fork}" != false ]; then
+      echo "::error::hoprnet/${repo}#${num} is a fork PR; its head must not run on the self-hosted box" >&2
+      exit 1
+    fi
+    case "${base}" in
+    main) line=v5 ;;
+    release/*) line=v4 ;;
+    *)
+      echo "::error::hoprnet/${repo}#${num} targets '${base}', which maps to no line" >&2
+      exit 1
+      ;;
+    esac
+    case "${state}" in
+    MERGED)
+      echo "hoprnet/${repo}#${num} is merged: ${line} uses the ${base} head"
+      continue
+      ;;
+    OPEN) ;;
+    *)
+      echo "::error::hoprnet/${repo}#${num} is ${state}" >&2
+      exit 1
+      ;;
+    esac
+    if [ "${GITHUB_EVENT_NAME:-}" = merge_group ]; then
+      echo "::error::merge hoprnet/${repo}#${num} first: main must not get ahead of ${repo}" >&2
+      exit 1
+    fi
+    [ "${line}" = "${LINE}" ] || continue
+    case "${repo}" in
+    edge-client) EDGLI_REF="${sha}" ;;
+    hoprd) HOPRD_REF="${sha}" ;;
+    blokli) BLOKLI_REF="${sha}" ;;
+    esac
+    echo "companion: ${repo} at ${sha} (hoprnet/${repo}#${num}, from #${COMPANION_SOURCE_PR})" |
+      tee -a "${GITHUB_STEP_SUMMARY:-/dev/null}"
+  done <<<"${companions}"
+fi
+
+# Per-line defaults; an explicit env override still wins.
+case "${LINE}" in
+v4)
+  HOPRD_LINE="${HOPRD_LINE:-release/4.1}"
+  EDGLI_REF="${EDGLI_REF:-release/4.1}"
+  BLOKLI_DEFAULT="release/0.13"
+  ;;
+v5)
+  HOPRD_LINE="${HOPRD_LINE:-main}"
+  EDGLI_REF="${EDGLI_REF:-main}"
+  BLOKLI_DEFAULT="release/0.14"
+  ;;
+*)
+  echo "unknown LINE '${LINE}' (expected v4 or v5)" >&2
+  exit 2
+  ;;
+esac
+HOPRD_REF="${HOPRD_REF:-${HOPRD_LINE}}"
+
+# The triggering project overrides its own rev; the other keeps its default above.
 case "${PROJECT:-}" in
 hoprd) HOPRD_REF="${OVERRIDE_REV:?OVERRIDE_REV required for PROJECT=hoprd}" ;;
 edge-client) EDGLI_REF="${OVERRIDE_REV:?OVERRIDE_REV required for PROJECT=edge-client}" ;;
-blokli) echo "PROJECT=blokli: merge-testing dropped — running hoprd/edge-client main against latest blokli release" ;;
-"" | manual) echo "no PROJECT override — hoprd/edge-client at main, blokli at latest release" ;;
+# blokli merge-testing is back on: blokli now gates its own merges to release/0.13,
+# so a dispatch from it must actually build the dispatched rev rather than the
+# branch head. Set here and consumed by the BLOKLI_REF default further down.
+blokli) BLOKLI_REF="${OVERRIDE_REV:?OVERRIDE_REV required for PROJECT=blokli}" ;;
+"" | manual) echo "no PROJECT override — ${LINE}: hoprd at ${HOPRD_LINE}, edge-client at ${EDGLI_REF}, blokli at ${BLOKLI_REF:-${BLOKLI_DEFAULT}}" ;;
 *)
   echo "unknown PROJECT '${PROJECT}'" >&2
   exit 2
@@ -59,28 +153,146 @@ EDGLI_SHA="$(resolve_sha hoprnet/edge-client "${EDGLI_REF}")"
   exit 1
 }
 
-# Resolve blokli → latest release tag (override with BLOKLI_REF). Same `gh api`
-# rationale as edgli above: self-contained nix binary, dodges the glibc trip.
-BLOKLI_REF="${BLOKLI_REF:-$(gh api repos/hoprnet/blokli/releases/latest --jq '.tag_name' 2>/dev/null)}"
-[ -n "${BLOKLI_REF}" ] || {
-  echo "could not resolve latest blokli release" >&2
-  exit 1
+# blokli tracks the `release/0.13` BRANCH — the line the Jura (v4) network runs,
+# agreed with the blokli team — and `release/0.14` on v5. Deliberately a moving branch and not a resolved
+# release number, so patch releases land without an edit here; `--refresh` on its
+# build below is what makes that actually take effect.
+#
+# Note there is no `latest-jura` (or any `latest-*`) git tag in blokli — those
+# names only ever existed as bloklid-anvil DOCKER tags, and this builds a flake
+# ref, which resolves against git. Note also that the branch can sit ahead of what
+# Jura actually deploys (branch head was 0.13.2 while jura-dev/prod pinned 0.13.1
+# on 2026-09-03), so a green gate here is evidence about the 0.13 line, not proof
+# about the exact deployed build.
+BLOKLI_REF="${BLOKLI_REF:-${BLOKLI_DEFAULT}}"
+
+# Reject a hoprd rev from the wrong side of the v4/v5 split. A merge dispatch from
+# hoprd `main` carries a v5 sha, which pairs with a v4 hopr-lib only by accident;
+# fail fast with the reason rather than after a 40-minute build + a red gate.
+#
+# `compare/<line>...<rev>` reports, from the line's point of view:
+#   identical / behind — the rev is contained in the line
+#   ahead             — the rev CONTAINS the line plus new commits, i.e. a branch or
+#                       PR head based on it. Accepted: that is precisely the
+#                       label-triggered PR case, which hoprd fires with its PR head.
+#   diverged          — the rev is off the line entirely (a v5 `main` sha). Rejected.
+if [ "${HOPRD_SKIP_LINE_CHECK:-0}" != "1" ] && [ "${HOPRD_REF}" != "${HOPRD_LINE}" ]; then
+  status="$(gh api "repos/hoprnet/hoprd/compare/${HOPRD_LINE}...${HOPRD_REF}" --jq '.status' 2>/dev/null || true)"
+  case "${status}" in
+  identical | behind | ahead) ;;
+  "")
+    echo "could not compare hoprd ref '${HOPRD_REF}' against '${HOPRD_LINE}'" >&2
+    exit 1
+    ;;
+  *)
+    echo "hoprd ref '${HOPRD_REF}' is not on the '${HOPRD_LINE}' line (compare: ${status})." >&2
+    echo "LINE=${LINE} builds hoprd from '${HOPRD_LINE}', and the crate's dependency set matches it." >&2
+    echo "Set HOPRD_LINE to the intended line, or HOPRD_SKIP_LINE_CHECK=1 to run anyway." >&2
+    exit 1
+    ;;
+  esac
+fi
+
+echo "resolved versions (LINE=${LINE}):"
+echo "  hoprd        = ${HOPRD_REF} (line ${HOPRD_LINE})"
+echo "  edge-client  = ${EDGLI_REF} (${EDGLI_SHA})"
+echo "  blokli       = ${BLOKLI_REF}"
+
+# Hand the resolved versions to the workflow so a failure notification can report
+# what actually ran. The dispatch inputs are no good for this: they only ever carry
+# the triggering project's rev, so a manual or PR-label run has nothing to report and
+# used to render an empty "(rev: )". These are always populated once resolution got
+# this far, and they cover all three projects rather than just one.
+if [ -n "${GITHUB_ENV:-}" ]; then
+  # A merge dispatch makes HOPRD_REF a full sha; abbreviate it so the notification
+  # does not carry 40 characters that the trigger line already shows.
+  hoprd_display="${HOPRD_REF}"
+  [[ ${HOPRD_REF} =~ ^[0-9a-f]{40}$ ]] && hoprd_display="${HOPRD_REF:0:8}"
+  {
+    echo "RESOLVED_HOPRD=${hoprd_display}"
+    echo "RESOLVED_EDGLI=${EDGLI_REF} (${EDGLI_SHA:0:8})"
+    echo "RESOLVED_BLOKLI=${BLOKLI_REF}"
+    echo "RESOLVED_LINE=${LINE}"
+  } >>"${GITHUB_ENV}"
+fi
+
+# ── Put the selected line's dependency set in place ──
+# Copied rather than `--manifest-path`: cargo insists on the name `Cargo.toml`.
+# Restored on exit so a later local cargo run is not silently on v5.
+if [ "${LINE}" = "v5" ]; then
+  echo "swapping in the v5 dependency set ..."
+  MANIFEST_BACKUP="$(mktemp -d)"
+  cp "${CRATE_CARGO}" "${MANIFEST_BACKUP}/Cargo.toml"
+  cp "${CRATE_LOCK}" "${MANIFEST_BACKUP}/Cargo.lock"
+  # shellcheck disable=SC2329  # invoked indirectly via the traps below
+  restore_manifest() {
+    # Idempotent: the signal handler exits, firing the EXIT trap too.
+    [ -d "${MANIFEST_BACKUP}" ] || return 0
+    cp "${MANIFEST_BACKUP}/Cargo.toml" "${CRATE_CARGO}"
+    cp "${MANIFEST_BACKUP}/Cargo.lock" "${CRATE_LOCK}"
+    rm -rf "${MANIFEST_BACKUP}"
+  }
+  # Signals need their own trap, and the `exit` is load-bearing: a handler does not end
+  # the script, so without it a cancelled job restores v4 then runs v5 suites against it.
+  trap restore_manifest EXIT
+  trap 'restore_manifest; exit 143' HUP INT TERM
+  cp "${REPO_ROOT}/integration/Cargo.v5.toml" "${CRATE_CARGO}"
+  cp "${REPO_ROOT}/integration/Cargo.v5.lock" "${CRATE_LOCK}"
+fi
+
+# ── Build everything, keeping the build chatter off the console ──
+# `nix build -L` emits every derivation's build log: ~20k lines for one run, which
+# buries the few dozen lines anyone actually reads. Keep `-L` (the detail is what
+# makes a failed build diagnosable) but send it to a file, print one line per
+# build, and dump the tail only when a build fails. BUILD_LOG is picked up by the
+# workflow and uploaded as an artifact, so the full detail is still one click away.
+BUILD_LOG="${BUILD_LOG:-${REPO_ROOT}/nix-build.log}"
+: >"${BUILD_LOG}"
+
+nix_build() { # description, then `nix build` arguments
+  local what="$1"
+  shift
+  echo "  building ${what} ..."
+  {
+    echo
+    echo "═══ ${what} ═══"
+  } >>"${BUILD_LOG}"
+  if ! nix build "$@" >>"${BUILD_LOG}" 2>&1; then
+    echo "nix build failed: ${what} — last 80 lines of ${BUILD_LOG}:" >&2
+    tail -80 "${BUILD_LOG}" >&2
+    return 1
+  fi
 }
 
-echo "resolved versions:"
-echo "  hoprd        = ${HOPRD_REF}"
-echo "  edge-client  = ${EDGLI_REF} (${EDGLI_SHA})"
-echo "  blokli       = ${BLOKLI_REF} (latest release)"
-
-# ── Build hoprd + hoprd-localcluster from the hoprd ref (Cachix-cached) ──
 echo "building hoprd binaries from ref ${HOPRD_REF} ..."
-nix build -L "github:hoprnet/hoprd/${HOPRD_REF}#binary-hoprd-${ARCH}" --out-link "${REPO_ROOT}/result-hoprd"
-nix build -L "github:hoprnet/hoprd/${HOPRD_REF}#binary-hoprd-localcluster-${ARCH}" --out-link "${REPO_ROOT}/result-localcluster"
+nix_build "hoprd" -L "github:hoprnet/hoprd/${HOPRD_REF}#binary-hoprd${SUFFIX}" --out-link "${REPO_ROOT}/result-hoprd"
+nix_build "hoprd-localcluster" -L "github:hoprnet/hoprd/${HOPRD_REF}#binary-hoprd-localcluster${SUFFIX}" --out-link "${REPO_ROOT}/result-localcluster"
 
-# ── Build the blokli binary chain from the release (bloklid + deployer + anvil) ──
-echo "building blokli chain from release ${BLOKLI_REF} ..."
-nix build -L "github:hoprnet/blokli/${BLOKLI_REF}#bloklid" --out-link "${REPO_ROOT}/result-bloklid"
-nix build -L "nixpkgs#foundry" --out-link "${REPO_ROOT}/result-foundry"
+# ── Build the blokli binary chain from the branch (bloklid + deployer + anvil) ──
+# `--refresh` is load-bearing: nix caches a flake ref's resolved revision for
+# `tarball-ttl` (1h by default), so without it a branch that moved inside that
+# window silently rebuilds the previous revision — which defeats the point of
+# tracking a moving ref at all.
+echo "building blokli chain from ${BLOKLI_REF} ..."
+nix_build "bloklid + deployer" -L --refresh "github:hoprnet/blokli/${BLOKLI_REF}#bloklid" --out-link "${REPO_ROOT}/result-bloklid"
+nix_build "anvil (foundry)" -L "nixpkgs#foundry" --out-link "${REPO_ROOT}/result-foundry"
+
+# ── The PIX exit binary (v5 only) ──
+# The deposit pool is a build-time choice: a plain hoprd bootstraps fine and then never
+# deposits. Built up front so a missing output fails in a minute, not after forty.
+# x86_64-linux only — the flake exposes no other arch, so darwin goes via `just pix`.
+PIX_SUITE=0
+if [ "${LINE}" = "v5" ]; then
+  if [ "${SYSTEM}" = "x86_64-linux" ]; then
+    nix_build "hoprd (PIX pool)" -L "github:hoprnet/hoprd/${HOPRD_REF}#binary-hoprd-pix-test-${SYSTEM}" \
+      --out-link "${REPO_ROOT}/result-hoprd-pix"
+    PIX_BIN="${REPO_ROOT}/result-hoprd-pix/bin/hoprd"
+    pix_check_hoprd "${PIX_BIN}" || exit 1
+    PIX_SUITE=1
+  else
+    echo "skipping the PIX suite: no binary-hoprd-pix-test output for ${SYSTEM} (use \`just pix\`)"
+  fi
+fi
 
 # ── Pin edgli to the resolved sha, and hopr-lib to whatever that edgli pins ──
 echo "pinning edgli to ${EDGLI_SHA} ..."
@@ -96,45 +308,145 @@ EDGLI_MANIFEST="$(gh api "repos/hoprnet/edge-client/contents/Cargo.toml?ref=${ED
 export EDGLI_MANIFEST
 python3 - "$CRATE_CARGO" "$EDGLI_SHA" <<'PY'
 import os, re, sys
+
 path, rev = sys.argv[1], sys.argv[2]
 src = open(path).read()
-# Replaces whichever ref the manifest carries with `rev = "<sha>"`. Both forms have to be handled:
-# CI always pins a concrete sha, for reproducibility and because a dispatch supplies one, but the
-# committed manifest tracks a branch so the default does not drift behind what CI tests. Matching
-# only `rev` meant this exited on every run once the manifest moved to `branch`.
-src, n = re.subn(r'(edgli\s*=\s*\{[^}]*?\b)(?:rev|branch)(\s*=\s*")[^"]*(")',
-                 rf'\g<1>rev\g<2>{rev}\g<3>', src, count=1)
-if n == 0:
-    sys.exit(f"run.sh: no edgli rev/branch entry matched in {path} — the dependency "
-             "stanza changed shape; refusing to run against a stale pin")
 
-# `hopr-lib` has to name the rev edgli itself resolves. Pinning only edgli leaves the two free to
-# disagree, and cargo then locks *two* hopr-libs — and with them two `hopr-strategy`s, whose
-# counters are registered in the same process and incremented by nobody. `tests/pix.rs` reads that
-# as a full set of zeroes and concludes the entry never deposited, so a skew here is worse than a
-# hard stop. edgli is authoritative (see the manifest's own hopr-lib comment), so follow its pin
-# rather than demand the committed one already match: a dispatch that moved edge-client onto a new
-# hoprnet rev should still run.
-upstream = re.search(r'^hopr-lib\s*=\s*\{[^}]*?\brev\s*=\s*"([0-9a-f]{7,40})"',
-                     os.environ['EDGLI_MANIFEST'], re.M | re.S)
-if not upstream:
-    sys.exit(f"run.sh: edge-client at {rev} pins hopr-lib by something other than a git rev — "
-             f"align {path} by hand; see its hopr-lib comment")
-hopr_lib_rev = upstream.group(1)
-src, n = re.subn(r'(hopr-lib\s*=\s*\{[^}]*?\b)(?:rev|branch)(\s*=\s*")[^"]*(")',
-                 rf'\g<1>rev\g<2>{hopr_lib_rev}\g<3>', src, count=1)
+# The committed manifest pins edgli by BRANCH (`branch = "main"`) on purpose, so the
+# default does not drift behind what CI tests. Pinning here therefore has to *replace
+# the branch key with a rev*, not edit an existing rev — an earlier version of this
+# only handled `rev = "<sha>"` and so could never match the committed state.
+# Accept whichever key the stanza carries so a repeat run over an already-pinned
+# manifest works too.
+stanza = re.search(r'^edgli\s*=\s*\{.*?\}', src, re.S | re.M)
+if not stanza:
+    sys.exit(f"run.sh: no `edgli = {{ ... }}` dependency stanza in {path} — "
+             "refusing to run against a stale pin")
+
+pinned, n = re.subn(r'\b(?:branch|rev|tag)\s*=\s*"[^"]*"', f'rev = "{rev}"',
+                    stanza.group(0), count=1)
 if n == 0:
-    sys.exit(f"run.sh: no hopr-lib rev/branch entry matched in {path} — refusing to run with it "
-             "possibly off edgli's hoprnet rev")
+    sys.exit(f"run.sh: the edgli stanza in {path} carries no branch/rev/tag to "
+             "pin — refusing to run against a stale pin")
+
+src = src[: stanza.start()] + pinned + src[stanza.end() :]
+print(f"  edgli pinned: {pinned.splitlines()[0]}")
+
+# The v5 set has a direct `hopr-lib` that MUST name the rev edgli resolves, else the lock
+# carries two copies and metrics are registered by one and incremented by the other.
+# `hopr-strategy` is the same hazard one level down, and is pinned by VERSION rather than by
+# git ref. A committed version goes stale the moment edge-client bumps the major (4.0.0 -> 5.1.0
+# broke main on 2026-09-23), so mirror both rather than trusting either. No-op on v4 (no such deps).
+KEY = r'\b(?:branch|rev|tag)\s*=\s*"[^"]*"'
+for dep, keypat in (("hopr-lib", KEY), ("hopr-strategy", r'\bversion\s*=\s*"[^"]*"')):
+    stanza_re = r'^' + dep + r'\s*=\s*\{.*?\}'
+    ours = re.search(stanza_re, src, re.S | re.M)
+    if not ours:
+        continue
+    theirs = re.search(stanza_re, os.environ['EDGLI_MANIFEST'], re.S | re.M)
+    if not theirs:
+        sys.exit(f"run.sh: edge-client's manifest has no `{dep}` stanza to mirror")
+    key = re.search(keypat, theirs.group(0))
+    if not key:
+        sys.exit(f"run.sh: edge-client pins {dep} without a key this can mirror")
+    mirrored, n = re.subn(keypat, key.group(0), ours.group(0), count=1)
+    if n == 0:
+        sys.exit(f"run.sh: our `{dep}` stanza carries no key to mirror onto")
+    src = src[: ours.start()] + mirrored + src[ours.end() :]
+    print(f"  {dep} mirrored from edge-client: {key.group(0)}")
 
 open(path, 'w').write(src)
-print(f"  edgli    -> {rev}")
-print(f"  hopr-lib -> {hopr_lib_rev} (edge-client's own pin)")
 PY
-(cd "${REPO_ROOT}/integration" && cargo update -p edgli -p hopr-lib)
+# Test the hoprnet edge-client locks, not the branch tip: a hoprnet merge must reach us through an
+# edge-client lock bump, which its gate then tests.
+locked_hoprlib_rev() { # repo ref
+  gh api -H "Accept: application/vnd.github.raw" "repos/hoprnet/$1/contents/Cargo.lock?ref=$2" 2>/dev/null |
+    sed -n '/^name = "hopr-lib"$/,/^source/ s/.*#\([0-9a-f]\{40\}\)"$/\1/p'
+}
+EDGLI_HOPRLIB_REV="$(locked_hoprlib_rev edge-client "${EDGLI_SHA}")" || true
+[ -n "${EDGLI_HOPRLIB_REV}" ] || {
+  echo "could not read edge-client's locked hopr-lib rev at ${EDGLI_SHA}" >&2
+  exit 1
+}
+echo "  hopr-lib pinned to edge-client's lock: ${EDGLI_HOPRLIB_REV}"
+# The cluster's nodes and the edgli entry must speak the same wire format (packet size, SURBs).
+HOPRD_HOPRLIB_REV="$(locked_hoprlib_rev hoprd "${HOPRD_REF}")" || true
+if [ "${HOPRD_HOPRLIB_REV}" != "${EDGLI_HOPRLIB_REV}" ]; then
+  echo "::warning::hoprd locks hoprnet ${HOPRD_HOPRLIB_REV:-unknown}, edge-client ${EDGLI_HOPRLIB_REV}; a wire change between them breaks every session" >&2
+fi
+(cd "${REPO_ROOT}/integration" &&
+  cargo update -p edgli &&
+  cargo update -p hopr-lib --precise "${EDGLI_HOPRLIB_REV}")
 
-# ── Run the test against a fresh flake-built chain per scenario ──
-# run-binchain.sh starts/stops bloklid+anvil per scenario (HOPRD_CHAIN_URL) and
-# runs both hop counts (zero_hop, one_hop) as separate tests.
+# Two copies is invisible at runtime: readings come back all-zero rather than erroring,
+# which is exactly what `tests/pix.rs` reads as "never deposited". Catch it here.
+for crate in hopr-lib hopr-strategy; do
+  n="$(grep -c "^name = \"${crate}\"$" "${CRATE_LOCK}" || true)"
+  if [ "${n}" -gt 1 ]; then
+    echo "error: ${n} copies of ${crate} in the lock after pinning — the direct dep and" >&2
+    echo "edge-client's do not name the same source. Reconcile them before running." >&2
+    grep -n -A2 "^name = \"${crate}\"$" "${CRATE_LOCK}" >&2
+    exit 1
+  fi
+done
+
+# ── Run every localcluster suite, fresh chain per scenario ──
+# Everything that a local cluster can drive. `rotsee` is excluded because it needs a
+# funded Gnosis identity and a reachable public exit; `profiling` because it emits
+# traces rather than a verdict and needs its own build (--features prof, --profile
+# tracer, tokio_unstable).
+#
+# One run-binchain.sh call per test binary; it starts/stops bloklid+anvil per
+# scenario and reaps stray nodes in between. Suites are NOT short-circuited — a
+# failure in one still runs the rest, so a red run reports everything broken rather
+# than only the first thing.
+BINCHAIN="$(dirname "${BASH_SOURCE[0]}")/run-binchain.sh"
+suite_rc=0
+
+run_suite() { # target, then any scenarios to HOLD OUT of it
+  local target="$1"
+  shift
+  echo "═══════ suite: ${target} ═══════"
+  if ! TEST_TARGETS="${target}" SCENARIOS="${SCENARIOS:-}" SCENARIOS_EXCEPT="$*" \
+    bash "${BINCHAIN}"; then
+    echo "suite ${target} FAILED" >&2
+    suite_rc=1
+  fi
+}
+
 echo "running integration tests (binary chain) ..."
-exec bash "$(dirname "${BASH_SOURCE[0]}")/run-binchain.sh"
+run_suite integration
+# `return_path` is held out ENTIRELY: its scenarios assert an arrival ratio over an
+# unforced random relayer draw, so a red says nothing. Locally: `just return-path`.
+# If it is ever wired back in, three of its five are the flaky ones — `spread` asserts a ratio on a
+# random draw, and the two survival scenarios miss their recovery deadline on some machines but not
+# others: `spread`, `common_mode_return_outage` and `a_symmetric_session_should_survive_relayer_loss`.
+run_suite exit_origination
+# Gated: `upload_survival` reproduces the sustained-upload return-path collapse and therefore FAILS
+# against release/4.0 until the reply-opener LRU fix (hoprnet#8417) lands there. Wiring it in now
+# would turn the nightly red every run. Enable once that fix is in release/4.0 — at which point the
+# test flips to passing and becomes a genuine regression guard.
+
+# Entry-side PIX: v5 only (`edgli/pix-test` has no v4 counterpart).
+if [ "${PIX_SUITE}" = "1" ]; then
+  export HOPRD_BIN="${PIX_BIN}"
+  run_suite pix
+
+  # `pix_shapes` additionally needs a localcluster that takes `--pix-config`: the bare
+  # `--enable-pix` is a 32-packet demo cycle that no traffic shape fits inside. Probed on the
+  # binary, the same way the deposit pool is, rather than assumed from the ref.
+  if pix_check_localcluster "${REPO_ROOT}/result-localcluster/bin/hoprd-localcluster" 2>/dev/null; then
+    # The geometry spike gets its own run, because a cluster serves one binary invocation and
+    # libtest orders the rest alphabetically: if the geometry cannot complete one cycle, no
+    # shape after it can be read.
+    spike=the_profile_geometry_completes_a_cycle
+    SCENARIOS="${spike}" run_suite pix_shapes
+    run_suite pix_shapes "${spike}"
+  else
+    echo "::error::the hoprd-localcluster built from '${HOPRD_REF}' has no --pix-config, so the" >&2
+    echo "pix_shapes suite cannot state its geometry. Use a newer hoprd ref." >&2
+    suite_rc=1
+  fi
+fi
+
+exit "${suite_rc}"

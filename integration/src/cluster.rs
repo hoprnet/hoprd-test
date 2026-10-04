@@ -1,15 +1,12 @@
 //! Local cluster lifecycle — bring up (or attach to) a `hoprd-localcluster`.
 //!
-//! `hoprd-localcluster` is the orchestrator: it starts the chain container, funds
-//! the node Safes via `hopli`, spawns the `hoprd` processes, and opens the
-//! full-mesh channels.
+//! `hoprd-localcluster` is the orchestrator: it funds the node Safes via `hopli`, spawns the
+//! `hoprd` processes, and opens the full-mesh channels.
 //!
-//! **Contracts.** We do NOT deploy contracts here. The `bloklid-anvil` chain
-//! image deploys the full HOPR contract set on startup (its entrypoint runs
-//! anvil → `blokli-contract-deployer` → writes the addresses into the bloklid
-//! config), so by the time blokli answers `/readyz` the contracts are live and
-//! their addresses are served to the nodes. The only case lacking contracts is
-//! pointing `HOPRD_CHAIN_URL` at a foreign chain — not used by managed mode.
+//! **Contracts.** We do NOT deploy them here, and neither does localcluster.
+//! `scripts/integration/lib.sh chain_up` runs anvil → `blokli-contract-deployer` → bloklid, so
+//! by the time the chain answers GraphQL the addresses are live and served to the nodes. Only
+//! an `HOPRD_CHAIN_URL` pointed at a foreign chain would lack them.
 
 use std::{path::PathBuf, time::Duration};
 
@@ -105,6 +102,32 @@ where
     });
 }
 
+/// Smallest reply-opener cache edgli will honor per pseudonym. Mirrors hoprnet's private
+/// `MINIMUM_OPENERS_PER_PSEUDONYM` — the floor `insert_reply_opener` silently applies — so a
+/// scenario and this knob agree on the smallest cache actually installed.
+pub const EDGLI_MAX_OPENERS_FLOOR: usize = 1000;
+
+static REQUESTED_EDGLI_MAX_OPENERS: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+
+/// Ask for a reduced reply-opener cache on edgli, before the first [`bring_up`].
+///
+/// edgli keeps one reply opener per SURB it mints; the cache is capped per pseudonym
+/// (`SurbStoreConfig::max_openers_per_pseudonym`, default 100 000). A sustained upload with
+/// `always_max_out_surbs` mints SURBs faster than an echoing exit consumes them, so the cache
+/// eventually overflows — at the production cap that takes minutes, which is the ~291 s the
+/// 2026-09 upload incident reported. Shrinking the cap brings the overflow forward to seconds so a
+/// scenario can exercise it in CI time. First call in a test binary wins; the request is floored at
+/// [`EDGLI_MAX_OPENERS_FLOOR`].
+pub fn request_edgli_max_openers(n: usize) {
+    REQUESTED_EDGLI_MAX_OPENERS.get_or_init(|| n.max(EDGLI_MAX_OPENERS_FLOOR));
+}
+
+/// The reduced reply-opener cap requested via [`request_edgli_max_openers`], if any.
+pub fn edgli_max_openers() -> Option<usize> {
+    REQUESTED_EDGLI_MAX_OPENERS.get().copied()
+}
+
+#[cfg(feature = "v5")]
 static REQUESTED_PIX: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
 
 /// Ask for the cluster to be started with PIX enabled, before the first [`bring_up`].
@@ -119,16 +142,22 @@ static REQUESTED_PIX: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
 /// the generated stanza and refuses to start, which is the loud failure; a binary built with the
 /// *other* pool starts normally and never deposits, which is not.
 ///
+/// Compiled out without the feature rather than left as a no-op knob: `--enable-pix` is a flag
+/// only a v5 `hoprd-localcluster` has, so a v4 build should not be able to name it at all.
+///
 /// First call in a test binary wins.
+#[cfg(feature = "v5")]
 pub fn request_pix() -> bool {
     *REQUESTED_PIX.get_or_init(|| true)
 }
 
 /// Whether [`request_pix`] was called.
+#[cfg(feature = "v5")]
 pub fn pix_enabled() -> bool {
     REQUESTED_PIX.get().copied().unwrap_or(false)
 }
 
+#[cfg(feature = "v5")]
 static REQUESTED_PIX_SETTINGS: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 
 /// Ask for PIX to be enabled with a *named geometry*, before the first [`bring_up`].
@@ -150,6 +179,7 @@ static REQUESTED_PIX_SETTINGS: std::sync::OnceLock<String> = std::sync::OnceLock
 /// three from one profile.
 ///
 /// First call in a test binary wins.
+#[cfg(feature = "v5")]
 pub fn request_pix_settings(yaml: impl Into<String>) -> &'static str {
     request_pix();
     REQUESTED_PIX_SETTINGS.get_or_init(|| yaml.into())
@@ -221,6 +251,28 @@ pub struct NodeInfo {
 }
 
 impl NodeInfo {
+    /// Sends `signal` to this node's `hoprd` process. Shared by [`kill`](Self::kill),
+    /// [`pause`](Self::pause) and [`resume`](Self::resume); `verb` names the action in the log line.
+    #[cfg(unix)]
+    fn signal(&self, signal: nix::sys::signal::Signal, verb: &str) -> anyhow::Result<()> {
+        let pid = self
+            .pid
+            .ok_or_else(|| anyhow::anyhow!("node {} has no pid in cluster status", self.address))?;
+        // Guard against `kill`'s process-group semantics: `Pid::from_raw(0)` targets the caller's
+        // whole process group, and a pid above `i32::MAX` wraps to a negative raw pid that does the
+        // same. A cluster node's pid is neither, so treat either as a bad status rather than signal
+        // the test runner's own group.
+        anyhow::ensure!(
+            pid != 0 && pid <= i32::MAX as u32,
+            "node {} has an out-of-range pid {pid} in cluster status; refusing to signal",
+            self.address
+        );
+        nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid as i32), signal)
+            .with_context(|| format!("{signal:?} node {} (pid {pid})", self.address))?;
+        tracing::info!(node = %self.address, pid, "{verb} relay node");
+        Ok(())
+    }
+
     /// SIGKILL this node's `hoprd` process, simulating a relay that drops off the
     /// network without closing anything down — the failure mode behind the
     /// 2026-08-11 return-path break.
@@ -229,16 +281,26 @@ impl NodeInfo {
     /// announce its departure, which is not what a crashed or partitioned relay does.
     #[cfg(unix)]
     pub fn kill(&self) -> anyhow::Result<()> {
-        let pid = self
-            .pid
-            .ok_or_else(|| anyhow::anyhow!("node {} has no pid in cluster status", self.address))?;
-        nix::sys::signal::kill(
-            nix::unistd::Pid::from_raw(pid as i32),
-            nix::sys::signal::Signal::SIGKILL,
-        )
-        .with_context(|| format!("SIGKILL node {} (pid {pid})", self.address))?;
-        tracing::info!(node = %self.address, pid, "killed relay node");
-        Ok(())
+        self.signal(nix::sys::signal::Signal::SIGKILL, "killed")
+    }
+
+    /// SIGSTOP this node's `hoprd` process, freezing it so it forwards nothing while its
+    /// sockets stay open — a transient outage the node later comes back from, unlike
+    /// [`kill`](Self::kill). Used to reproduce a *common-mode* return-path fault (all return
+    /// relayers frozen at once, as when a client's own uplink degrades) that then recovers.
+    ///
+    /// SIGSTOP rather than a clean pause: a frozen process neither announces nor tears anything
+    /// down, which is what a partitioned relay looks like from the rest of the network.
+    #[cfg(unix)]
+    pub fn pause(&self) -> anyhow::Result<()> {
+        self.signal(nix::sys::signal::Signal::SIGSTOP, "paused")
+    }
+
+    /// SIGCONT this node's `hoprd` process, resuming a relay previously frozen with
+    /// [`pause`](Self::pause) so the return path it carries can recover.
+    #[cfg(unix)]
+    pub fn resume(&self) -> anyhow::Result<()> {
+        self.signal(nix::sys::signal::Signal::SIGCONT, "resumed")
     }
 }
 
@@ -391,47 +453,33 @@ pub(crate) fn parse_summary_json(json: &str) -> anyhow::Result<ClusterSummary> {
 
 // ── RAII handle ───────────────────────────────────────────────────────────────
 
+/// Kept alive for the life of the process: the handle is leaked (see [`bring_up_shared`]), so the
+/// localcluster outlives the last test and the runner reaps it. The fields are held rather than
+/// read -- dropping `_tempdir` would delete the node logs a failed run is diagnosed from.
 pub struct ClusterHandle {
     /// `Some` when we started the cluster; `None` in external mode.
-    child: Option<tokio::process::Child>,
+    _child: Option<tokio::process::Child>,
     pub summary: ClusterSummary,
     _tempdir: Option<tempfile::TempDir>,
 }
 
-impl Drop for ClusterHandle {
-    fn drop(&mut self) {
-        let Some(child) = self.child.as_mut() else {
-            return; // external cluster — leave it alone
-        };
-        #[cfg(unix)]
-        if let Some(pid) = child.id() {
-            use nix::sys::signal::{Signal, kill};
-            use nix::unistd::Pid;
-            let _ = kill(Pid::from_raw(pid as i32), Signal::SIGINT);
-        }
-        let deadline = std::time::Instant::now() + Duration::from_secs(30);
-        loop {
-            match child.try_wait() {
-                Ok(Some(_)) => break,
-                Ok(None) if std::time::Instant::now() < deadline => {
-                    std::thread::sleep(Duration::from_millis(500));
-                }
-                _ => {
-                    // Deadline hit or try_wait errored: SIGKILL, then reap — start_kill
-                    // only signals, so without a wait the process lingers as a zombie.
-                    let _ = child.start_kill();
-                    let reap_deadline = std::time::Instant::now() + Duration::from_secs(5);
-                    while std::time::Instant::now() < reap_deadline {
-                        if matches!(child.try_wait(), Ok(Some(_))) {
-                            break;
-                        }
-                        std::thread::sleep(Duration::from_millis(100));
-                    }
-                    break;
-                }
-            }
-        }
-    }
+static SHARED: tokio::sync::OnceCell<&'static ClusterHandle> = tokio::sync::OnceCell::const_new();
+
+/// The binary-wide cluster, brought up on first use and shared by every test in the binary.
+///
+/// Bring-up dominates a short scenario's wall clock, and every scenario in a binary agrees on the
+/// cluster's shape by construction -- the `request_*` knobs above are all first-call-wins. Teardown
+/// belongs to whoever started the process: the handle is leaked, so the localcluster outlives the
+/// last test and `scripts/integration/run-binchain.sh` reaps it. A scenario that needs a cluster
+/// to itself is run as its own invocation.
+pub async fn bring_up_shared() -> anyhow::Result<&'static ClusterHandle> {
+    SHARED
+        .get_or_try_init(|| async {
+            let handle = bring_up().await?;
+            Ok::<_, anyhow::Error>(&*Box::leak(Box::new(handle)))
+        })
+        .await
+        .copied()
 }
 
 /// Bring up the cluster (managed mode) or attach to a running one (external mode),
@@ -475,29 +523,10 @@ async fn attach_external(data_dir: &str) -> anyhow::Result<ClusterHandle> {
     let summary = wire_into_summary(wire, Some(std::path::Path::new(data_dir)))?;
     tracing::info!(blokli_url = %summary.blokli_url, "attached to external cluster");
     Ok(ClusterHandle {
-        child: None,
+        _child: None,
         summary,
         _tempdir: None,
     })
-}
-
-/// A test that aborts (e.g. SIGABRT on a stack overflow) skips [`ClusterHandle`]'s
-/// Drop, leaking its chain container + node processes onto the fixed ports and
-/// breaking the next serial test. Managed mode owns those ports, so clear any
-/// leftover before bringing up.
-fn reap_stale(chain_image: &str, runtime: &str, lc_bin: &str, hoprd_bin: &str) {
-    let script = format!(
-        "{runtime} ps -aq --filter ancestor={chain_image} | xargs -r {runtime} rm -f; \
-         pkill -9 -f {lc_bin}; pkill -9 -f {hoprd_bin}; true"
-    );
-    match std::process::Command::new("sh")
-        .arg("-c")
-        .arg(&script)
-        .status()
-    {
-        Ok(_) => tracing::info!("reaped stale cluster state (container + node processes)"),
-        Err(e) => tracing::warn!("reap of stale cluster state failed: {e}"),
-    }
 }
 
 async fn spawn_managed() -> anyhow::Result<ClusterHandle> {
@@ -505,23 +534,11 @@ async fn spawn_managed() -> anyhow::Result<ClusterHandle> {
         .map_err(|_| anyhow::anyhow!("HOPRD_LOCALCLUSTER_BIN is not set"))?;
     let hoprd_bin =
         std::env::var("HOPRD_BIN").map_err(|_| anyhow::anyhow!("HOPRD_BIN is not set"))?;
-    let chain_url = std::env::var("HOPRD_CHAIN_URL").ok();
-    let chain_image = std::env::var("HOPRD_CHAIN_IMAGE").ok();
-    let container_runtime = std::env::var("HOPRD_CONTAINER_RUNTIME").ok();
-
-    // External chain (HOPRD_CHAIN_URL, e.g. a locally-built bloklid) skips the
-    // container; only image mode has a stale container to reap.
-    if chain_url.is_none() {
-        let image = chain_image.as_deref().ok_or_else(|| {
-            anyhow::anyhow!("set HOPRD_CHAIN_URL (external chain) or HOPRD_CHAIN_IMAGE (container)")
-        })?;
-        reap_stale(
-            image,
-            container_runtime.as_deref().unwrap_or("docker"),
-            &lc_bin,
-            &hoprd_bin,
-        );
-    }
+    // The chain is always external now: `scripts/integration/lib.sh` starts anvil + bloklid and
+    // the runner reaps them. Stale node processes are that script's job too (`reap_nodes`).
+    let chain_url = std::env::var("HOPRD_CHAIN_URL").map_err(|_| {
+        anyhow::anyhow!("HOPRD_CHAIN_URL is not set (start one with lib.sh chain_up)")
+    })?;
 
     let tempdir = tempfile::TempDir::with_prefix("hoprd-it-")?;
     let data_dir = tempdir.path().to_path_buf();
@@ -549,6 +566,7 @@ async fn spawn_managed() -> anyhow::Result<ClusterHandle> {
         "--funding-amount",
         &channel_funding_amount(),
     ]);
+    #[cfg(feature = "v5")]
     if pix_enabled() {
         // `--pix-config` implies `--enable-pix`, so the two are exclusive rather than additive:
         // passing both would be harmless today but states the geometry twice.
@@ -572,14 +590,7 @@ async fn spawn_managed() -> anyhow::Result<ClusterHandle> {
         cmd.args(["--latency", &format!("config:{}", path.to_str().unwrap())]);
         tracing::info!(?path, "cluster will run with an artificial latency profile");
     }
-    if let Some(url) = &chain_url {
-        cmd.args(["--chain-url", url]);
-    } else {
-        cmd.args(["--chain-image", chain_image.as_deref().unwrap()]);
-    }
-    if let Some(runtime) = container_runtime {
-        cmd.args(["--container-runtime", &runtime]);
-    }
+    cmd.args(["--chain-url", &chain_url]);
     cmd.env("HOPRD_USE_OPENTELEMETRY", "false");
     for (key, value) in REQUESTED_NODE_ENV
         .get()
@@ -593,18 +604,14 @@ async fn spawn_managed() -> anyhow::Result<ClusterHandle> {
         );
         cmd.env(key, value);
     }
-    cmd.stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::inherit());
+    // To a file, not a pipe: the cluster outlives the runtime of whichever test triggered
+    // bring-up, and a pipe nobody drains blocks localcluster's next write.
+    let stdout_log = data_dir.join("localcluster.log");
+    cmd.stdout(std::fs::File::create(&stdout_log).context("creating localcluster log")?);
+    cmd.stderr(std::process::Stdio::inherit());
 
     let mut child = cmd.spawn()?;
-    let stdout = child.stdout.take().expect("stdout captured");
-    tokio::spawn(async move {
-        use tokio::io::AsyncBufReadExt as _;
-        let mut lines = tokio::io::BufReader::new(stdout).lines();
-        while let Ok(Some(line)) = lines.next_line().await {
-            tracing::info!(target: "localcluster", "{}", line);
-        }
-    });
+    tracing::info!(path = %stdout_log.display(), "localcluster output goes to a file");
 
     let summary = match wait_status_running(
         std::path::Path::new(&lc_bin),
@@ -642,7 +649,7 @@ async fn spawn_managed() -> anyhow::Result<ClusterHandle> {
     };
 
     Ok(ClusterHandle {
-        child: Some(child),
+        _child: Some(child),
         summary,
         _tempdir: tempdir,
     })

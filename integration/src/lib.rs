@@ -12,9 +12,8 @@
 //! test.
 //!
 //! ## Modes
-//! - **Managed** (default): set `HOPRD_LOCALCLUSTER_BIN`, `HOPRD_BIN`,
-//!   `HOPRD_CHAIN_IMAGE` (a `bloklid-anvil` image), optional
-//!   `HOPRD_CONTAINER_RUNTIME` (default `docker`).
+//! - **Managed** (default): set `HOPRD_LOCALCLUSTER_BIN`, `HOPRD_BIN` and
+//!   `HOPRD_CHAIN_URL` (a chain from `scripts/integration/lib.sh chain_up`).
 //! - **External**: set `HOPRD_CLUSTER_DATA_DIR` (+ `HOPRD_LOCALCLUSTER_BIN`).
 
 pub mod cluster;
@@ -22,8 +21,8 @@ pub mod env;
 pub mod origination;
 // Ungated on purpose, though only `tests/pix.rs` drives it: the balance and counter readers are
 // plain parsers, and gating them would keep the subtlest logic in this crate — absent-vs-zero,
-// whole-multiple reconciliation — out of the default `cargo test --lib` that CI runs. Only the
-// parts naming edgli's PIX types are `#[cfg(feature = "pix")]`.
+// whole-multiple reconciliation — out of the v4 `cargo test --lib` that CI runs. Only the parts
+// naming edgli's PIX types are `#[cfg(feature = "v5")]`.
 pub mod pix;
 // Ungated for the same reason `pix` is, and with more at stake: this is the reader that tells a
 // parked egress gate apart from a starved one, and its subtlety is all in the parsing — cumulative
@@ -35,7 +34,7 @@ pub mod relayers;
 pub mod session_metrics;
 // Ungated for the same reason `pix` is: the profile is arithmetic over constants, and its
 // compile-time guards and unit tests are what catch a geometry edited without re-deriving what
-// depends on it. Those should run in the default `cargo test --lib`, not only under `--features pix`.
+// depends on it. Those should run in the default `cargo test --lib`, on both lines.
 pub mod shapes;
 pub mod udp_service;
 

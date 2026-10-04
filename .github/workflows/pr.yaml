@@ -1,9 +1,23 @@
 name: PR
-# Validate PR metadata and check the integration crate (fmt, clippy, unit tests).
-# The heavy end-to-end run lives in integration.yaml (dispatch / manual only).
+# Validate PR metadata and check the integration crate. Split by what each step
+# actually needs: `fmt`/`clippy` are pure compile-time checks and run on a hosted
+# depot runner, while anything that EXECUTES a test runs on the self-hosted
+# self-hosted runner — the same machine the throughput gate uses, so a test result here
+# and one there come from the same hardware. The heavy end-to-end run lives in
+# integration.yaml. See runner/README.md.
+#
+# Both jobs fan out over the two release lines: shared source, two dependency sets
+# (`Cargo.toml` = v4, `Cargo.v5.toml` = v5), and v5 is the line carrying PIX.
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
+  # Required status checks are evaluated on the MERGE GROUP once a merge queue is
+  # enabled, not on the pull request. A check that only runs on `pull_request` never
+  # reports for a queue candidate, so requiring it would park every entry until the
+  # queue's max-wait elapsed and then evict it. These jobs therefore have to run
+  # here too — they are cheap, and running them against the candidate is the point.
+  merge_group:
+    types: [checks_requested]
 permissions:
   contents: read
 concurrency:
@@ -11,9 +25,19 @@ concurrency:
   cancel-in-progress: true
 env:
   CARGO_TERM_COLOR: always
+  # `nix develop` is gated behind these experimental flags. Client-side settings,
+  # so setting them here keeps the jobs working regardless of what the runner's
+  # /etc/nix/nix.conf says — see runner/README.md.
+  NIX_CONFIG: |
+    extra-experimental-features = nix-command flakes
 jobs:
   validate-pr-title:
     name: Validate title
+    # PR-only: a queue candidate has no pull request, so
+    # `github.event.pull_request` is null and the action below has nothing to read.
+    # Consequently do NOT make this a required check — it cannot report on a merge
+    # group. Conventional-commit enforcement stays a pre-queue check.
+    if: github.event_name == 'pull_request'
     runs-on: depot-ubuntu-24.04
     permissions:
       pull-requests: read
@@ -34,10 +58,50 @@ jobs:
             perf
             test
           requireScope: false
-  check:
-    name: Lint & unit test
+  shell:
+    name: Shell lint
+    runs-on: depot-ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@8d3c67de8e2fe68ef647c8db1e6a09f647780f40 # v2.19.0
+        with:
+          disable-sudo: false
+          egress-policy: audit
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Setup Nix
+        uses: hoprnet/hopr-workflows/actions/setup-nix@5477bd53d62ac15c4804b31fbd55966b29a43997 # setup-nix-v2
+        with:
+          cachix_cache_name: hoprnet
+          cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
+      # `-i 2` matches what treefmt's shfmt writes; raw shfmt defaults to tabs.
+      - name: shellcheck + shfmt
+        run: |
+          nix develop . --command bash -c '
+            shellcheck scripts/integration/*.sh scripts/*.sh
+            shfmt -i 2 -d scripts/
+          '
+      # The scripts grew by copying: a fork of the runner, three chain pollers, six reapers.
+      # A hard cap is the guardrail; shared logic belongs in lib.sh, not in a new file.
+      - name: Script budget
+        run: |
+          n=$(find scripts/integration -maxdepth 1 -name '*.sh' | wc -l | tr -d ' ')
+          [ "${n}" -le 5 ] || {
+            echo "::error::script budget exceeded (${n} > 5) — put shared logic in scripts/integration/lib.sh"
+            exit 1
+          }
+
+  lint:
+    name: Format + clippy (${{ matrix.line }})
     runs-on: depot-ubuntu-24.04-4
     timeout-minutes: 30
+    strategy:
+      fail-fast: true
+      matrix:
+        line: [v4, v5]
     steps:
       - name: Harden Runner
         uses: step-security/harden-runner@8d3c67de8e2fe68ef647c8db1e6a09f647780f40 # v2.19.0
@@ -55,18 +119,109 @@ jobs:
           cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
       # The crate builds in the hoprnet dev shell (it provides the rust toolchain
       # + the cached hopr-lib/edgli dependency tree).
+      # Same swap run.sh does. Its own step rather than a branch inside the single-quoted
+      # `bash -c` body below, where any `${...}` is an SC2016 finding that fails actionlint.
+      - name: Select the v5 dependency set
+        if: matrix.line == 'v5'
+        run: |
+          cp integration/Cargo.v5.toml integration/Cargo.toml
+          cp integration/Cargo.v5.lock integration/Cargo.lock
+      # `--all-features` means "everything this line declares": on v4 that is `prof`, on v5 it
+      # also picks up `v5`, which carries PIX. Revisit if a mutually exclusive feature is ever
+      # added — edgli's `pix-curvy` is one, so do not forward it alongside `pix-test`.
       - name: Format + clippy
         run: |
           nix develop github:hoprnet/hoprnet --command bash -c '
             set -euo pipefail
             cd integration
             cargo fmt --check
-            cargo clippy -p hoprd-integration-test --all-targets -- -D warnings
+            cargo clippy -p hoprd-integration-test --all-targets --all-features -- -D warnings
           '
+  unit:
+    name: Unit tests (${{ matrix.line }})
+    # Self-hosted because it runs tests, not because these are slow. No `harden-runner`:
+    # it needs sudo for an eBPF egress monitor and only supports GitHub-hosted runners.
+    runs-on: [self-hosted, hetzner]
+    timeout-minutes: 30
+    strategy:
+      # A red line cancels the other: the first failure is the one to read.
+      fail-fast: true
+      max-parallel: 1
+      matrix:
+        line: [v4, v5]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      # Keep build artifacts OUT of the workspace: the checkout above runs
+      # `git clean -ffdx`, which deletes the gitignored `integration/target` every
+      # run — on a persistent box that means recompiling the whole hopr-lib dep
+      # tree each time for no reason. Under the runner's own $HOME (it owns that,
+      # unlike /opt), and keyed by $RUNNER_NAME so jobs on separate instances do
+      # not serialise on cargo's target-dir lock. Set here rather than in `env:`
+      # because the `runner` context is not available at that level.
+      - name: Point cargo at a persistent target dir
+        run: |
+          dir="${HOME}/.cache/hopr-integration-tests/cargo-target-${RUNNER_NAME}"
+          mkdir -p "${dir}"
+          echo "CARGO_TARGET_DIR=${dir}" >> "${GITHUB_ENV}"
+      # Same as integration.yaml: `setup-nix` would try `install-nix-action`, which
+      # needs root the `runner` user does not have. Nix belongs to the box here.
+      - name: Locate nix
+        run: |
+          if command -v nix >/dev/null 2>&1; then
+            echo "nix already on PATH: $(command -v nix)"
+            exit 0
+          fi
+          for d in /nix/var/nix/profiles/default/bin "${HOME}/.nix-profile/bin"; do
+            if [ -x "${d}/nix" ]; then
+              echo "found nix in ${d}; adding to PATH"
+              echo "${d}" >> "${GITHUB_PATH}"
+              exit 0
+            fi
+          done
+          echo "::error::nix is not installed on this runner — see runner/README.md." >&2
+          exit 1
+      # Same swap run.sh does. Its own step rather than a branch inside the single-quoted
+      # `bash -c` body below, where any `${...}` is an SC2016 finding that fails actionlint.
+      - name: Select the v5 dependency set
+        if: matrix.line == 'v5'
+        run: |
+          cp integration/Cargo.v5.toml integration/Cargo.toml
+          cp integration/Cargo.v5.lock integration/Cargo.lock
+      # 67 tests on v4, 69 on v5 — the extra two are the src/pix.rs Prometheus parser.
       - name: Unit tests
         run: |
           nix develop github:hoprnet/hoprnet --command bash -c '
             set -euo pipefail
             cd integration
-            cargo test --lib
+            cargo test --lib --all-features
           '
+  # Fan-in jobs. The matrix names each job per line, so the bare contexts the ruleset
+  # requires would never report and every queue entry would hang until its timeout.
+  lint-gate:
+    name: Format + clippy
+    needs: lint
+    if: always()
+    runs-on: depot-ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - env:
+          RESULT: ${{ needs.lint.result }}
+        run: |
+          echo "lint matrix result: ${RESULT}"
+          [ "${RESULT}" = success ] || { echo "::error::lint result is '${RESULT}'"; exit 1; }
+  unit-gate:
+    name: Unit tests
+    needs: unit
+    if: always()
+    # Hosted: must not queue behind the matrix on the self-hosted runner.
+    runs-on: depot-ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - env:
+          RESULT: ${{ needs.unit.result }}
+        run: |
+          echo "unit matrix result: ${RESULT}"
+          [ "${RESULT}" = success ] || { echo "::error::unit result is '${RESULT}'"; exit 1; }
