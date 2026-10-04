@@ -146,7 +146,9 @@ impl Histogram {
     ///
     /// Valid because the buckets are cumulative counters: the difference of two cumulative vectors
     /// is itself a cumulative vector. Bounds present only in `later` are taken whole; a bound that
-    /// vanished is dropped, matching the saturating spirit of [`ExitTelemetry::delta`].
+    /// vanished is dropped, matching the saturating spirit of [`ExitTelemetry::delta`]. The sum
+    /// saturates with the rest: a family that reset between readings must not report a negative
+    /// sum, and through it a negative [`Self::mean`].
     fn delta(&self, later: &Self) -> Self {
         Self {
             buckets: later
@@ -162,7 +164,7 @@ impl Histogram {
                     (*bound, cumulative.saturating_sub(before))
                 })
                 .collect(),
-            sum: later.sum - self.sum,
+            sum: (later.sum - self.sum).max(0.0),
             count: later.count.saturating_sub(self.count),
         }
     }
@@ -372,8 +374,10 @@ struct Sample {
 }
 
 impl Sample {
-    /// `None` collapses to zero here, and correctly: a failed scrape is never pushed as a sample,
-    /// so an absent series at this point means it has not been incremented yet.
+    /// `None` collapses to zero here, and correctly for a family that exists: a failed scrape is
+    /// never pushed as a sample, so an absent series at this point means it has not been
+    /// incremented yet. An Exit exporting no `hopr_pix_*` at all reads as zero too, which is why
+    /// the scenarios assert [`ExitTelemetry::observable`] before reading the trace.
     fn of(at: Duration, t: &ExitTelemetry) -> Self {
         Self {
             at,
@@ -799,6 +803,26 @@ hopr_pix_cycle_accepted_share_fraction_bucket{outcome=\"recovered\",le=\"+Inf\"}
         let before = parse("hopr_pix_shares_total{kind=\"surplus\"} 100\n");
         let later = parse("hopr_pix_shares_total{kind=\"surplus\"} 3\n");
         assert_eq!(Some(0), before.delta(&later).shares("surplus"));
+    }
+
+    /// The histogram half of the same guarantee. An Exit that reset and has since finalized more
+    /// cycles than before, but smaller ones, reads a higher count and a lower sum, and a delta that
+    /// saturated only the count would report a negative mean.
+    #[test]
+    fn a_histogram_delta_should_not_report_a_negative_sum() {
+        let before = parse(
+            "hopr_pix_cycle_accepted_share_fraction_count{outcome=\"recovered\"} 1\n\
+             hopr_pix_cycle_accepted_share_fraction_sum{outcome=\"recovered\"} 5\n",
+        );
+        let later = parse(
+            "hopr_pix_cycle_accepted_share_fraction_count{outcome=\"recovered\"} 2\n\
+             hopr_pix_cycle_accepted_share_fraction_sum{outcome=\"recovered\"} 2\n",
+        );
+        let d = before.delta(&later);
+        let h = d.accepted_fraction("recovered").expect("histogram");
+        assert_eq!(1, h.count());
+        assert_eq!(0.0, h.sum());
+        assert_eq!(Some(0.0), h.mean());
     }
 
     /// The other PIX family shares the endpoint and must not leak into this one.
