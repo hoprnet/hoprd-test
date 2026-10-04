@@ -345,9 +345,11 @@ const DEFAULT_TRACE_POLL: Duration = Duration::from_secs(2);
 /// short, and the first surplus share that fills the gap is counted useful instead. At the 99.9-100 %
 /// arrival these scenarios measure that is a handful per 4096.
 ///
-/// If the first full pass shows runs breaking up, raise this to a documented *ratio* of the step's
-/// surplus — `useful * 32 <= surplus`, i.e. 3 % — rather than lowering the 2048 bar the assertion
-/// exists to clear. Record in `docs/pix-traffic-shapes.md` which form the measurement justified.
+/// The first full pass held it: every shape's longest run came in at 3 903 shares or more, against
+/// a window's 4 096 (`docs/pix-traffic-shapes.md`, "The egress gate, read directly"). If a later
+/// one shows runs breaking up, raise this to a documented *ratio* of the step's surplus —
+/// `useful * 32 <= surplus`, i.e. 3 % — rather than lowering the 2048 bar the assertion exists to
+/// clear, and record there which form the measurement justified.
 const SURPLUS_RUN_USEFUL_TOLERANCE: u64 = 0;
 
 fn trace_poll() -> Duration {
