@@ -181,8 +181,8 @@ async fn assert_exit_was_paid(
 /// * Surplus shares were accepted, more than the gate tolerates without progress. Rules that out,
 ///   but not surplus arriving in scattered fragments the gate never had to serve *through*.
 /// * The longest contiguous surplus-only run clears the same bar. That is the run the emission
-///   window actually produces — upstream emits one per window, so a cycle of 1024 polynomials
-///   contains four — and it needs the trace, because a before/after pair cannot see contiguity.
+///   window actually produces — upstream emits one per window, so a cycle of 512 polynomials
+///   contains two — and it needs the trace, because a before/after pair cannot see contiguity.
 /// * A recovered cycle's accepted-share fraction sits above 1.0. Independent of the trace's
 ///   sampling entirely: the Exit itself recorded, at finalization, that it accepted more shares
 ///   than the cycle's useful target. A sampling cadence too coarse to catch the run cannot make
@@ -259,7 +259,7 @@ fn assert_the_gate_served_the_surplus(gate: &ExitTelemetry, trace: &Trace) {
     }
 
     // Logged, not asserted: hoprnet#8378 is still open, and `hopr_pix_cycle_egress_packets`'
-    // buckets (.., 65536, 262144, ..) cannot resolve this geometry's 81 920-packet quota. The
+    // buckets (.., 16384, 65536, ..) cannot resolve this geometry's 40 960-packet quota. The
     // counts are here from the start so the assertion is one line when the invariant lands.
     tracing::info!(
         egress_funded = ?gate.egress("funded"),

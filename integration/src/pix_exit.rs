@@ -328,9 +328,10 @@ pub async fn sample(node: &NodeInfo) -> anyhow::Result<ExitTelemetry> {
 /// Seconds between samples, before `HOPRD_PIX_TRACE_POLL` overrides it.
 ///
 /// Sized against the run it exists to see. A surplus-only run is
-/// `SHARE_EMISSION_WINDOW x surplus` shares — 4096 at this repo's geometry — and at the ~232
-/// packets/s a 1-hop cluster achieves that is ~18 s, so 2 s puts roughly eight samples inside it.
-/// A cycle finished by Exit fill runs slower still (~120 packets/s, ~34 s), so the tight case is
+/// `SHARE_EMISSION_WINDOW x surplus` shares — 4096 at this repo's geometry — and at the ~116
+/// packets/s a 1-hop cluster achieves against this profile's 150 offered (half the ~232 measured
+/// against the previous profile's 300) that is ~35 s, so 2 s puts well over a dozen samples inside
+/// it. A cycle finished by Exit fill runs slower still (~80 packets/s, ~51 s), so the tight case is
 /// the saturated one.
 const DEFAULT_TRACE_POLL: Duration = Duration::from_secs(2);
 
@@ -408,7 +409,7 @@ impl Trace {
     /// from "it accepted them as the uninterrupted run the emission window actually produces" —
     /// and the run is what the egress gate has to serve through without mistaking it for silence.
     /// Upstream emits one per window (`protocols/pix/src/generator.rs`: a window emits its entire
-    /// surplus before the next starts), so a cycle of 1024 polynomials contains four.
+    /// surplus before the next starts), so a cycle of 512 polynomials contains two.
     ///
     /// Strictness is [`SURPLUS_RUN_USEFUL_TOLERANCE`]'s; see there before relaxing it.
     pub fn longest_surplus_only_run(&self) -> u64 {
@@ -678,7 +679,7 @@ hopr_pix_egress_packets_total{mode=\"funded\"} 20480
 hopr_pix_egress_packets_total{mode=\"predeposit\"} 512
 hopr_pix_cycles_total{event=\"requested\"} 2
 hopr_pix_cycles_total{event=\"recovered\"} 1
-hopr_pix_live_cycle_bytes 85032960
+hopr_pix_live_cycle_bytes 132956160
 hopr_pix_cycles_active{phase=\"recovering\"} 1
 hopr_pix_cycle_accepted_share_fraction_count{outcome=\"recovered\"} 1
 hopr_pix_cycle_accepted_share_fraction_sum{outcome=\"recovered\"} 1.25
