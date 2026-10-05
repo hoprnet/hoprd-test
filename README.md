@@ -297,6 +297,11 @@ at all: the v5 job adds a `--features pix` clippy pass and runs `cargo test --li
 skipped. On v4 the `pix` feature is declared but inert — enabling it there does not compile,
 because `edgli/pix-test` does not exist on that line.
 
+`src/pix_exit.rs` sits outside that split: it names none of edgli's PIX types, so it is ungated
+and both lines' `cargo test --lib` cover it. That matters more for it than for any other reader
+here, because its subtlety is all in the parsing — cumulative histogram buckets, a numeric `le`,
+and absent-versus-zero on a label that only exists once the Exit's gate has failed.
+
 `integration.yaml` runs on `repository_dispatch[integration]` (fired by `hoprd` /
 `edge-client` on merge), on manual `workflow_dispatch`, and on a hopr-integration-tests PR
 labelled **`run-integration`** (to test changes to this repo against the live

@@ -193,6 +193,50 @@ should be corrected.**
 it is the only shape whose application traffic saturates the direction PIX bills, so it swept two
 cycles in the time the others took to sweep one. Fill has nothing to make up on it.
 
+### The egress gate, read directly
+
+The 2048 paragraph above infers that the gate never blocked from the sweeps landing on time. The
+scenarios now read it: `src/pix_exit.rs` samples the Exit's `hopr_pix_*` family every 2 s, and every
+shape asserts on it (`assert_the_gate_served_the_surplus`). Measured 2026-10-04 at the current
+profile against hoprd `dfd0fce` (hoprd#187) and hoprnet `a065fa2`, the spike in its own invocation
+and the other five sharing one cluster, as `just pix-shapes` runs them: all six pass in 63 min of
+test time (541 s + 3 261 s), 80 min wall clock including the hoprd and chain builds.
+
+| shape          | recovered | useful | surplus | longest surplus-only run | samples     | `share_lag` blocks |
+| -------------- | --------- | ------ | ------- | ------------------------ | ----------- | ------------------ |
+| geometry spike | 1         | 41 305 | 8 191   | 3 912                    | 190 / 378 s | none               |
+| browsing       | 1         | 32 774 | 8 192   | 4 058                    | 271 / 540 s | none               |
+| download       | 2         | 65 536 | 14 140  | 3 903                    | 265 / 528 s | none               |
+| mixed          | 2         | 65 536 | 14 802  | 4 248                    | 428 / 855 s | none               |
+| idle           | 1         | 39 589 | 9 689   | 3 983                    | 313 / 624 s | none               |
+| upload         | 1         | 32 768 | 5 127   | 4 009                    | 245 / 488 s | none               |
+
+`useful` and `surplus` are the scenario's before/after delta; the run and the samples are the
+trace's. Every recovered cycle also recorded an accepted-share fraction above 1.0, and not one of
+the trace's 1 712 scrapes failed.
+
+**The gate never parked on share lag, in any shape, at the ends or in between.** That is the 2048
+conclusion above measured at the gate rather than inferred from the sweeps: at this profile the free
+credit (8 192) covers the queue (2 400) more than 3x, and no shape came near the ceiling.
+
+**`SURPLUS_RUN_USEFUL_TOLERANCE` stays at zero.** Every shape produced a contiguous surplus-only run
+of 3 903 or more, against a window's 4 096 and a bar of 2048, so the 3 % fallback its comment
+describes was not needed. What is missing below 4 096 is the run's edges: a sample step that also
+carries the neighbouring useful shares is discarded whole. A run can also come out _longer_ than a
+window, as mixed's did, because upstream counts as surplus every accepted share that did not advance
+reconstruction — the negotiated surplus, duplicates, and the tail a cycle keeps receiving after it
+reached its target.
+
+**Useful shares above a cycle's 32 768 are its successor's first ones.** The spike shows it in
+isolation: alone on its cluster, it read 8 537 beyond its one cycle. That matters because the family
+is Exit-wide with no Session label, so on a shared cluster a scenario's deltas could also hold the
+previous scenario's tail. Download, mixed and upload read exact multiples of 32 768, so nothing
+leaked into those three; idle's 6 821 extra could be either, and the family cannot say which. It
+did not decide anything here, but it could: a leaked `share_lag` episode fails whichever scenario
+it lands in, and a leaked recovered cycle can satisfy the accepted-fraction check on its own. A
+shape that fails on the gate only when it runs after another should be re-run alone
+(`just pix-shapes <scenario>`) before the gate is suspected.
+
 ## Two findings that are not about PIX, and one correction
 
 **The entry closed its own channels ten minutes in, twice, for two different reasons.**
