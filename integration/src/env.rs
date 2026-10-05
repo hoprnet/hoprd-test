@@ -693,7 +693,7 @@ fn edgli_config(
         config::{HoprPacketPipelineConfig, MixerConfig, TransportConfig},
         exports::transport::{
             HoprProtocolConfig,
-            config::{SurbPopOrder, SurbStoreConfig},
+            config::{StreamProtocolConfig, SurbPopOrder, SurbStoreConfig},
         },
     };
     // Follows the Exit's build. v5 is FIFO-only since hoprnet#8473 removed LIFO: a PIX share reaches
@@ -716,6 +716,12 @@ fn edgli_config(
                 prefer_local_addresses: tuning.prefer_local,
             },
             path_planner: tuning.path_planner,
+            // Experiment: hopr-lib 61120e77 reuses this 2 s default as a write-stall timeout that evicts
+            // a peer's stream with every queued packet and ack. Raised to test it as the 1-hop regression.
+            stream: StreamProtocolConfig {
+                egress_backpressure_timeout: Duration::from_secs(30),
+                ..Default::default()
+            },
             packet: HoprPacketPipelineConfig {
                 surb_store: SurbStoreConfig {
                     pop_order,
