@@ -23,16 +23,14 @@
 //!
 //! The same argument sets the *size* of the cycle: at a fixed length, halving the parts and the
 //! rate together leaves every ratio where it was and halves the quota, which is what
-//! `validate_incoming_session_pix_config` sizes the recovery floor against. The 3246 B payload
-//! tripled that floor for an unchanged geometry, so the profile went from 1024 parts at 300
-//! packets/s to 512 at 150 rather than to a 30-minute deadline.
+//! `validate_incoming_session_pix_config` sizes its deadline floors against.
 //!
 //! # What is deliberately unlike production
 //!
-//! [`MAX_RECOVERY_TIME`] is 15 minutes rather than two hours. It is the deadline a funded cycle
+//! [`MAX_RECOVERY_TIME`] is 15 minutes rather than four hours. It is the deadline a funded cycle
 //! must recover within — and, since the Exit fills a cycle the application has left unfinished
 //! rather than letting it strand, it is also the idle tariff: a Session with no traffic completes
-//! at [`FILL_FINISH_FRACTION`] `x` it, 0.6 here against upstream's 0.75. Two hours is not a thing a
+//! at [`FILL_FINISH_FRACTION`] `x` it, 0.6 here against upstream's 0.75. Four hours is not a thing a
 //! test can wait out. Both values pass the checks `validate_incoming_session_pix_config` makes, so
 //! this is a legal configuration rather than a test-only escape hatch — see [`MAX_RECOVERY_TIME`].
 //!
@@ -47,7 +45,7 @@
 
 use std::time::Duration;
 
-use edgli::hopr_lib::exports::transport::{PACKET_PAYLOAD_SIZE, SESSION_MTU, SURB_SIZE};
+use edgli::hopr_lib::exports::transport::{SESSION_MTU, SURB_SIZE};
 
 // ── Geometry ─────────────────────────────────────────────────────────────────
 
@@ -79,12 +77,22 @@ pub const PIX_ADDITIONAL_SHARES: usize = 16;
 /// are delivered and all of them are billed.
 pub const CYCLE_PACKETS: u64 = (PIX_POLYS * (PIX_SHARES + PIX_ADDITIONAL_SHARES)) as u64;
 
+/// Bytes of quota one share is priced at, as the Exit computes it: one Session segment on v5
+/// (`PIX_QUOTA_BYTES_PER_SHARE`), the whole HOPR packet payload on v4.
+#[cfg(feature = "v5")]
+pub const QUOTA_BYTES_PER_SHARE: u64 =
+    edgli::hopr_lib::exports::transport::session::PIX_QUOTA_BYTES_PER_SHARE;
+#[cfg(not(feature = "v5"))]
+pub const QUOTA_BYTES_PER_SHARE: u64 =
+    edgli::hopr_lib::exports::transport::PACKET_PAYLOAD_SIZE as u64;
+
 /// Bytes one cycle costs the Entry — the per-SSA quota the Exit prices its deposit against.
-pub const QUOTA_PER_SSA: u64 = CYCLE_PACKETS * PACKET_PAYLOAD_SIZE as u64;
+pub const QUOTA_PER_SSA: u64 = CYCLE_PACKETS * QUOTA_BYTES_PER_SHARE;
 
 // ── Rate and the cycle it implies ────────────────────────────────────────────
 
-/// Return packets per second the shapes are sized against (~3.9 Mbps at a 3246 B payload).
+/// Return packets per second the shapes are sized against (~1.7 Mbps of Session data at full
+/// 1452 B segments).
 ///
 /// Well under the 4000 datagrams/s hoprd's own soak drives through a comparable cluster, because
 /// the subject here is a *shape* rather than a throughput ceiling: a rate that saturates the
@@ -116,14 +124,13 @@ pub const MAX_DEPOSIT_WAIT: Duration = Duration::from_secs(30);
 ///
 /// Two constraints, from opposite directions:
 ///
-/// * **Above** `quota_range_max / ASSUMED_SESSION_PACKET_RATE`, which
-///   `validate_incoming_session_pix_config` enforces at load. That rate is 1.5 Mbps in packets —
-///   57 packets/s at a 3246 B payload, 180 at the old 1038 B — deliberately the loosest useful
-///   bound, since a slower Session is the one needing the longest deadline. At [`QUOTA_RANGE_MAX`]
-///   the floor is 843 s.
+/// * **Above the floor** `validate_incoming_session_pix_config` enforces at load. With fill on, the
+///   default here, that is [`FILL_MAX_RATE`] finishing a cycle of [`QUOTA_RANGE_MAX`] by the aim
+///   point; with fill off, a cycle at upstream's `MAX_ASSUMED_SESSION_PACKET_RATE` (5000
+///   packets/s), which at [`QUOTA_RANGE_MAX`] is 10 s.
 /// * **Small enough to wait out.** A Session with no application traffic completes its cycle on
 ///   Exit fill at [`FILL_FINISH_FRACTION`] `x` this, so it sets what an idle scenario spends.
-///   Production's two hours would make that scenario a 90-minute one.
+///   Production's four hours would make that scenario a three-hour one.
 ///
 /// Fifteen minutes clears the floor. The aim point is placed by the fraction rather than by this.
 pub const MAX_RECOVERY_TIME: Duration = Duration::from_secs(900);
@@ -131,10 +138,9 @@ pub const MAX_RECOVERY_TIME: Duration = Duration::from_secs(900);
 /// Fraction of [`MAX_RECOVERY_TIME`] at which Exit fill aims to have the cycle finished.
 ///
 /// 0.6 against upstream's 0.75, which puts the aim point at 540 s, the nine minutes the idle,
-/// browsing and upload scenarios have always waited. [`MAX_RECOVERY_TIME`] cannot go back to the
-/// twelve minutes that produced that at 0.75, because it has to clear the load-time floor; the
-/// fraction is what an operator can move instead (hoprd's `fill_finish_fraction`). The cost is a
-/// higher fill rate, which [`FILL_MAX_RATE`] clears with room to spare.
+/// browsing and upload scenarios have always waited. The fraction is what an operator moves for
+/// that (hoprd's `fill_finish_fraction`); the cost is a higher fill rate, which [`FILL_MAX_RATE`]
+/// clears with room to spare.
 pub const FILL_FINISH_FRACTION: f64 = 0.6;
 
 /// Ceiling on the Exit's self-generated fill traffic, packets/s.
@@ -148,9 +154,9 @@ pub const FILL_MAX_RATE: u32 = 250;
 
 /// Lower bound of the quota window the Exit accepts.
 ///
-/// Counted in packets, like [`QUOTA_PER_SSA`], so the window moves with the payload size rather
-/// than a payload change putting the quota outside it.
-pub const QUOTA_RANGE_MIN: u64 = 29_000 * PACKET_PAYLOAD_SIZE as u64;
+/// Counted in shares, like [`QUOTA_PER_SSA`], so the window moves with the bytes a share is priced
+/// at rather than a change to them putting the quota outside it.
+pub const QUOTA_RANGE_MIN: u64 = 29_000 * QUOTA_BYTES_PER_SHARE;
 
 /// Upper bound of the quota window the Exit accepts.
 ///
@@ -158,7 +164,7 @@ pub const QUOTA_RANGE_MIN: u64 = 29_000 * PACKET_PAYLOAD_SIZE as u64;
 /// move the window — the Exit refuses a Session whose offered quota falls outside it. It is also
 /// what both remaining validator floors are computed against, so widening it further tightens
 /// [`MAX_RECOVERY_TIME`] and [`FILL_MAX_RATE`].
-pub const QUOTA_RANGE_MAX: u64 = 48_000 * PACKET_PAYLOAD_SIZE as u64;
+pub const QUOTA_RANGE_MAX: u64 = 48_000 * QUOTA_BYTES_PER_SHARE;
 
 // ── Session sizing (Entry side) ──────────────────────────────────────────────
 
@@ -207,17 +213,21 @@ const _: () = assert!(
     "SURB buffer is too deep relative to a cycle"
 );
 
-/// Upstream's `ASSUMED_SESSION_PACKET_RATE`, which hopr-lib does not re-export: 1.5 Mbps in packets.
-/// Derived rather than written out, because it moves with the payload size — a literal 180 here
-/// let a profile that hoprd refuses at load pass every unit test.
-const ASSUMED_SESSION_PACKET_RATE: u64 = 1_500_000 / 8 / PACKET_PAYLOAD_SIZE as u64;
+/// The Session packet rate upstream's deadline floor is measured at: `MAX_ASSUMED_SESSION_PACKET_RATE`
+/// on v5, read from hopr-lib so the two cannot drift; on v4, its predecessor, 1.5 Mbps in packets.
+#[cfg(feature = "v5")]
+const DEADLINE_FLOOR_RATE: u64 =
+    edgli::hopr_lib::exports::transport::session::MAX_ASSUMED_SESSION_PACKET_RATE;
+#[cfg(not(feature = "v5"))]
+const DEADLINE_FLOOR_RATE: u64 = 1_500_000 / 8 / QUOTA_BYTES_PER_SHARE;
 
-/// The recovery deadline must clear a whole cycle at the widest accepted quota, measured at
-/// [`ASSUMED_SESSION_PACKET_RATE`]. `validate_incoming_session_pix_config` refuses the configuration
-/// otherwise, at load, before any Session is opened.
+/// With fill off, the recovery deadline must clear a whole cycle at the widest accepted quota,
+/// measured at [`DEADLINE_FLOOR_RATE`]. `validate_incoming_session_pix_config` refuses the
+/// configuration otherwise, at load, before any Session is opened. With fill on it judges the
+/// deadline at [`FILL_MAX_RATE`] instead, which `the_fill_ceiling_clears_an_idle_cycle` checks.
 const _: () = assert!(
     MAX_RECOVERY_TIME.as_secs()
-        >= (QUOTA_RANGE_MAX / PACKET_PAYLOAD_SIZE as u64).div_ceil(ASSUMED_SESSION_PACKET_RATE),
+        >= (QUOTA_RANGE_MAX / QUOTA_BYTES_PER_SHARE).div_ceil(DEADLINE_FLOOR_RATE),
     "max_recovery_time cannot cover a cycle at the widest accepted quota"
 );
 
@@ -332,7 +342,7 @@ safe_deposit_float: \"{float:.4} wxHOPR\"
 /// wxHOPR per byte of quota, on both sides: what the Exit requires and the Entry pays.
 ///
 /// Two orders of magnitude below the deployed 5.33e-8, because the cluster funds each node's Safe
-/// from a fixed pot and a run here has to afford [`BUDGETED_CYCLES`] cycles of a ~133 MB quota out
+/// from a fixed pot and a run here has to afford [`BUDGETED_CYCLES`] cycles of a ~60 MB quota out
 /// of it. Nothing in the protocol reads the absolute figure — it is the *product* with the quota
 /// that both sides check — so a scaled price measures the same exchange.
 pub const PRICE_PER_BYTE_WXHOPR: f64 = 1e-9;
@@ -457,11 +467,11 @@ mod tests {
     #[test]
     fn the_profile_arithmetic_holds() {
         assert_eq!(40_960, CYCLE_PACKETS);
-        // The payload is 1038 B on the v4 line and 3246 B on v5.
+        // A share is priced at the 1038 B payload on the v4 line and the 1452 B Session MTU on v5.
         #[cfg(not(feature = "v5"))]
         assert_eq!(42_516_480, QUOTA_PER_SSA);
         #[cfg(feature = "v5")]
-        assert_eq!(132_956_160, QUOTA_PER_SSA);
+        assert_eq!(59_473_920, QUOTA_PER_SSA);
         assert_eq!(273, NOMINAL_CYCLE_SECS);
         assert_eq!(2_400, DEFAULT_SURB_BUFFER);
         assert_eq!(8_192, FREE_CREDIT);
@@ -488,10 +498,11 @@ mod tests {
             "an idle cycle needs {needed:.0} packets/s against a ceiling of {FILL_MAX_RATE}"
         );
 
-        // And the same at the widest quota the Exit admits, which is what the validator checks.
-        let widest = (QUOTA_RANGE_MAX / PACKET_PAYLOAD_SIZE as u64) as f64 * 1.05 / aim_point;
+        // And the same at the widest quota the Exit admits, which is what the validator checks — with
+        // the ceiling counted only up to the fastest rate a Session is assumed to carry.
+        let widest = (QUOTA_RANGE_MAX / QUOTA_BYTES_PER_SHARE) as f64 * 1.05 / aim_point;
         assert!(
-            widest <= FILL_MAX_RATE as f64,
+            widest <= u64::from(FILL_MAX_RATE).min(DEADLINE_FLOOR_RATE) as f64,
             "the widest accepted quota needs {widest:.0} packets/s against {FILL_MAX_RATE}; \
              validate_incoming_session_pix_config would refuse this config at load"
         );
