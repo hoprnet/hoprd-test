@@ -86,6 +86,13 @@ const EGRESS_PACKETS: &str = "hopr_pix_egress_packets_total";
 /// `failed`, `retired`.
 const CYCLES: &str = "hopr_pix_cycles_total";
 
+/// PIX Sessions the Exit currently supervises, by `gate_mode`: `predeposit` or `funded`.
+///
+/// The one series here that is not about the Session under test, and that is its use. Every other
+/// series in this family is Exit-wide with no Session label, so a reading is only the scenario's
+/// own while this census says the scenario's Session is the only one there.
+const SESSIONS_ACTIVE: &str = "hopr_pix_sessions_active";
+
 /// Packets served while one cycle held the accounting front, observed once at finalization.
 const CYCLE_EGRESS: &str = "hopr_pix_cycle_egress_packets";
 
@@ -247,6 +254,22 @@ impl ExitTelemetry {
         self.histogram(ACCEPTED_FRACTION, "outcome", outcome)
     }
 
+    /// PIX Sessions the Exit supervises right now, summed over every `gate_mode`.
+    ///
+    /// A census, so it is read as it stands, never differenced — see [`Self::delta`]. `None` when
+    /// the Exit has never supervised a PIX Session, which is also how an Exit exporting no
+    /// aggregates at all reads.
+    pub fn sessions_active(&self) -> Option<u64> {
+        let labelled = format!("{SESSIONS_ACTIVE}{{");
+        let mut series = self
+            .gauges
+            .iter()
+            .filter(|(key, _)| key.as_str() == SESSIONS_ACTIVE || key.starts_with(&labelled))
+            .peekable();
+        series.peek()?;
+        Some(series.map(|(_, v)| v.max(0.0).round() as u64).sum())
+    }
+
     /// Whether any `hopr_pix_*` series exists at all.
     ///
     /// `false` means the Exit exports no PIX aggregates — built without
@@ -346,11 +369,20 @@ const DEFAULT_TRACE_POLL: Duration = Duration::from_secs(2);
 /// arrival these scenarios measure that is a handful per 4096.
 ///
 /// The first full pass held it: every shape's longest run came in at 3 903 shares or more, against
-/// a window's 4 096 (`docs/pix-traffic-shapes.md`, "The egress gate, read directly"). If a later
-/// one shows runs breaking up, raise this to a documented *ratio* of the step's surplus —
+/// a window's 4 096 (`docs/pix-traffic-shapes.md`, "The egress gate, read directly").
+///
+/// Runs did break up on CI afterwards — download at 1 803 and 1 804, upload at 959 and 1 119 — and
+/// it was not this. The useful shares inside the surplus windows were another Session's: the
+/// previous scenario's, left supervised on the same Exit, revealing one useful share per 15 s
+/// keep-alive. A ratio would have passed those runs for the wrong reason, so this stays zero and
+/// such steps are excluded by [`Sample::sessions_active`] instead. If runs break up again *without*
+/// a foreign Session in the trace, raise this to a documented ratio of the step's surplus —
 /// `useful * 32 <= surplus`, i.e. 3 % — rather than lowering the 2048 bar the assertion exists to
 /// clear, and record there which form the measurement justified.
 const SURPLUS_RUN_USEFUL_TOLERANCE: u64 = 0;
+
+/// Segments [`Trace::profile`] prints before it summarises the rest.
+const PROFILE_SEGMENTS: usize = 64;
 
 fn trace_poll() -> Duration {
     std::env::var("HOPRD_PIX_TRACE_POLL")
@@ -373,6 +405,12 @@ struct Sample {
     share_lag_blocks: u64,
     egress_funded: u64,
     egress_predeposit: u64,
+    /// PIX Sessions the Exit supervised at this tick, the scenario's own included.
+    ///
+    /// What makes the counters above the scenario's at all. They carry no Session label, so while
+    /// this reads more than one, part of every delta may belong to a Session the scenario never
+    /// opened — and a step that saw one is not attributable to this scenario.
+    sessions_active: u64,
 }
 
 impl Sample {
@@ -388,7 +426,43 @@ impl Sample {
             share_lag_blocks: t.gate_blocks("share_lag").unwrap_or(0),
             egress_funded: t.egress("funded").unwrap_or(0),
             egress_predeposit: t.egress("predeposit").unwrap_or(0),
+            sessions_active: t.sessions_active().unwrap_or(0),
         }
+    }
+}
+
+/// What one step between two samples saw, as [`Trace::profile`] classes it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StepKind {
+    Useful,
+    Surplus,
+    Mixed,
+    Quiet,
+}
+
+/// Consecutive steps of one kind, merged for [`Trace::profile`].
+#[derive(Debug, Clone, Copy)]
+struct Segment {
+    kind: StepKind,
+    foreign: bool,
+    useful: u64,
+    surplus: u64,
+    span: Duration,
+}
+
+impl std::fmt::Display for Segment {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let secs = self.span.as_secs();
+        match self.kind {
+            StepKind::Useful => write!(f, "U{}/{secs}s", self.useful)?,
+            StepKind::Surplus => write!(f, "S{}/{secs}s", self.surplus)?,
+            StepKind::Mixed => write!(f, "M{}+{}/{secs}s", self.useful, self.surplus)?,
+            StepKind::Quiet => write!(f, ".{secs}s")?,
+        }
+        if self.foreign {
+            f.write_str("*")?;
+        }
+        Ok(())
     }
 }
 
@@ -418,6 +492,12 @@ impl Trace {
     /// surplus before the next starts), so a cycle of 512 polynomials contains two.
     ///
     /// Strictness is [`SURPLUS_RUN_USEFUL_TOLERANCE`]'s; see there before relaxing it.
+    ///
+    /// A step during which the Exit supervised another Session ends the run as a useful share
+    /// does, because none of its shares can be attributed: the trickle that split the CI runs came
+    /// from exactly such a Session. So a foreign Session can make the run come out *short* — which
+    /// [`Self::foreign_steps`] lets the caller recognise as unmeasured rather than failed — but never
+    /// long.
     pub fn longest_surplus_only_run(&self) -> u64 {
         let mut longest = 0;
         let mut current = 0;
@@ -425,7 +505,7 @@ impl Trace {
             let (before, after) = (pair[0], pair[1]);
             let useful = after.useful.saturating_sub(before.useful);
             let surplus = after.surplus.saturating_sub(before.surplus);
-            if useful > SURPLUS_RUN_USEFUL_TOLERANCE {
+            if useful > SURPLUS_RUN_USEFUL_TOLERANCE || Self::foreign(before, after) {
                 current = 0;
                 continue;
             }
@@ -433,6 +513,75 @@ impl Trace {
             longest = longest.max(current);
         }
         longest
+    }
+
+    /// Steps during which the Exit supervised a Session other than the scenario's own.
+    ///
+    /// Zero is what makes every Exit-wide reading here the scenario's. Anything else means another
+    /// Session — in practice a previous scenario's, which the cluster outlives — contributed to the
+    /// counters for that long, and the run above was measured only between those steps.
+    pub fn foreign_steps(&self) -> usize {
+        self.samples
+            .windows(2)
+            .filter(|p| Self::foreign(p[0], p[1]))
+            .count()
+    }
+
+    /// Steps in the trace, i.e. sample pairs.
+    pub fn steps(&self) -> usize {
+        self.samples.len().saturating_sub(1)
+    }
+
+    /// The scenario's own Session is one; any more at either end of a step is someone else's.
+    fn foreign(before: Sample, after: Sample) -> bool {
+        before.sessions_active.max(after.sessions_active) > 1
+    }
+
+    /// The trace as runs of like steps, for a log line a failure can be read from.
+    ///
+    /// Each step is classed by which share kinds moved — `U` useful only, `S` surplus only, `M`
+    /// both, `.` neither — and consecutive steps of one class merge, with their shares and how long
+    /// they lasted: `U16384/138s S4012/34s U16384/140s …`. A `*` marks a segment the Exit spent
+    /// supervising a foreign Session as well. A window's emission reads as alternating `U` and `S`
+    /// blocks; the failure this was added for read as `S` blocks cut every 15 s by `M1+…*` steps.
+    pub fn profile(&self) -> String {
+        let mut segments: Vec<Segment> = Vec::new();
+        for pair in self.samples.windows(2) {
+            let (before, after) = (pair[0], pair[1]);
+            let useful = after.useful.saturating_sub(before.useful);
+            let surplus = after.surplus.saturating_sub(before.surplus);
+            let kind = match (useful > 0, surplus > 0) {
+                (true, false) => StepKind::Useful,
+                (false, true) => StepKind::Surplus,
+                (true, true) => StepKind::Mixed,
+                (false, false) => StepKind::Quiet,
+            };
+            let foreign = Self::foreign(before, after);
+            let span = after.at.saturating_sub(before.at);
+            match segments.last_mut() {
+                Some(last) if last.kind == kind && last.foreign == foreign => {
+                    last.useful += useful;
+                    last.surplus += surplus;
+                    last.span += span;
+                }
+                _ => segments.push(Segment {
+                    kind,
+                    foreign,
+                    useful,
+                    surplus,
+                    span,
+                }),
+            }
+        }
+        let mut out: Vec<String> = segments
+            .iter()
+            .take(PROFILE_SEGMENTS)
+            .map(Segment::to_string)
+            .collect();
+        if segments.len() > PROFILE_SEGMENTS {
+            out.push(format!("… +{} segments", segments.len() - PROFILE_SEGMENTS));
+        }
+        out.join(" ")
     }
 
     /// Whether the gate's `share_lag` counter moved at any point, which a before/after pair would
@@ -450,7 +599,7 @@ impl Trace {
         };
         format!(
             "samples={} over {}s useful=+{} surplus=+{} longest_surplus_run={} \
-             egress=+{}/funded +{}/predeposit share_lag_episodes=+{}",
+             egress=+{}/funded +{}/predeposit share_lag_episodes=+{} foreign_session_steps={}/{}",
             self.samples.len(),
             last.at.saturating_sub(first.at).as_secs(),
             last.useful.saturating_sub(first.useful),
@@ -460,6 +609,8 @@ impl Trace {
             last.egress_predeposit
                 .saturating_sub(first.egress_predeposit),
             last.share_lag_blocks.saturating_sub(first.share_lag_blocks),
+            self.foreign_steps(),
+            self.steps(),
         )
     }
 }
@@ -507,14 +658,45 @@ impl Sampler {
     ///
     /// Returns an empty trace rather than erroring if the task was cancelled or panicked: a trace
     /// is diagnostic, and the assertion that reads it is what names the consequence.
+    ///
+    /// Logged here, from the library, because CI's `RUST_LOG` admits `hoprd_integration_test` at
+    /// `info` and nothing else: a line from the test binary itself is filtered, so a *passing* run
+    /// used to leave no record of how long its run was, and a failing one no record of its shape.
     pub async fn finish(self) -> Trace {
         self.stop.store(true, std::sync::atomic::Ordering::Relaxed);
-        match self.handle.await {
+        let trace = match self.handle.await {
             Ok(trace) => trace,
             Err(error) => {
                 tracing::warn!(%error, "the PIX telemetry sampler did not finish cleanly");
                 Trace::default()
             }
+        };
+        tracing::info!(
+            summary = %trace.summary(),
+            profile = %trace.profile(),
+            "the Exit's PIX telemetry over the scenario"
+        );
+        trace
+    }
+}
+
+/// Wait until the Exit supervises at most `at_most` PIX Sessions, or `budget` runs out.
+///
+/// Returns the last census either way, so the caller can tell a release from a timeout; `None` when
+/// the Exit exports no census to wait on.
+pub async fn await_sessions_at_most(
+    exit: &NodeInfo,
+    at_most: u64,
+    budget: Duration,
+) -> anyhow::Result<Option<u64>> {
+    let deadline = tokio::time::Instant::now() + budget;
+    loop {
+        let active = sample(exit).await?.sessions_active();
+        match active {
+            Some(n) if n > at_most && tokio::time::Instant::now() < deadline => {
+                tokio::time::sleep(Duration::from_millis(500)).await
+            }
+            _ => return Ok(active),
         }
     }
 }
@@ -849,7 +1031,8 @@ hopr_pix_cycle_accepted_share_fraction_bucket{outcome=\"recovered\",le=\"+Inf\"}
 
     // ── The run detector ─────────────────────────────────────────────────────
 
-    /// A trace from `(useful, surplus)` cumulative readings, one per tick.
+    /// A trace from `(useful, surplus)` cumulative readings, one per tick, with the scenario's
+    /// own Session the only one on the Exit.
     fn trace_of(readings: &[(u64, u64)]) -> Trace {
         Trace {
             samples: readings
@@ -862,6 +1045,7 @@ hopr_pix_cycle_accepted_share_fraction_bucket{outcome=\"recovered\",le=\"+Inf\"}
                     share_lag_blocks: 0,
                     egress_funded: 0,
                     egress_predeposit: 0,
+                    sessions_active: 1,
                 })
                 .collect(),
         }
@@ -932,5 +1116,76 @@ hopr_pix_cycle_accepted_share_fraction_bucket{outcome=\"recovered\",le=\"+Inf\"}
         t.samples[2].share_lag_blocks = 1;
         assert!(t.saw_share_lag_block());
         assert!(!trace_of(&[(0, 0), (0, 2_048)]).saw_share_lag_block());
+    }
+
+    // ── Foreign Sessions ─────────────────────────────────────────────────────
+
+    /// The census sums every gate mode, and an Exit that never supervised a Session has no series
+    /// at all — which is not the same as one whose Sessions have all closed.
+    #[test]
+    fn the_session_census_should_sum_its_gate_modes() {
+        let t = parse(
+            "hopr_pix_sessions_active{gate_mode=\"funded\"} 1\n\
+             hopr_pix_sessions_active{gate_mode=\"predeposit\"} 1\n",
+        );
+        assert_eq!(Some(2), t.sessions_active());
+        assert_eq!(None, parse(EXPOSITION).sessions_active());
+        assert_eq!(
+            Some(0),
+            parse("hopr_pix_sessions_active{gate_mode=\"funded\"} 0\n").sessions_active(),
+            "a closed Session leaves its label behind at zero"
+        );
+    }
+
+    /// What split the CI runs: a previous scenario's Session, still supervised on the same Exit,
+    /// revealing one useful share per keep-alive inside this scenario's surplus window. Its steps
+    /// end the run as a useful share does, and are counted, so that the caller can tell a run that
+    /// came out short from one nobody could measure.
+    #[test]
+    fn a_foreign_session_should_end_the_run_and_be_counted() {
+        let mut t = trace_of(&[
+            (16_384, 0),
+            (16_384, 1_800),
+            (16_385, 2_040), // the foreign Session's keep-alive
+            (16_385, 4_096),
+        ]);
+        for s in &mut t.samples {
+            s.sessions_active = 2;
+        }
+        assert_eq!(0, t.longest_surplus_only_run(), "nothing is attributable");
+        assert_eq!((3, 3), (t.foreign_steps(), t.steps()));
+
+        // The foreign Session gone from the third sample on: only the step the Exit spent on this
+        // scenario alone counts.
+        t.samples[2].sessions_active = 1;
+        t.samples[3].sessions_active = 1;
+        assert_eq!(2_056, t.longest_surplus_only_run());
+        assert_eq!(2, t.foreign_steps());
+    }
+
+    /// The profile a failure is read from: like steps merged, foreign ones marked.
+    #[test]
+    fn the_profile_should_merge_like_steps_and_mark_foreign_ones() {
+        let mut t = trace_of(&[
+            (0, 0),
+            (8_000, 0),
+            (16_384, 0),
+            (16_384, 1_800),
+            (16_385, 2_040),
+            (16_385, 4_096),
+            (16_385, 4_096),
+        ]);
+        t.samples[4].sessions_active = 2;
+        assert_eq!("U16384/4s S1800/2s M1+240/2s* S2056/2s* .2s", t.profile());
+    }
+
+    /// A long trace of short segments is cut, and says by how much.
+    #[test]
+    fn a_long_profile_should_be_cut_visibly() {
+        let readings: Vec<(u64, u64)> = (0..=PROFILE_SEGMENTS as u64 + 6)
+            .map(|i| (i.div_ceil(2), i / 2))
+            .collect();
+        let profile = trace_of(&readings).profile();
+        assert!(profile.ends_with("… +6 segments"), "{profile}");
     }
 }

@@ -61,11 +61,11 @@ pub const PIX_ADDITIONAL_SHARES: usize = 2;
 
 /// Charged per byte of the agreed quota. One deposit is `PRICE_PER_BYTE × quota_per_ssa`.
 ///
-/// With the dimensions above the quota is `8 × (2 + 2) × 3246` ≈ 103.9 kB, so a deposit is
-/// ~3.32 wxHOPR: unambiguous in a balance delta, well under [`MAX_SSA_ALLOCATION`]. Scaled with
-/// the packet payload (1038 → 3246 B), as hoprd's localcluster did; at the old 0.0001 a deposit
-/// would be ~10.39 wxHOPR, above the ceiling, and the strategy would refuse every one.
-pub const PRICE_PER_BYTE: &str = "0.000032 wxHOPR";
+/// With the dimensions above the quota is `8 × (2 + 2) × 1452` ≈ 46.5 kB, so a deposit is
+/// ~3.32 wxHOPR: unambiguous in a balance delta, well under [`MAX_SSA_ALLOCATION`]. Rescaled with
+/// hoprd's localcluster whenever the bytes a share is priced at change (1038 B, then the 3246 B
+/// HOPR payload, now the 1452 B Session MTU), so the price per packet and the deposit stay put.
+pub const PRICE_PER_BYTE: &str = "0.0000715 wxHOPR";
 
 /// Ceiling on a single deposit. Must exceed `PRICE_PER_BYTE × quota` or the strategy refuses to
 /// deposit at all and the Exit closes the Session on its deposit deadline.

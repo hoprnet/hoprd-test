@@ -48,11 +48,13 @@ whether it builds at `master`'s tip.
 ```
 parts 512 x (threshold 64 + surplus 16)    E     = 40 960 packets/cycle
 R     = 150 packets/s  (~3.9 Mbps)         cycle = 273 s nominal
-quota = 40 960 x 3246                            = 132 956 160 B (126.8 MiB)
+quota = 40 960 x 1452                            = 59 473 920 B (56.7 MiB)
 ```
 
-Until the 3246 B payload this was 1024 parts at 300 packets/s. Halving both keeps the cycle length,
-so every ratio below is unchanged, and halves the quota that the recovery floor is computed from.
+A share is priced at one Session segment (`PIX_QUOTA_BYTES_PER_SHARE`, 1452 B) since hoprnet#8478,
+not at the 3246 B packet payload, which made the same cycle 132 956 160 B. Until the 3246 B payload
+this was 1024 parts at 300 packets/s. Halving both kept the cycle length, so every ratio below is
+unchanged, and halved the quota the recovery floor was then computed from.
 
 **Not the deployed geometry, and deliberately so.** What governs PIX is ratios, not rates: the
 client's SURB buffer is `16 x R` and a cycle is `cycle_seconds x R`, so `buffer / E = 16 /
@@ -74,11 +76,15 @@ at a rate a 1-hop local cluster carries comfortably. The deployed 4608 x 80 at 1
 `max_recovery_time` and `fill.finish_fraction` are the deliberate departures. The deadline is no
 longer only a backstop: since the Exit fills a cycle the application left unfinished, it is also
 the idle tariff, and an idle scenario spends `finish_fraction x` it. Two hours is not a thing a
-test can wait out. 15 min clears the floor `validate_incoming_session_pix_config` enforces
-(`quota_range_max / 57 packets/s` = 843 s at the 3246 B payload, 1.5 Mbps in packets; see
-hoprnet#8469), and 0.6 puts the aim point at 540 s, what the idle, browsing and upload shapes have
-always waited. Both are legal configuration rather than a test-only escape hatch; the fraction is
-hoprd's `fill_finish_fraction`, exposed for this in hoprd#187.
+test can wait out. 15 min clears what `validate_incoming_session_pix_config` enforces since
+hoprnet#8478. With fill on, `fill.max_rate`, counted up to `MAX_ASSUMED_SESSION_PACKET_RATE` (5000
+packets/s), must finish a cycle of the widest accepted quota by the aim point: 48 000 x 1.05 / 540 s
+= 94 packets/s against 250. With fill off, the deadline must cover that cycle at 5000 packets/s,
+which is 10 s. The floor used to be `quota_range_max / 57 packets/s`, 843 s at the 3246 B payload
+(1.5 Mbps in packets, hoprnet#8469), and that is what moved the deadline to 15 min. 0.6 puts the
+aim point at 540 s, what the idle, browsing and upload shapes have always waited. Both are legal
+configuration rather than a test-only escape hatch; the fraction is hoprd's `fill_finish_fraction`,
+exposed for this in hoprd#187.
 
 ## Results
 
@@ -233,9 +239,33 @@ is Exit-wide with no Session label, so on a shared cluster a scenario's deltas c
 previous scenario's tail. Download, mixed and upload read exact multiples of 32 768, so nothing
 leaked into those three; idle's 6 821 extra could be either, and the family cannot say which. It
 did not decide anything here, but it could: a leaked `share_lag` episode fails whichever scenario
-it lands in, and a leaked recovered cycle can satisfy the accepted-fraction check on its own. A
-shape that fails on the gate only when it runs after another should be re-run alone
-(`just pix-shapes <scenario>`) before the gate is suspected.
+it lands in, and a leaked recovered cycle can satisfy the accepted-fraction check on its own.
+
+**On CI it did decide something, and it was not a tail.** A scenario that returns drops its Session
+without closing it. The Entry is gone, but the Exit keeps supervising the funded successor cycle
+until `max_recovery_time`, 15 min here. First it spends the SURBs it still holds, ~1 900 useful
+shares at fill rate. Then every SURB-level keep-alive, one per 15 s, spends one more, and the first
+relayer still reveals its share. The cycle is still recovering, so each of those shares is useful.
+One useful share every 15 s inside a surplus window caps the zero-tolerance run at ~15 s of
+traffic. That failed the run assertion four times on 2026-10-05/06: download at 1 803 and 1 804
+after browsing, upload at 959 and 1 119 after idle. Each time the shape had drawn the Exit its
+predecessor had just used, which with two candidate Exits is a coin toss, and every shape that drew
+a different one passed. Reproduced locally on the same pairing, upload at 1 134: the Exit's
+`hopr_pix_sessions_active` read 2 throughout, and inside upload's surplus window its useful counter
+moved by exactly one every 14-15 s.
+
+Two changes followed. Each scenario now closes its Session once its assertions pass:
+`close_session` shuts the write half, which sends the terminating segment, and waits for the Exit's
+census to drop. And the trace records that census at every sample. A step during which the Exit
+supervised another Session does not count toward the run, so a foreign Session can make the run
+come out short but never long. A short run with foreign steps in it is reported as unmeasured
+instead of failed, because the leftover means an earlier scenario failed before it could close, and
+that failure is already the one to read. `Sampler::finish` logs each trace's summary and a profile
+of its `U`/`S` blocks from the library, so CI's narrow `RUST_LOG` keeps them for passing runs too.
+
+A full pass with both changes, against hoprd `cfe24dd` and hoprnet `43125d2` (2026-10-06): all six
+green, every Session released within a second of its close, and no foreign step in any trace, with
+mixed and idle both drawing the Exit browsing had just released. The longest runs were 3 635-4 009.
 
 ## Two findings that are not about PIX, and one correction
 
