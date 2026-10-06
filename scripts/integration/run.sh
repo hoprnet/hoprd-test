@@ -27,7 +27,6 @@ CRATE_LOCK="${REPO_ROOT}/integration/Cargo.lock"
 # alias at all — only an x86_64-linux one. So suffix nothing by default; NIX_SYSTEM_SUFFIX is a
 # cross-build override (CI sets it to keep building the musl outputs), not a default.
 SUFFIX="${NIX_SYSTEM_SUFFIX:+-${NIX_SYSTEM_SUFFIX}}"
-SYSTEM="${NIX_SYSTEM_SUFFIX:-$(nix eval --raw --impure --expr builtins.currentSystem)}"
 
 LINE="${LINE:-v4}"
 
@@ -277,23 +276,6 @@ echo "building blokli chain from ${BLOKLI_REF} ..."
 nix_build "bloklid + deployer" -L --refresh "github:hoprnet/blokli/${BLOKLI_REF}#bloklid" --out-link "${REPO_ROOT}/result-bloklid"
 nix_build "anvil (foundry)" -L "nixpkgs#foundry" --out-link "${REPO_ROOT}/result-foundry"
 
-# ── The PIX exit binary (v5 only) ──
-# The deposit pool is a build-time choice: a plain hoprd bootstraps fine and then never
-# deposits. Built up front so a missing output fails in a minute, not after forty.
-# x86_64-linux only — the flake exposes no other arch, so darwin goes via `just pix`.
-PIX_SUITE=0
-if [ "${LINE}" = "v5" ]; then
-  if [ "${SYSTEM}" = "x86_64-linux" ]; then
-    nix_build "hoprd (PIX pool)" -L "github:hoprnet/hoprd/${HOPRD_REF}#binary-hoprd-pix-test-${SYSTEM}" \
-      --out-link "${REPO_ROOT}/result-hoprd-pix"
-    PIX_BIN="${REPO_ROOT}/result-hoprd-pix/bin/hoprd"
-    pix_check_hoprd "${PIX_BIN}" || exit 1
-    PIX_SUITE=1
-  else
-    echo "skipping the PIX suite: no binary-hoprd-pix-test output for ${SYSTEM} (use \`just pix\`)"
-  fi
-fi
-
 # ── Pin edgli to the resolved sha, and hopr-lib to whatever that edgli pins ──
 echo "pinning edgli to ${EDGLI_SHA} ..."
 # Read through `gh api` for the reason resolve_sha gives: git-over-https is unusable in the dev
@@ -415,34 +397,7 @@ run_suite() { # target, then any scenarios to HOLD OUT of it
 }
 
 echo "running integration tests (binary chain) ..."
-run_suite integration
+# EXPERIMENT BRANCH — do not merge. Only the whole `return_path` suite, on both lines.
 run_suite return_path
-run_suite exit_origination
-# Gated: `upload_survival` reproduces the sustained-upload return-path collapse and therefore FAILS
-# against release/4.0 until the reply-opener LRU fix (hoprnet#8417) lands there. Wiring it in now
-# would turn the nightly red every run. Enable once that fix is in release/4.0 — at which point the
-# test flips to passing and becomes a genuine regression guard.
-
-# Entry-side PIX: v5 only (`edgli/pix-test` has no v4 counterpart).
-if [ "${PIX_SUITE}" = "1" ]; then
-  export HOPRD_BIN="${PIX_BIN}"
-  run_suite pix
-
-  # `pix_shapes` additionally needs a localcluster that takes `--pix-config`: the bare
-  # `--enable-pix` is a 32-packet demo cycle that no traffic shape fits inside. Probed on the
-  # binary, the same way the deposit pool is, rather than assumed from the ref.
-  if pix_check_localcluster "${REPO_ROOT}/result-localcluster/bin/hoprd-localcluster" 2>/dev/null; then
-    # The geometry spike gets its own run, because a cluster serves one binary invocation and
-    # libtest orders the rest alphabetically: if the geometry cannot complete one cycle, no
-    # shape after it can be read.
-    spike=the_profile_geometry_completes_a_cycle
-    SCENARIOS="${spike}" run_suite pix_shapes
-    run_suite pix_shapes "${spike}"
-  else
-    echo "::error::the hoprd-localcluster built from '${HOPRD_REF}' has no --pix-config, so the" >&2
-    echo "pix_shapes suite cannot state its geometry. Use a newer hoprd ref." >&2
-    suite_rc=1
-  fi
-fi
 
 exit "${suite_rc}"
