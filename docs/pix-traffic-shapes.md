@@ -233,9 +233,33 @@ is Exit-wide with no Session label, so on a shared cluster a scenario's deltas c
 previous scenario's tail. Download, mixed and upload read exact multiples of 32 768, so nothing
 leaked into those three; idle's 6 821 extra could be either, and the family cannot say which. It
 did not decide anything here, but it could: a leaked `share_lag` episode fails whichever scenario
-it lands in, and a leaked recovered cycle can satisfy the accepted-fraction check on its own. A
-shape that fails on the gate only when it runs after another should be re-run alone
-(`just pix-shapes <scenario>`) before the gate is suspected.
+it lands in, and a leaked recovered cycle can satisfy the accepted-fraction check on its own.
+
+**On CI it did decide something, and it was not a tail.** A scenario that returns drops its Session
+without closing it. The Entry is gone, but the Exit keeps supervising the funded successor cycle
+until `max_recovery_time`, 15 min here. First it spends the SURBs it still holds, ~1 900 useful
+shares at fill rate. Then every SURB-level keep-alive, one per 15 s, spends one more, and the first
+relayer still reveals its share. The cycle is still recovering, so each of those shares is useful.
+One useful share every 15 s inside a surplus window caps the zero-tolerance run at ~15 s of
+traffic. That failed the run assertion four times on 2026-10-05/06: download at 1 803 and 1 804
+after browsing, upload at 959 and 1 119 after idle. Each time the shape had drawn the Exit its
+predecessor had just used, which with two candidate Exits is a coin toss, and every shape that drew
+a different one passed. Reproduced locally on the same pairing, upload at 1 134: the Exit's
+`hopr_pix_sessions_active` read 2 throughout, and inside upload's surplus window its useful counter
+moved by exactly one every 14-15 s.
+
+Two changes followed. Each scenario now closes its Session once its assertions pass:
+`close_session` shuts the write half, which sends the terminating segment, and waits for the Exit's
+census to drop. And the trace records that census at every sample. A step during which the Exit
+supervised another Session does not count toward the run, so a foreign Session can make the run
+come out short but never long. A short run with foreign steps in it is reported as unmeasured
+instead of failed, because the leftover means an earlier scenario failed before it could close, and
+that failure is already the one to read. `Sampler::finish` logs each trace's summary and a profile
+of its `U`/`S` blocks from the library, so CI's narrow `RUST_LOG` keeps them for passing runs too.
+
+A full pass with both changes, against hoprd `cfe24dd` and hoprnet `43125d2` (2026-10-06): all six
+green, every Session released within a second of its close, and no foreign step in any trace, with
+mixed and idle both drawing the Exit browsing had just released. The longest runs were 3 635-4 009.
 
 ## Two findings that are not about PIX, and one correction
 
