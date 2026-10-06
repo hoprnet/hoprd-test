@@ -499,11 +499,14 @@ mod tests {
         );
 
         // And the same at the widest quota the Exit admits, which is what the validator checks — with
-        // the ceiling counted only up to the fastest rate a Session is assumed to carry.
+        // the ceiling counted only up to the fastest rate a Session is assumed to carry, as upstream's
+        // `fill.max_rate.min(max_session_packet_rate)` does.
         let widest = (QUOTA_RANGE_MAX / QUOTA_BYTES_PER_SHARE) as f64 * 1.05 / aim_point;
+        let ceiling = u64::from(FILL_MAX_RATE).min(DEADLINE_FLOOR_RATE);
         assert!(
-            widest <= u64::from(FILL_MAX_RATE).min(DEADLINE_FLOOR_RATE) as f64,
-            "the widest accepted quota needs {widest:.0} packets/s against {FILL_MAX_RATE}; \
+            widest <= ceiling as f64,
+            "the widest accepted quota needs {widest:.0} packets/s against {ceiling} \
+             (fill.max_rate {FILL_MAX_RATE}, counted up to {DEADLINE_FLOOR_RATE}); \
              validate_incoming_session_pix_config would refuse this config at load"
         );
     }

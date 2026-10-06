@@ -48,11 +48,13 @@ whether it builds at `master`'s tip.
 ```
 parts 512 x (threshold 64 + surplus 16)    E     = 40 960 packets/cycle
 R     = 150 packets/s  (~3.9 Mbps)         cycle = 273 s nominal
-quota = 40 960 x 3246                            = 132 956 160 B (126.8 MiB)
+quota = 40 960 x 1452                            = 59 473 920 B (56.7 MiB)
 ```
 
-Until the 3246 B payload this was 1024 parts at 300 packets/s. Halving both keeps the cycle length,
-so every ratio below is unchanged, and halves the quota that the recovery floor is computed from.
+A share is priced at one Session segment (`PIX_QUOTA_BYTES_PER_SHARE`, 1452 B) since hoprnet#8478,
+not at the 3246 B packet payload, which made the same cycle 132 956 160 B. Until the 3246 B payload
+this was 1024 parts at 300 packets/s. Halving both kept the cycle length, so every ratio below is
+unchanged, and halved the quota the recovery floor was then computed from.
 
 **Not the deployed geometry, and deliberately so.** What governs PIX is ratios, not rates: the
 client's SURB buffer is `16 x R` and a cycle is `cycle_seconds x R`, so `buffer / E = 16 /
@@ -74,11 +76,15 @@ at a rate a 1-hop local cluster carries comfortably. The deployed 4608 x 80 at 1
 `max_recovery_time` and `fill.finish_fraction` are the deliberate departures. The deadline is no
 longer only a backstop: since the Exit fills a cycle the application left unfinished, it is also
 the idle tariff, and an idle scenario spends `finish_fraction x` it. Two hours is not a thing a
-test can wait out. 15 min clears the floor `validate_incoming_session_pix_config` enforces
-(`quota_range_max / 57 packets/s` = 843 s at the 3246 B payload, 1.5 Mbps in packets; see
-hoprnet#8469), and 0.6 puts the aim point at 540 s, what the idle, browsing and upload shapes have
-always waited. Both are legal configuration rather than a test-only escape hatch; the fraction is
-hoprd's `fill_finish_fraction`, exposed for this in hoprd#187.
+test can wait out. 15 min clears what `validate_incoming_session_pix_config` enforces since
+hoprnet#8478. With fill on, `fill.max_rate`, counted up to `MAX_ASSUMED_SESSION_PACKET_RATE` (5000
+packets/s), must finish a cycle of the widest accepted quota by the aim point: 48 000 x 1.05 / 540 s
+= 94 packets/s against 250. With fill off, the deadline must cover that cycle at 5000 packets/s,
+which is 10 s. The floor used to be `quota_range_max / 57 packets/s`, 843 s at the 3246 B payload
+(1.5 Mbps in packets, hoprnet#8469), and that is what moved the deadline to 15 min. 0.6 puts the
+aim point at 540 s, what the idle, browsing and upload shapes have always waited. Both are legal
+configuration rather than a test-only escape hatch; the fraction is hoprd's `fill_finish_fraction`,
+exposed for this in hoprd#187.
 
 ## Results
 
