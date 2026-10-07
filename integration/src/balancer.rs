@@ -161,10 +161,23 @@ impl Trace {
     /// A scenario runs one data session, but probe and health sessions may register families too,
     /// and a session dropped earlier keeps its gauges. "Most produced" is the data session.
     pub fn from_readings(readings: &[(Duration, Reading)]) -> Self {
+        // The session that produced the most *during* the readings, not the most in total: a
+        // closed or leaked session from an earlier arm stays exported with its final counters
+        // and would otherwise win against the session actually under test (2026-10-07: S6's
+        // production arm was judged on the control arm's frozen trace).
+        let first_produced = |id: &str| {
+            readings
+                .iter()
+                .find_map(|(_, r)| r.0.get(id).and_then(|b| b.produced))
+                .unwrap_or_default()
+        };
         let Some(session) = readings.last().and_then(|(_, last)| {
             last.0
                 .iter()
-                .max_by_key(|(_, r)| r.produced.unwrap_or_default())
+                .max_by_key(|(id, r)| {
+                    let produced = r.produced.unwrap_or_default();
+                    (produced.saturating_sub(first_produced(id)), produced)
+                })
                 .map(|(id, _)| id.clone())
         }) else {
             return Self::default();
@@ -558,6 +571,27 @@ hopr_packets_count{type="forwarded"} 5
         assert_eq!(t.last_state(), Some(STATE_ACTIVE));
         assert_eq!(t.episodes_at_budget(5000.0), 1, "one contiguous burst");
         assert_eq!(t.degraded_episodes(5000.0), 1);
+    }
+
+    #[test]
+    fn the_trace_should_follow_the_session_that_is_producing() {
+        // "old" has produced more in total but is frozen; "new" is the one under test.
+        let at = |t: u64, old: u64, new: u64| {
+            let mut m = BTreeMap::new();
+            for (id, produced) in [("old", old), ("new", new)] {
+                m.insert(
+                    id.to_string(),
+                    BalancerReading {
+                        produced: Some(produced),
+                        ..reading(0, 0, 0.0).0["s"]
+                    },
+                );
+            }
+            (Duration::from_secs(t), Reading(m))
+        };
+        let t = Trace::from_readings(&[at(0, 30_000, 0), at(1, 30_000, 500), at(2, 30_000, 900)]);
+        assert_eq!(t.session, "new");
+        assert_eq!(t.produced_delta(), Some(900));
     }
 
     #[test]
