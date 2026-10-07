@@ -40,6 +40,41 @@ fn edge_p2p_port() -> u16 {
     P2P_PORT_BASE + cluster_size() as u16 + BOOTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
+/// The P2P port the *first* `edgli` booted by this test binary listens on.
+///
+/// Every later boot takes the next port (see [`edge_p2p_port`]). A scenario that shapes the entry's
+/// uplink by source port (`scripts/shape-edge-uplink.sh`) boots one `edgli` and checks the shaper
+/// was pointed at this port, so a shaper aimed at the wrong port cannot read as a pass.
+pub fn first_edge_p2p_port() -> u16 {
+    P2P_PORT_BASE + cluster_size() as u16
+}
+
+/// The SURB balancer of `gnosis_vpn-client`'s main (WG) data session, as the throughput tests run
+/// it: 10 MB response buffer, 16 Mb/s SURB upstream, every other field at its default.
+///
+/// `to_surb_balancer_config` in gnosis_vpn-lib derives `target_surb_buffer_size` and
+/// `max_surbs_per_sec` from the same formulas, but since v0.96.0 it also sets
+/// `sustain_on_return_path_loss: true` (GNO-713). That field turns a return-path outage into
+/// production pinned at `max_surbs_per_sec`, so it stays off here to keep the existing scenarios'
+/// baseline unchanged; [`gnosis_vpn_client_surb_config`] is the faithful copy.
+pub fn gnosis_main_surb_config() -> SurbBalancerConfig {
+    SurbBalancerConfig {
+        target_surb_buffer_size: 10_000_000 / SESSION_MTU as u64,
+        max_surbs_per_sec: 16_000_000 / (8 * SURB_SIZE as u64),
+        ..SurbBalancerConfig::default()
+    }
+}
+
+/// The main-session SURB balancer exactly as `gnosis_vpn-client` v0.96.x ships it:
+/// [`gnosis_main_surb_config`] plus `sustain_on_return_path_loss: true`, as printed in v0.96.0 and
+/// v0.96.3 client logs.
+pub fn gnosis_vpn_client_surb_config() -> SurbBalancerConfig {
+    SurbBalancerConfig {
+        sustain_on_return_path_loss: true,
+        ..gnosis_main_surb_config()
+    }
+}
+
 /// Strategies appended to the channel-lifecycle one `default_strategy_cfg` yields.
 ///
 /// A struct rather than an extra parameter per strategy, so that adding a feature-gated one does
@@ -350,6 +385,26 @@ impl IntegrationEnv {
         return_hops: usize,
         balance_surbs: bool,
     ) -> anyhow::Result<(HoprSession, Address)> {
+        self.open_unreliable_session_with_surbs(
+            forward_hops,
+            return_hops,
+            balance_surbs.then(gnosis_main_surb_config),
+        )
+        .await
+    }
+
+    /// As [`Self::open_unreliable_session_paths`], but with the entry-side SURB balancer stated in
+    /// full (`None` disables it), so a scenario can run the exact balancer a client ships — see
+    /// [`gnosis_vpn_client_surb_config`] — or vary one field of it.
+    ///
+    /// Bypasses the PIX redirect of [`Self::open_unreliable_session_paths`] on purpose: a scenario
+    /// that names its balancer is measuring that balancer, not PIX.
+    pub async fn open_unreliable_session_with_surbs(
+        &self,
+        forward_hops: usize,
+        return_hops: usize,
+        surb_management: Option<SurbBalancerConfig>,
+    ) -> anyhow::Result<(HoprSession, Address)> {
         let dest = self.dest_for(forward_hops)?;
         let (session, _) = self
             .edgli
@@ -368,22 +423,8 @@ impl IntegrationEnv {
                     always_max_out_surbs: true,
                     // gnosis documents `true` as 2 SURBs per packet and `false` as 1.
                     #[cfg(feature = "v5")]
-                    max_surbs_per_data_packet: if balance_surbs { 2 } else { 1 },
-                    surb_management: balance_surbs.then_some(SurbBalancerConfig {
-                        // gnosis main: 10 MB response buffer, 16 Mb/s SURB upstream.
-                        target_surb_buffer_size: 10_000_000 / SESSION_MTU as u64,
-                        max_surbs_per_sec: 16_000_000 / (8 * SURB_SIZE as u64),
-                        // Everything else stays at the default, because that is what the client
-                        // does: `to_surb_balancer_config` in gnosis_vpn-lib sets exactly these two
-                        // fields from the same formulas and then `..Default::default()`.
-                        //
-                        // In particular `sustain_on_return_path_loss` is left off. It was set here
-                        // once, on the reasoning that a lost return relayer reads as a well-stocked
-                        // exit because consumption is only observed when a reply gets home. That may
-                        // be true, but no client sets it, so a scenario that did was measuring a
-                        // configuration nobody runs.
-                        ..SurbBalancerConfig::default()
-                    }),
+                    max_surbs_per_data_packet: if surb_management.is_some() { 2 } else { 1 },
+                    surb_management,
                     ..Default::default()
                 },
             )
