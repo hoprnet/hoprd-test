@@ -323,6 +323,31 @@ impl Trace {
             .count()
     }
 
+    /// Separate episodes — runs of consecutive samples — in which `hit` holds.
+    fn episodes(&self, hit: impl Fn(&BalancerReading) -> bool) -> usize {
+        let mut count = 0;
+        let mut inside = false;
+        for sample in &self.samples {
+            let now = hit(&sample.reading);
+            if now && !inside {
+                count += 1;
+            }
+            inside = now;
+        }
+        count
+    }
+
+    /// Separate episodes with the control output at ≥95 % of `budget`. More than one during a
+    /// single disturbance means production keeps returning to the budget — a loop, not a burst.
+    pub fn episodes_at_budget(&self, budget: f64) -> usize {
+        self.episodes(|r| r.output.is_some_and(|o| o >= 0.95 * budget))
+    }
+
+    /// Separate degraded-mode episodes, by the signature of [`Self::degraded_samples`].
+    pub fn degraded_episodes(&self, budget: f64) -> usize {
+        self.episodes(|r| r.level == Some(0.0) && r.output.is_some_and(|o| o >= 0.95 * budget))
+    }
+
     /// Seconds spent with the control output at ≥95 % of `budget` (sample count × median spacing).
     pub fn seconds_at_budget(&self, budget: f64) -> f64 {
         let n = self
@@ -531,6 +556,26 @@ hopr_packets_count{type="forwarded"} 5
             "level 0 at the budget reads as degraded"
         );
         assert_eq!(t.last_state(), Some(STATE_ACTIVE));
+        assert_eq!(t.episodes_at_budget(5000.0), 1, "one contiguous burst");
+        assert_eq!(t.degraded_episodes(5000.0), 1);
+    }
+
+    #[test]
+    fn episodes_should_count_separate_runs() {
+        let outputs = [0.0, 5000.0, 5000.0, 0.0, 0.0, 5000.0, 0.0, 4000.0];
+        let readings: Vec<_> = outputs
+            .iter()
+            .enumerate()
+            .map(|(i, &o)| (Duration::from_secs(i as u64), reading(0, 0, o)))
+            .collect();
+        let t = Trace::from_readings(&readings);
+        assert_eq!(
+            t.episodes_at_budget(5000.0),
+            2,
+            "4000 is below 95 % of the budget"
+        );
+        assert_eq!(t.episodes_at_budget(4000.0), 3);
+        assert_eq!(Trace::default().episodes_at_budget(5000.0), 0);
     }
 
     #[test]
