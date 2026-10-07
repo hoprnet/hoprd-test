@@ -747,21 +747,19 @@ async fn shaped_arm(
     Ok((transfer, trace))
 }
 
-/// 4. The user-visible symptom: with the entry's uplink shaped to a rate that comfortably fits the
-///    data, does the client's SURB budget stall the downlink? A capped-budget control arm on the
-///    same link proves the link itself is not the cause.
-#[test_log::test(tokio::test(flavor = "multi_thread"))]
-#[ignore = "requires a shaped entry uplink (scripts/shape-edge-uplink.sh) + a chain"]
-async fn shaped_uplink_should_not_stall_downstream() -> anyhow::Result<()> {
+/// The entry uplink's shaped rate, after checking the shaper sits on this binary's entry port and
+/// leaves headroom over the data. Call after any `request_cluster_size`: the port depends on it.
+fn shaped_uplink_mbit() -> anyhow::Result<f64> {
     let mbit: f64 = std::env::var("EDGE_UPLINK_SHAPED_MBIT")
         .ok()
         .and_then(|v| v.parse().ok())
         .ok_or_else(|| {
             anyhow::anyhow!(
                 "EDGE_UPLINK_SHAPED_MBIT is not set: shape the entry uplink first with \
-                 `sudo bash scripts/shape-edge-uplink.sh up <mbit>` (the `just` recipe \
+                 `sudo bash scripts/shape-edge-uplink.sh up <mbit> {}` (the `just` recipe \
                  reads its state file). Unshaped, loopback is never the bottleneck and this scenario \
-                 measures nothing."
+                 measures nothing.",
+                first_edge_p2p_port(),
             )
         })?;
     let port: u16 = std::env::var("EDGE_UPLINK_PORT")
@@ -771,7 +769,7 @@ async fn shaped_uplink_should_not_stall_downstream() -> anyhow::Result<()> {
     anyhow::ensure!(
         port == first_edge_p2p_port(),
         "the shaper is on port {port} but this binary's edgli will listen on {} — re-run the shaper \
-         with the cluster size this scenario uses",
+         with that port",
         first_edge_p2p_port(),
     );
     let data_mbit = OFFERED_MBPS * 8.0;
@@ -781,13 +779,28 @@ async fn shaped_uplink_should_not_stall_downstream() -> anyhow::Result<()> {
          at least {} Mbit/s",
         2.0 * data_mbit,
     );
+    Ok(mbit)
+}
 
-    let env = IntegrationEnv::setup().await?;
+/// The client's balancer config, and the same capped to a sixth of its SURB upstream.
+fn shaped_arm_configs() -> (SurbBalancerConfig, SurbBalancerConfig) {
     let production = gnosis_vpn_client_surb_config();
     let control = SurbBalancerConfig {
         max_surbs_per_sec: CONTROL_SURB_UPSTREAM_BITS / (8 * SURB_SIZE as u64),
         ..production
     };
+    (production, control)
+}
+
+/// 4. The user-visible symptom: with the entry's uplink shaped to a rate that comfortably fits the
+///    data, does the client's SURB budget stall the downlink? A capped-budget control arm on the
+///    same link proves the link itself is not the cause.
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+#[ignore = "requires a shaped entry uplink (scripts/shape-edge-uplink.sh) + a chain"]
+async fn shaped_uplink_should_not_stall_downstream() -> anyhow::Result<()> {
+    let mbit = shaped_uplink_mbit()?;
+    let env = IntegrationEnv::setup().await?;
+    let (production, control) = shaped_arm_configs();
 
     // Control first: if it leaks, it leaks at a sixth of the rate into the production arm.
     let (ctl, ctl_trace) = shaped_arm(&env, "control", CONTROL_PHASE, control).await?;
