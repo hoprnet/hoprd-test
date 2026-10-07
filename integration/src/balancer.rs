@@ -288,6 +288,24 @@ impl Trace {
         Some(outputs.iter().filter(|&&o| o <= 0.0).count() as f64 / outputs.len() as f64)
     }
 
+    /// Share of samples with the level more than `margin` below target while the control output is
+    /// zero — integral windup: the P term alone would command a refill there, so the I term is still
+    /// negative from the previous overshoot. A controller without windup keeps this near 0.
+    pub fn share_starved_below_target(&self, margin: f64) -> Option<f64> {
+        let judged: Vec<bool> = self
+            .samples
+            .iter()
+            .filter_map(|s| {
+                let r = &s.reading;
+                Some(r.target? - r.level? > margin && r.output? <= 0.0)
+            })
+            .collect();
+        if judged.is_empty() {
+            return None;
+        }
+        Some(judged.iter().filter(|&&starved| starved).count() as f64 / judged.len() as f64)
+    }
+
     /// The session's lifecycle state at the last sample, `None` when the family is absent.
     pub fn last_state(&self) -> Option<f64> {
         self.samples.iter().rev().find_map(|s| s.reading.state)
@@ -513,6 +531,25 @@ hopr_packets_count{type="forwarded"} 5
             "level 0 at the budget reads as degraded"
         );
         assert_eq!(t.last_state(), Some(STATE_ACTIVE));
+    }
+
+    #[test]
+    fn starved_should_count_zero_output_below_target() {
+        // Level 0 against target 100: below target in every sample, output 0 in 3 of 4.
+        let readings: Vec<_> = (0..4u64)
+            .map(|s| {
+                let output = if s == 0 { 500.0 } else { 0.0 };
+                (Duration::from_secs(s), reading(0, 0, output))
+            })
+            .collect();
+        let t = Trace::from_readings(&readings);
+        assert!((t.share_starved_below_target(50.0).unwrap() - 0.75).abs() < 1e-9);
+        assert_eq!(
+            t.share_starved_below_target(200.0),
+            Some(0.0),
+            "within the margin"
+        );
+        assert_eq!(Trace::default().share_starved_below_target(50.0), None);
     }
 
     #[test]
