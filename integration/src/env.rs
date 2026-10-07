@@ -696,17 +696,9 @@ fn edgli_config(
             config::{StreamProtocolConfig, SurbPopOrder, SurbStoreConfig},
         },
     };
-    // Follows the Exit's build, and which hoprd a suite runs is a per-run choice, not a compile
-    // one: hoprd's `From<UserHoprLibConfig>` pins LIFO and a PIX build pins FIFO (hoprd#91) — a
-    // share reaches the Exit only when its SURB is spent, so newest-first leaves the oldest
-    // unspent until the per-pseudonym ring buffer overwrites them. A cluster whose two ends
-    // disagree measures neither order.
+    // hoprnet#8473 dropped LIFO on v5; v4 hoprd still pins it, and both ends must agree.
     #[cfg(feature = "v5")]
-    let pop_order = if cluster::pix_enabled() {
-        SurbPopOrder::Fifo
-    } else {
-        SurbPopOrder::Lifo
-    };
+    let pop_order = SurbPopOrder::Fifo;
     #[cfg(not(feature = "v5"))]
     let pop_order = SurbPopOrder::Lifo;
     HoprLibConfig {
