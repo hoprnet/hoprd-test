@@ -31,9 +31,9 @@
 //!
 //! | scenario | needs | reproduces |
 //! | -------- | ----- | ---------- |
-//! | [`surb_refills_should_track_consumption`] | 3 nodes | 1 |
-//! | [`return_outage_should_not_pin_surb_production_at_max`] | 5 nodes, SIGSTOP | 2 |
-//! | [`dropping_a_session_should_stop_its_balancer`] | 5 nodes, SIGSTOP | 3 |
+//! | [`surb_refills_should_track_consumption`] | 3 nodes, bursty load | 1 |
+//! | [`return_outage_should_not_pin_surb_production_at_max`] | 5 nodes, SIGSTOP all but one relayer | 2 |
+//! | [`dropping_a_session_should_stop_its_balancer`] | 5 nodes, SIGSTOP all but one relayer | 3 |
 //! | [`shaped_uplink_should_not_stall_downstream`] | 3 nodes + a shaped entry uplink (root) | the user-visible symptom |
 //!
 //! The first three need no shaping: they read the balancer's own gauges and SURB counters (see
@@ -44,9 +44,28 @@
 //! Every balancer here is [`gnosis_vpn_client_surb_config`] — the client's main-session config
 //! including `sustain_on_return_path_loss` — not the throughput tests' `gnosis_main_surb_config`.
 //!
-//! **Thresholds are predicted from the incident log and a model of the control law, not yet
-//! measured on a cluster.** Re-derive them from a measured run before trusting a pass or a fail;
-//! `SURB_BALANCER_CSV_DIR=<dir>` writes each scenario's balancer series for that.
+//! **Thresholds are predicted from the incident log and a model of the control law.** The first
+//! cluster run (2026-10-07) passed scenarios 1–3 vacuously, and taught three things now built in:
+//!
+//! - A steady 0.25 MB/s never drives the PID to the budget: each surplus winds its integral to
+//!   −budget, which caps the next refill (measured: peak 1132 SURB/s at 284 SURB/s consumed). The
+//!   incident's full-budget bursts followed large dips under a bursty 0.1–0.9 MB/s download, so
+//!   scenario 1 now offers bursts.
+//! - Degraded mode never triggers when **every** return relayer is down: hopr-transport marks a
+//!   session degraded only in the refill step, which runs only after a re-plan *moved* traffic
+//!   (`return_path_recovery.rs`), and with no relayer left nothing can move. Scenarios 2 and 3 now
+//!   freeze all relayers but the least used one, and fail as inconclusive if degraded mode is never
+//!   observed rather than passing on a balancer that was simply idle.
+//! - An idle leaked balancer produces nothing, so scenario 3 also asserts the session's own
+//!   `hopr_session_lifetime_state` leaves Active.
+//!
+//! `SURB_BALANCER_CSV_DIR=<dir>` writes each scenario's balancer series. The scenarios' own summary
+//! lines log under the `surb_self_congestion` target, so include it in `RUST_LOG`:
+//!
+//! ```bash
+//! RUST_LOG=warn,hoprd_integration_test=info,surb_self_congestion=info,\
+//! hopr_transport_session::balancer::controller=debug
+//! ```
 //!
 //! # Varying the controller
 //!
@@ -72,14 +91,15 @@ use std::time::Duration;
 
 use edgli::hopr_lib::exports::transport::{SURB_SIZE, SurbBalancerConfig};
 use hoprd_integration_test::{
-    HoprSession, IntegrationEnv,
-    balancer::{Sampler, Trace},
+    Address, HoprSession, IntegrationEnv,
+    balancer::{STATE_ACTIVE, Sampler, Trace},
     cluster::{NodeInfo, request_cluster_size},
     env::{first_edge_p2p_port, gnosis_vpn_client_surb_config},
     pump::{
-        PumpOpts, PumpOutcome, Transfer, drain_until_quiet, pace_for_rate_with_chunk, pump_halves,
-        tagged_payload,
+        PumpOpts, PumpOutcome, Shape, Transfer, drain_until_quiet, pace_for_rate_with_chunk,
+        pump_halves, tagged_payload,
     },
+    relayers,
 };
 use tokio::io::{AsyncWriteExt as _, ReadHalf, WriteHalf};
 
@@ -92,6 +112,18 @@ const OFFERED_MBPS: f64 = 0.25;
 
 /// Bytes per paced write: a small, regular write like a tunnel's, not a 64 KiB burst per pace.
 const CHUNK: usize = 4096;
+
+/// Scenario 1's load: bursts at the incident's peak downlink (~0.9 MB/s) separated by quiet gaps,
+/// averaging ~0.4 MB/s. A burst drains the exit's store faster than the balancer refills it at the
+/// steady rate; the quiet gap lets the integral wind back. That dip-and-refill is what drove the
+/// incident's full-budget bursts.
+const BURST_MBPS: f64 = 1.0;
+/// Bytes per burst: 2 s at [`BURST_MBPS`].
+const BURST_BYTES: usize = 2_000_000;
+/// Quiet gap after each burst.
+const BURST_GAP: Duration = Duration::from_secs(3);
+/// Bursts offered.
+const BURSTS: usize = 15;
 
 /// Time excluded from the start of a trace: the initial fill to target runs at the budget by
 /// design, and the incident's question is what happens after it.
@@ -109,6 +141,9 @@ const BURST_FLOOR_FRACTION: f64 = 0.25;
 /// Largest share of steady-state samples allowed at ≥95 % of `max_surbs_per_sec`.
 const MAX_SHARE_AT_BUDGET: f64 = 0.05;
 
+/// Most seconds a degraded episode may spend producing at the full budget.
+const MAX_SECONDS_AT_BUDGET: f64 = 2.0;
+
 /// Phase tags, so a backlog from one phase cannot be counted as the next one arriving.
 const WARMUP_PHASE: u8 = 1;
 const OUTAGE_PHASE: u8 = 3;
@@ -119,18 +154,12 @@ const PUMP_TIMEOUT: Duration = Duration::from_secs(600);
 const DRAIN_QUIET: Duration = Duration::from_secs(3);
 
 /// Return-path outage detection takes ~9 s (`KILL_SETTLE` in `return_path.rs`, and
-/// `RETURN_PATH_DEGRADED_GRACE` = 10 s in hopr-transport); outage windows are measured after it.
+/// `RETURN_PATH_DEGRADED_GRACE` = 10 s in hopr-transport). Scenario 3 keeps the return path frozen
+/// for twice this before dropping the session, so the drop lands inside a degraded episode.
 const DETECTION_GRACE: Duration = Duration::from_secs(10);
 
 /// How long the return relayers stay frozen.
-const OUTAGE_DURATION: Duration = Duration::from_secs(25);
-
-/// During a return-path outage, production may exceed the pre-outage consumption rate by this
-/// factor — enough to keep refilling a draining exit, not the whole budget.
-const MAX_OUTAGE_MINT_OVER_BASELINE: f64 = 2.0;
-
-/// Floor for the outage allowance, as a share of `max_surbs_per_sec`.
-const OUTAGE_FLOOR_FRACTION: f64 = 0.10;
+const OUTAGE_DURATION: Duration = Duration::from_secs(30);
 
 /// After a session is dropped, its balancer gets this long to notice before production must stop.
 const DROP_GRACE: Duration = Duration::from_secs(2);
@@ -191,24 +220,28 @@ fn require_observable(trace: &Trace, name: &str) -> anyhow::Result<()> {
 async fn surb_refills_should_track_consumption() -> anyhow::Result<()> {
     let cfg = gnosis_vpn_client_surb_config();
     let env = IntegrationEnv::setup().await?;
+    // Sample from before the session exists, so the initial fill is in the trace too.
+    let sampler = Sampler::start(SAMPLE_EVERY);
     // 1-hop both ways: the shape the user ran.
     let (session, _exit) = env
         .open_unreliable_session_with_surbs(1, 1, Some(cfg))
         .await?;
     let (mut rx, mut tx) = tokio::io::split(session);
 
-    let sampler = Sampler::start(SAMPLE_EVERY);
-    let payload = tagged_payload(
-        WARMUP_PHASE,
-        bytes_for(OFFERED_MBPS, Duration::from_secs(75)),
-    );
+    let payload = tagged_payload(WARMUP_PHASE, BURST_BYTES * BURSTS);
     let transfer = pump_halves(
         &mut rx,
         &mut tx,
         &payload,
-        "steady",
+        "bursty",
         PUMP_TIMEOUT,
-        paced(WARMUP_PHASE, OFFERED_MBPS),
+        PumpOpts {
+            shape: Some(Shape::Burst {
+                on: BURST_BYTES,
+                off: BURST_GAP,
+            }),
+            ..paced(WARMUP_PHASE, BURST_MBPS)
+        },
     )
     .await?;
     let trace = sampler.stop().await?;
@@ -217,6 +250,14 @@ async fn surb_refills_should_track_consumption() -> anyhow::Result<()> {
 
     let steady = trace.after(FILL_GRACE);
     let budget = cfg.max_surbs_per_sec as f64;
+    // Reported, not asserted: the fill runs at the budget by design, but it is the incident's
+    // stall-at-connect and worth seeing next to the steady state.
+    let fill = trace.window(Duration::ZERO, FILL_GRACE);
+    tracing::info!(
+        seconds_at_budget = fill.seconds_at_budget(budget),
+        "initial fill: {}",
+        fill.summary()
+    );
     let consumption = steady.consume_rate().unwrap_or_default();
     let peak = steady
         .peak_mint_rate(Duration::from_secs(1))
@@ -231,7 +272,7 @@ async fn surb_refills_should_track_consumption() -> anyhow::Result<()> {
         peak,
         at_budget,
         budget,
-        "steady-state balancer: {}",
+        "bursty-load balancer: {}",
         steady.summary(),
     );
 
@@ -259,17 +300,47 @@ async fn surb_refills_should_track_consumption() -> anyhow::Result<()> {
 }
 
 /// What [`warmed_outage_session`] hands a scenario: the env (kept alive), the session halves, the
-/// relayers to freeze, and the sampler already running since before the warm-up.
+/// relayers to freeze, the one left running, and the sampler already running since the warm-up.
 type WarmedSession = (
     IntegrationEnv,
     ReadHalf<HoprSession>,
     WriteHalf<HoprSession>,
     Vec<NodeInfo>,
+    Address,
     Sampler,
 );
 
+/// Split the candidates into the relayers to freeze and the one to keep: the least used during the
+/// warm-up, so most of the return path goes silent while a re-plan still has somewhere to move.
+///
+/// Freezing every relayer looks like the stronger outage but triggers nothing: hopr-transport marks
+/// a session degraded only after a re-plan moved traffic, and with no relayer left none can.
+fn freeze_all_but_least_used(
+    candidates: &[NodeInfo],
+    spread: &relayers::RelayerSpread,
+) -> (Vec<NodeInfo>, Address) {
+    let count = |a: &Address| {
+        spread
+            .per_relayer
+            .iter()
+            .find(|(addr, _)| addr == a)
+            .map_or(0, |(_, n)| *n)
+    };
+    let survivor = candidates
+        .iter()
+        .min_by_key(|n| count(&n.address))
+        .map(|n| n.address)
+        .expect("candidates checked non-empty");
+    let victims = candidates
+        .iter()
+        .filter(|n| n.address != survivor)
+        .cloned()
+        .collect();
+    (victims, survivor)
+}
+
 /// Bring up the outage cluster, open a 0-hop-out / 1-hop-back session with the client's balancer,
-/// and warm it up with the sampler running.
+/// warm it up with the sampler running, and pick the relayers to freeze.
 async fn warmed_outage_session(name: &str) -> anyhow::Result<WarmedSession> {
     let size = request_cluster_size(OUTAGE_NODES);
     anyhow::ensure!(size >= 3, "outage scenarios need ≥3 nodes, got {size}");
@@ -282,12 +353,14 @@ async fn warmed_outage_session(name: &str) -> anyhow::Result<WarmedSession> {
         .await?;
     let candidates = env.relayer_candidates(exit)?;
     anyhow::ensure!(
-        !candidates.is_empty(),
-        "{name}: no return relayer candidates"
+        candidates.len() >= 2,
+        "{name}: need ≥2 return relayer candidates so one can stay up, got {}",
+        candidates.len()
     );
     let (mut rx, mut tx) = tokio::io::split(session);
 
     let sampler = Sampler::start(SAMPLE_EVERY);
+    let forwarded_before = relayers::sample(&candidates).await;
     let warmup = tagged_payload(
         WARMUP_PHASE,
         bytes_for(OFFERED_MBPS, Duration::from_secs(30)),
@@ -307,7 +380,29 @@ async fn warmed_outage_session(name: &str) -> anyhow::Result<WarmedSession> {
         before.arrival_pct(),
     );
     drain_until_quiet(&mut rx, DRAIN_QUIET, "warm-up").await;
-    Ok((env, rx, tx, candidates, sampler))
+    let spread = relayers::spread(&forwarded_before, &relayers::sample(&candidates).await);
+    let (victims, survivor) = freeze_all_but_least_used(&candidates, &spread);
+    tracing::info!(
+        %survivor,
+        frozen = victims.len(),
+        "return relayers during warm-up: {}",
+        spread.summary()
+    );
+    Ok((env, rx, tx, victims, survivor, sampler))
+}
+
+/// Fail as inconclusive, rather than pass, when degraded mode was never reached — the first run
+/// passed for exactly that reason.
+///
+/// Recognises degraded mode by the current controller's signature (level forced to 0 at the
+/// budget). A fix that keeps degraded mode but bounds it changes that signature, and this check then
+/// needs to read the `degraded=true` debug line or a metric instead.
+fn require_degraded(trace: &Trace, budget: f64, name: &str) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        trace.degraded_samples(budget) > 0,
+        "{name}: inconclusive — the balancer never entered degraded mode (no sample with level 0 at          the budget), so the return path was not reported silent and this run says nothing about          production during an outage. Check the log for `degraded=true` and `re-planned`.",
+    );
+    Ok(())
 }
 
 /// 2. A return-path outage with the client's config: does production stay bounded, or pin at the
@@ -316,20 +411,23 @@ async fn warmed_outage_session(name: &str) -> anyhow::Result<WarmedSession> {
 #[ignore = "requires hoprd/hoprd-localcluster binaries + a chain"]
 async fn return_outage_should_not_pin_surb_production_at_max() -> anyhow::Result<()> {
     let cfg = gnosis_vpn_client_surb_config();
-    let (_env, mut rx, mut tx, candidates, sampler) = warmed_outage_session("outage").await?;
+    let (_env, mut rx, mut tx, victims, survivor, sampler) =
+        warmed_outage_session("outage").await?;
     let pre_outage = sampler.now();
 
-    let thawed = Thawed(&candidates);
-    for node in &candidates {
+    let thawed = Thawed(&victims);
+    for node in &victims {
         node.pause()?;
     }
     let frozen_at = sampler.now();
     tracing::info!(
-        frozen = candidates.len(),
-        "return relayers frozen — outage begins"
+        frozen = victims.len(),
+        %survivor,
+        "return relayers frozen but one — outage begins"
     );
 
-    // Keep offering load into the outage: the entry still sends, nothing comes back.
+    // Keep offering load into the outage: the entry still sends, little comes back until a re-plan
+    // moves the return path onto the survivor.
     let during = pump_halves(
         &mut rx,
         &mut tx,
@@ -364,31 +462,29 @@ async fn return_outage_should_not_pin_surb_production_at_max() -> anyhow::Result
         baseline > 0.0,
         "no consumption measured before the outage — the warm-up did not carry traffic"
     );
-    let outage = trace.window(frozen_at + DETECTION_GRACE, outage_end);
-    let mint = outage.mint_rate().unwrap_or_default();
-    let at_budget = outage
-        .share_output_at_least(0.95 * budget)
+    let outage = trace.window(frozen_at, outage_end);
+    let peak = outage
+        .peak_mint_rate(Duration::from_secs(1))
         .unwrap_or_default();
+    let seconds_at_budget = outage.seconds_at_budget(budget);
     tracing::info!(
         baseline,
-        mint,
-        at_budget,
+        peak,
+        seconds_at_budget,
+        degraded_samples = outage.degraded_samples(budget),
         budget,
         "balancer during the outage: {}",
         outage.summary(),
     );
+    require_degraded(&outage, budget, "outage")?;
 
-    let allowed = (MAX_OUTAGE_MINT_OVER_BASELINE * baseline).max(OUTAGE_FLOOR_FRACTION * budget);
+    let allowed = (MAX_BURST_OVER_CONSUMPTION * baseline).max(BURST_FLOOR_FRACTION * budget);
     assert!(
-        mint <= allowed,
-        "SURB production during the return-path outage was {mint:.0} SURB/s against a pre-outage \
-         consumption of {baseline:.0} SURB/s (allowed {allowed:.0}, budget {budget:.0}) — degraded \
-         mode with sustain_on_return_path_loss mints at max_surbs_per_sec while nothing comes back",
-    );
-    assert!(
-        at_budget <= 0.5,
-        "control output sat at the {budget:.0} SURB/s budget for {:.0}% of the outage",
-        at_budget * 100.0,
+        peak <= allowed && seconds_at_budget <= MAX_SECONDS_AT_BUDGET,
+        "SURB production during the return-path outage peaked at {peak:.0} SURB/s (allowed \
+         {allowed:.0} against {baseline:.0} SURB/s consumed before it) and spent \
+         {seconds_at_budget:.1}s at the {budget:.0} SURB/s budget (max {MAX_SECONDS_AT_BUDGET}s) — \
+         degraded mode with sustain_on_return_path_loss mints at max_surbs_per_sec",
     );
     Ok(())
 }
@@ -398,12 +494,12 @@ async fn return_outage_should_not_pin_surb_production_at_max() -> anyhow::Result
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 #[ignore = "requires hoprd/hoprd-localcluster binaries + a chain"]
 async fn dropping_a_session_should_stop_its_balancer() -> anyhow::Result<()> {
-    let (_env, mut rx, mut tx, candidates, sampler) = warmed_outage_session("drop").await?;
+    let (_env, mut rx, mut tx, victims, _survivor, sampler) = warmed_outage_session("drop").await?;
 
     // Freeze the return path first, so a surviving balancer is loud (degraded mode at the budget)
-    // rather than idle above target — an idle leak produces nothing and would pass by accident.
-    let thawed = Thawed(&candidates);
-    for node in &candidates {
+    // rather than idle above target. The lifecycle-state assertion below catches an idle leak too.
+    let thawed = Thawed(&victims);
+    for node in &victims {
         node.pause()?;
     }
     let _ = pump_halves(
@@ -439,16 +535,30 @@ async fn dropping_a_session_should_stop_its_balancer() -> anyhow::Result<()> {
     );
     let after = trace.window(before_drop + DROP_GRACE, end);
     let produced_after = after.produced_delta().unwrap_or_default();
+    let state_after = after.last_state();
     tracing::info!(
         produced_after,
+        ?state_after,
         "before the drop: {} | after the drop: {}",
         before.summary(),
         after.summary(),
     );
+    let state_after = state_after.ok_or_else(|| {
+        anyhow::anyhow!(
+            "drop: hopr_session_lifetime_state is absent, so whether the session outlived its \
+             handle cannot be read"
+        )
+    })?;
     assert!(
-        produced_after <= MAX_SURBS_AFTER_DROP,
-        "the dropped session's balancer kept minting: {produced_after} SURBs in the {:?} after the \
-         drop (+{DROP_GRACE:?} grace) — HoprSession has no Drop that tells the session manager",
+        state_after != STATE_ACTIVE && produced_after <= MAX_SURBS_AFTER_DROP,
+        "the dropped session is still {} with its balancer running ({produced_after} SURBs produced \
+         in the {:?} after the drop, +{DROP_GRACE:?} grace) — HoprSession has no Drop that tells the \
+         session manager",
+        if state_after == STATE_ACTIVE {
+            "Active"
+        } else {
+            "not Active"
+        },
         AFTER_DROP - DROP_GRACE,
     );
     Ok(())
