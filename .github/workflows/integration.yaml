@@ -119,6 +119,11 @@ jobs:
     # Dedicated self-hosted machine rather than a hosted VM: the onion encoder is
     # CPU-bound and the throughput thresholds only mean anything on a stable core count.
     runs-on: [self-hosted, hetzner]
+    # `actions: read` lets run.sh find a matching earlier green; the rest is what it used before.
+    permissions:
+      contents: read
+      pull-requests: read
+      actions: read
     # Both lines for the triggers that gate this repo, one dispatched line otherwise.
     # `fail-fast: false` so a v5 break still reports the v4 verdict. NOTE the job name
     # carries the line, so required checks must name "Integration throughput (v4|v5)".
@@ -327,6 +332,17 @@ jobs:
         env:
           NIX_SYSTEM_SUFFIX: x86_64-linux
         run: nix develop github:hoprnet/hoprnet --command bash scripts/integration/run.sh
+      # The marker a later merge-queue run of the same stack looks up instead of rerunning.
+      - name: Record the pass
+        if: >-
+          success() && env.IT_FINGERPRINT != '' && (github.event_name == 'merge_group' ||
+          (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository))
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: it-pass-${{ env.IT_FINGERPRINT }}
+          path: it-pass.txt
+          retention-days: 7
+          overwrite: true
       # The console now carries a summary; this is where the detail lives when a run
       # goes red. Only on failure, so a green run stores nothing.
       - name: Upload logs
