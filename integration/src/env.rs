@@ -190,6 +190,24 @@ impl IntegrationEnv {
     /// Bring up the local cluster, boot Edgli on the pre-funded extra identity, start
     /// the channel strategy, and wait until at least one outgoing channel is open.
     pub async fn setup() -> anyhow::Result<Self> {
+        Self::setup_tuned(NetTuning::local()).await
+    }
+
+    /// As [`Self::setup`], but the entry's path planner re-weights its cached paths only every
+    /// `period` (default 5 s, cache TTL 10 s).
+    ///
+    /// Re-weighting reads the same SURB round-trip telemetry as the return-path degradation
+    /// detector and, in a small cluster with a healthy alternative relayer, moves minting off a
+    /// dead relayer within one refresh — before the detector's five silent flushes. Slowing it
+    /// models a network where the alternatives look no better, so the detector gets to act.
+    pub async fn setup_with_planner_refresh(period: Duration) -> anyhow::Result<Self> {
+        let mut tuning = NetTuning::local();
+        tuning.path_planner.refresh_period = period;
+        tuning.path_planner.cache_ttl = tuning.path_planner.cache_ttl.max(2 * period);
+        Self::setup_tuned(tuning).await
+    }
+
+    async fn setup_tuned(tuning: NetTuning) -> anyhow::Result<Self> {
         let cluster = cluster::bring_up_shared().await?;
         let summary = cluster.summary.clone();
         let extra = summary.extras[0].clone();
@@ -197,7 +215,7 @@ impl IntegrationEnv {
         let (edgli, reactor) = boot_edgli(
             &summary.blokli_url,
             &extra,
-            &NetTuning::local(),
+            &tuning,
             cluster_size(),
             ExtraStrategies::default(),
         )
