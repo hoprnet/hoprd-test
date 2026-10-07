@@ -35,6 +35,7 @@
 //! | [`return_outage_should_not_pin_surb_production_at_max`] | 5 nodes, SIGSTOP all but one relayer | 2 |
 //! | [`dropping_a_session_should_stop_its_balancer`] | 5 nodes, SIGSTOP all but one relayer | 3 |
 //! | [`shaped_uplink_should_not_stall_downstream`] | 3 nodes + a shaped entry uplink (root) | the user-visible symptom |
+//! | [`degraded_mode_should_not_pin_surb_production_at_max`] | as 2, planner refresh slowed to 60 s | 2, via degraded mode |
 //!
 //! The first three need no shaping: they read the balancer's own gauges and SURB counters (see
 //! [`hoprd_integration_test::balancer`]), which show the bursts and the pinning whether or not a link
@@ -54,8 +55,8 @@
 //! - Degraded mode never triggers when **every** return relayer is down: hopr-transport marks a
 //!   session degraded only in the refill step, which runs only after a re-plan *moved* traffic
 //!   (`return_path_recovery.rs`), and with no relayer left nothing can move. Scenarios 2 and 3 now
-//!   freeze all relayers but the least used one, and fail as inconclusive if degraded mode is never
-//!   observed rather than passing on a balancer that was simply idle.
+//!   freeze all relayers but the least used one, and scenario 2 fails as inconclusive if the freeze
+//!   did not take the return path down rather than passing on a balancer that was simply idle.
 //! - An idle leaked balancer produces nothing, so scenario 3 also asserts the session's own
 //!   `hopr_session_lifetime_state` leaves Active.
 //!
@@ -67,14 +68,34 @@
 //!   budget (3.5 s).
 //! - The dropped session stayed Active and minted 3532 SURBs, partly at the full budget after the
 //!   level estimate's periodic (~15 s) correction knocked it below target.
-//! - Scenario 2 stayed inconclusive: with 1-hop return paths degraded mode was never reached.
+//! - Scenario 2 stayed inconclusive. Not for lack of relayer diversity: the planner's
+//!   `diversity collapsed … distinct_relayers=0` warning is a false positive (it counts first hops
+//!   on paths already moved out by `std::mem::take`, so it always reads 0). The detector needs
+//!   ≥ 20 SURBs minted per second onto a dead pair for 5 s in a row, and the balancer, idling above
+//!   target at 0.25 MB/s, never minted that steadily. Scenario 2 now freezes the relayers into a
+//!   1 MB/s load.
+//!
+//! The third run (2026-10-07, 1 MB/s) reproduced scenario 2 **without** degraded mode:
+//!
+//! - The silence runs reached 3 of 5, then reset: the planner's graph weighting moved minting off
+//!   the frozen relayers within ~4 s (from ~90 to < 20 SURB/s per dead pair, below the detector's
+//!   evidence floor) while all 4 candidates were still cached. Rerouting beats detection, so
+//!   degraded mode is not a precondition any more.
+//! - SURBs already stored for the dead routes kept being spent (69 % arrival), so the level
+//!   estimate ran ~6k high. The 15 s corrections then dropped it by 6763 and 5733 and drove output
+//!   to the full budget for 4.9 s in total — the incident's flood, by another path.
+//! - Scenario 5 reaches degraded mode on purpose. The planner re-weights its cached paths every
+//!   5 s from the same telemetry the detector reads, so with a healthy survivor it always wins the
+//!   race. Slowing its refresh to 60 s (`IntegrationEnv::setup_with_planner_refresh`) models a
+//!   network whose alternatives look no better, which is when the detector is the only way out.
 //!
 //! `SURB_BALANCER_CSV_DIR=<dir>` writes each scenario's balancer series. The scenarios' own summary
 //! lines log under the `surb_self_congestion` target, so include it in `RUST_LOG`:
 //!
 //! ```bash
 //! RUST_LOG=warn,hoprd_integration_test=info,surb_self_congestion=info,\
-//! hopr_transport_session::balancer::controller=debug
+//! hopr_transport_session::balancer::controller=debug,\
+//! hopr_transport=info,hopr_transport::protocol::surb_telemetry=debug
 //! ```
 //!
 //! # Varying the controller
@@ -180,6 +201,21 @@ const DETECTION_GRACE: Duration = Duration::from_secs(10);
 
 /// How long the return relayers stay frozen.
 const OUTAGE_DURATION: Duration = Duration::from_secs(30);
+
+/// Offered load around the outage: four times the warm-up, so the balancer is minting steadily
+/// when the relayers freeze rather than idling above target.
+///
+/// The detector (`surb_telemetry.rs::degraded_destinations`) calls a return pair dead only after
+/// 5 consecutive 1 s flushes (`SILENT_FLUSHES_BEFORE_DEGRADED`) in which it minted ≥ 20 SURBs and
+/// got nothing back, while a sibling pair still delivers. The planner's own refresh drops
+/// SIGSTOPped relayers within ~10–14 s, after which nothing is minted onto them. At 0.25 MB/s
+/// (2026-10-07) the balancer minted nothing for 3 s after the freeze and then only in 1–2 s lumps,
+/// so no dead pair ever strung five qualifying flushes together and degraded mode was never reached.
+const OUTAGE_MBPS: f64 = 1.0;
+
+/// The heavy load runs this long before the freeze, so the PID has left its post-warm-up idle
+/// and is minting onto every cached return pair when they go silent.
+const PRE_FREEZE: Duration = Duration::from_secs(5);
 
 /// After a session is dropped, its balancer gets this long to notice before production must stop.
 const DROP_GRACE: Duration = Duration::from_secs(2);
@@ -333,6 +369,10 @@ async fn surb_refills_should_track_consumption() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Planner refresh period for the degraded-mode scenario: long enough that the detector's five
+/// silent flushes complete before the planner re-weights away from the dead relayers.
+const SLOW_PLANNER_REFRESH: Duration = Duration::from_secs(60);
+
 /// What [`warmed_outage_session`] hands a scenario: the env (kept alive), the session halves, the
 /// relayers to freeze, the one left running, and the sampler already running since the warm-up.
 type WarmedSession = (
@@ -375,10 +415,16 @@ fn freeze_all_but_least_used(
 
 /// Bring up the outage cluster, open a 0-hop-out / 1-hop-back session with the client's balancer,
 /// warm it up with the sampler running, and pick the relayers to freeze.
-async fn warmed_outage_session(name: &str) -> anyhow::Result<WarmedSession> {
+async fn warmed_outage_session(
+    name: &str,
+    planner_refresh: Option<Duration>,
+) -> anyhow::Result<WarmedSession> {
     let size = request_cluster_size(OUTAGE_NODES);
     anyhow::ensure!(size >= 3, "outage scenarios need ≥3 nodes, got {size}");
-    let env = IntegrationEnv::setup().await?;
+    let env = match planner_refresh {
+        Some(period) => IntegrationEnv::setup_with_planner_refresh(period).await?,
+        None => IntegrationEnv::setup().await?,
+    };
     // 0-hop out / 1-hop back: freezing the relayer set takes the whole return path down while the
     // entry's keep-alives still reach the exit directly — the "return path silent, uplink fine"
     // shape the balancer reads as degraded.
@@ -425,64 +471,92 @@ async fn warmed_outage_session(name: &str) -> anyhow::Result<WarmedSession> {
     Ok((env, rx, tx, victims, survivor, sampler))
 }
 
-/// Fail as inconclusive, rather than pass, when degraded mode was never reached — the first run
-/// passed for exactly that reason.
-///
-/// Recognises degraded mode by the current controller's signature (level forced to 0 at the
-/// budget). A fix that keeps degraded mode but bounds it changes that signature, and this check then
-/// needs to read the `degraded=true` debug line or a metric instead.
-fn require_degraded(trace: &Trace, budget: f64, name: &str) -> anyhow::Result<()> {
-    anyhow::ensure!(
-        trace.degraded_samples(budget) > 0,
-        "{name}: inconclusive — the balancer never entered degraded mode (no sample with level 0 at \
-         the budget), so this run says nothing about production during an outage. With 1-hop return \
-         paths the planner logs `return-path relayer diversity collapsed … distinct_relayers=0` and \
-         degradation detection has nothing to corroborate; the 2026-10-07 run never reached it.",
-    );
-    Ok(())
-}
+/// Most of the outage's offered data may still arrive before the outage counts as one: above this,
+/// freezing the relayers did not take the return path down and the scenario measured nothing.
+const MAX_OUTAGE_ARRIVAL_PCT: f64 = 95.0;
 
 /// 2. A return-path outage with the client's config: does production stay bounded, or pin at the
 ///    budget while nothing comes back?
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 #[ignore = "requires hoprd/hoprd-localcluster binaries + a chain"]
 async fn return_outage_should_not_pin_surb_production_at_max() -> anyhow::Result<()> {
+    outage_scenario(
+        "outage",
+        "return_outage_should_not_pin_surb_production_at_max",
+        None,
+    )
+    .await
+}
+
+/// 5. The same outage with the planner's re-weighting slowed down, so the return-path detector
+///    fires and the balancer enters degraded mode, as in the incident at 12:04:54: does
+///    `sustain_on_return_path_loss` pin production at the budget?
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+#[ignore = "requires hoprd/hoprd-localcluster binaries + a chain"]
+async fn degraded_mode_should_not_pin_surb_production_at_max() -> anyhow::Result<()> {
+    outage_scenario(
+        "degraded",
+        "degraded_mode_should_not_pin_surb_production_at_max",
+        Some(SLOW_PLANNER_REFRESH),
+    )
+    .await
+}
+
+/// Freeze all return relayers but one, 5 s into a 1 MB/s load, and judge SURB production during
+/// the outage. With `slow_planner` set, degraded mode is a precondition (inconclusive without it).
+async fn outage_scenario(
+    name: &str,
+    csv: &str,
+    slow_planner: Option<Duration>,
+) -> anyhow::Result<()> {
     let cfg = gnosis_vpn_client_surb_config();
     let (_env, mut rx, mut tx, victims, survivor, sampler) =
-        warmed_outage_session("outage").await?;
+        warmed_outage_session(name, slow_planner).await?;
     let pre_outage = sampler.now();
 
+    // Freeze *into* a heavy load rather than before it: the dead pairs must keep receiving fresh
+    // SURBs for the detector to see them fall silent (see `OUTAGE_MBPS`).
     let thawed = Thawed(&victims);
-    for node in &victims {
-        node.pause()?;
-    }
-    let frozen_at = sampler.now();
-    tracing::info!(
-        frozen = victims.len(),
-        %survivor,
-        "return relayers frozen but one — outage begins"
+    let payload = tagged_payload(
+        OUTAGE_PHASE,
+        bytes_for(OUTAGE_MBPS, PRE_FREEZE + OUTAGE_DURATION),
     );
-
-    // Keep offering load into the outage: the entry still sends, little comes back until a re-plan
-    // moves the return path onto the survivor.
-    let during = pump_halves(
-        &mut rx,
-        &mut tx,
-        &tagged_payload(OUTAGE_PHASE, bytes_for(OFFERED_MBPS, OUTAGE_DURATION)),
-        "outage",
-        PUMP_TIMEOUT,
-        PumpOpts {
-            idle_budget: Some(OUTAGE_DURATION),
-            tail_grace: Some(OUTAGE_DURATION),
-            ..paced(OUTAGE_PHASE, OFFERED_MBPS)
-        },
-    )
-    .await?;
+    let freeze = async {
+        tokio::time::sleep(PRE_FREEZE).await;
+        for node in &victims {
+            node.pause()?;
+        }
+        tracing::info!(
+            frozen = victims.len(),
+            %survivor,
+            load_mbps = OUTAGE_MBPS,
+            "return relayers frozen but one, under load — outage begins"
+        );
+        anyhow::Ok(sampler.now())
+    };
+    // The entry keeps sending; little comes back until a re-plan moves the return path onto the
+    // survivor.
+    let (during, frozen_at) = tokio::join!(
+        pump_halves(
+            &mut rx,
+            &mut tx,
+            &payload,
+            "outage",
+            PUMP_TIMEOUT,
+            PumpOpts {
+                idle_budget: Some(OUTAGE_DURATION),
+                tail_grace: Some(OUTAGE_DURATION),
+                ..paced(OUTAGE_PHASE, OUTAGE_MBPS)
+            },
+        ),
+        freeze,
+    );
+    let (during, frozen_at) = (during?, frozen_at?);
     let outage_end = sampler.now();
     drop(thawed);
     let trace = sampler.stop().await?;
-    trace.maybe_write_csv("return_outage_should_not_pin_surb_production_at_max");
-    require_observable(&trace, "outage")?;
+    trace.maybe_write_csv(csv);
+    require_observable(&trace, name)?;
     anyhow::ensure!(
         during.outcome != PumpOutcome::SessionClosed,
         "the session was torn down during the outage — that is a different failure than this \
@@ -490,9 +564,9 @@ async fn return_outage_should_not_pin_surb_production_at_max() -> anyhow::Result
     );
 
     let budget = cfg.max_surbs_per_sec as f64;
-    // Pre-outage consumption from the session's own counter, over the warm-up after the fill.
+    // Consumption under the outage's own load, in the seconds before the freeze.
     let baseline = trace
-        .window(FILL_GRACE, pre_outage)
+        .window(pre_outage, frozen_at)
         .consume_rate()
         .unwrap_or_default();
     anyhow::ensure!(
@@ -500,6 +574,7 @@ async fn return_outage_should_not_pin_surb_production_at_max() -> anyhow::Result
         "no consumption measured before the outage — the warm-up did not carry traffic"
     );
     let outage = trace.window(frozen_at, outage_end);
+    let degraded_samples = outage.degraded_samples(budget);
     let peak = outage
         .peak_mint_rate(Duration::from_secs(1))
         .unwrap_or_default();
@@ -508,12 +583,31 @@ async fn return_outage_should_not_pin_surb_production_at_max() -> anyhow::Result
         baseline,
         peak,
         seconds_at_budget,
-        degraded_samples = outage.degraded_samples(budget),
+        degraded_samples,
         budget,
-        "balancer during the outage: {}",
+        "{name}: balancer during the outage: {}",
         outage.summary(),
     );
-    require_degraded(&outage, budget, "outage")?;
+    // Inconclusive, not a pass, when the freeze did not bite. Degraded mode is no precondition:
+    // the planner shifts minting off the dead relayers within ~4 s, before the detector's five
+    // silent flushes, so on this build it is rarely reached (see the module docs).
+    anyhow::ensure!(
+        during.arrival_pct() < MAX_OUTAGE_ARRIVAL_PCT,
+        "{name}: inconclusive — {:.1}% of the data still arrived, so freezing the relayers did not \
+         take the return path down",
+        during.arrival_pct(),
+    );
+    // Degraded mode is recognised by the current controller's signature (level forced to 0 at the
+    // budget); a fix that bounds degraded mode changes that, and this check must then read a
+    // metric or the `degraded=true` debug line instead.
+    anyhow::ensure!(
+        slow_planner.is_none() || degraded_samples > 0,
+        "{name}: inconclusive — degraded mode was never reached even with the planner refreshing \
+         every {:?}. Run with `hopr_transport=info,hopr_transport::protocol::surb_telemetry=debug` \
+         and check how far `silence run climbing` got and whether `refilling behind the re-plan` \
+         followed `return path silent, re-planned`.",
+        slow_planner.unwrap_or_default(),
+    );
 
     let allowed = (MAX_BURST_OVER_CONSUMPTION * baseline).max(BURST_FLOOR_FRACTION * budget);
     assert!(
@@ -521,7 +615,8 @@ async fn return_outage_should_not_pin_surb_production_at_max() -> anyhow::Result
         "SURB production during the return-path outage peaked at {peak:.0} SURB/s (allowed \
          {allowed:.0} against {baseline:.0} SURB/s consumed before it) and spent \
          {seconds_at_budget:.1}s at the {budget:.0} SURB/s budget (max {MAX_SECONDS_AT_BUDGET}s) — \
-         degraded mode with sustain_on_return_path_loss mints at max_surbs_per_sec",
+         the level estimate ignores SURBs lost on dead relayers, and each periodic correction (or \
+         degraded mode, if reached) drives production to max_surbs_per_sec",
     );
     Ok(())
 }
@@ -531,7 +626,8 @@ async fn return_outage_should_not_pin_surb_production_at_max() -> anyhow::Result
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 #[ignore = "requires hoprd/hoprd-localcluster binaries + a chain"]
 async fn dropping_a_session_should_stop_its_balancer() -> anyhow::Result<()> {
-    let (_env, mut rx, mut tx, victims, _survivor, sampler) = warmed_outage_session("drop").await?;
+    let (_env, mut rx, mut tx, victims, _survivor, sampler) =
+        warmed_outage_session("drop", None).await?;
 
     // Freeze the return path first, so a surviving balancer is loud (degraded mode at the budget)
     // rather than idle above target. The lifecycle-state assertion below catches an idle leak too.
