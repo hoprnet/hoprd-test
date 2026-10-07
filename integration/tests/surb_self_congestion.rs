@@ -59,6 +59,16 @@
 //! - An idle leaked balancer produces nothing, so scenario 3 also asserts the session's own
 //!   `hopr_session_lifetime_state` leaves Active.
 //!
+//! The second run (2026-10-07) reproduced 1 and 3 and refined scenario 1:
+//!
+//! - Under bursts the mean mint tracks consumption (438 vs 429 SURB/s) but the 1 s peak (1856)
+//!   sat within 8 % of a 4x bound, so it is now only logged. Scenario 1 asserts the windup itself —
+//!   output 0 with the level > 200 below target, 17 % of samples — and the initial fill at the
+//!   budget (3.5 s).
+//! - The dropped session stayed Active and minted 3532 SURBs, partly at the full budget after the
+//!   level estimate's periodic (~15 s) correction knocked it below target.
+//! - Scenario 2 stayed inconclusive: with 1-hop return paths degraded mode was never reached.
+//!
 //! `SURB_BALANCER_CSV_DIR=<dir>` writes each scenario's balancer series. The scenarios' own summary
 //! lines log under the `surb_self_congestion` target, so include it in `RUST_LOG`:
 //!
@@ -129,7 +139,8 @@ const BURSTS: usize = 15;
 /// design, and the incident's question is what happens after it.
 const FILL_GRACE: Duration = Duration::from_secs(15);
 
-/// A refill may run ahead of consumption, but not by more than this factor in any one second.
+/// During an outage, production may run ahead of the pre-outage consumption, but not by more than
+/// this factor in any one second.
 ///
 /// The incident ran ~10–20x: bursts at 3797–5063 SURB/s while the session consumed a few hundred.
 const MAX_BURST_OVER_CONSUMPTION: f64 = 4.0;
@@ -138,10 +149,19 @@ const MAX_BURST_OVER_CONSUMPTION: f64 = 4.0;
 /// held to "4x almost nothing".
 const BURST_FLOOR_FRACTION: f64 = 0.25;
 
+/// How far below target (in SURBs) the level must be for a zero output to count as starved.
+const STARVED_MARGIN: f64 = 200.0;
+
+/// Largest share of steady-state samples allowed to sit starved below target.
+///
+/// Measured on the current controller (2026-10-07, bursty load): 17 %. The P term alone commands
+/// ≥ 120 SURB/tick at 200 below target, so a controller without integral windup stays near 0.
+const MAX_STARVED_SHARE: f64 = 0.02;
+
 /// Largest share of steady-state samples allowed at ≥95 % of `max_surbs_per_sec`.
 const MAX_SHARE_AT_BUDGET: f64 = 0.05;
 
-/// Most seconds a degraded episode may spend producing at the full budget.
+/// Most seconds a fill or a degraded episode may spend producing at the full budget.
 const MAX_SECONDS_AT_BUDGET: f64 = 2.0;
 
 /// Phase tags, so a backlog from one phase cannot be counted as the next one arriving.
@@ -246,15 +266,16 @@ async fn surb_refills_should_track_consumption() -> anyhow::Result<()> {
     .await?;
     let trace = sampler.stop().await?;
     trace.maybe_write_csv("surb_refills_should_track_consumption");
-    require_observable(&trace, "steady")?;
+    require_observable(&trace, "bursty")?;
 
     let steady = trace.after(FILL_GRACE);
     let budget = cfg.max_surbs_per_sec as f64;
-    // Reported, not asserted: the fill runs at the budget by design, but it is the incident's
-    // stall-at-connect and worth seeing next to the steady state.
+    // The initial fill is the incident's stall-at-connect: the whole target requested at the
+    // budget before any traffic needs it.
     let fill = trace.window(Duration::ZERO, FILL_GRACE);
+    let fill_at_budget = fill.seconds_at_budget(budget);
     tracing::info!(
-        seconds_at_budget = fill.seconds_at_budget(budget),
+        seconds_at_budget = fill_at_budget,
         "initial fill: {}",
         fill.summary()
     );
@@ -265,11 +286,18 @@ async fn surb_refills_should_track_consumption() -> anyhow::Result<()> {
     let at_budget = steady
         .share_output_at_least(0.95 * budget)
         .unwrap_or_default();
+    let starved = steady
+        .share_starved_below_target(STARVED_MARGIN)
+        .unwrap_or_default();
+    // Reported, not asserted: the 1 s peak depends on burst size and sat within 8 % of any sane
+    // bound, so it flips between runs. `starved` is the threshold-free signature of the same lumps.
     tracing::info!(
         arrival_pct = transfer.arrival_pct(),
         longest_stall_s = transfer.longest_stall(),
         consumption,
         peak,
+        peak_over_consumption = peak / consumption.max(1.0),
+        starved,
         at_budget,
         budget,
         "bursty-load balancer: {}",
@@ -282,12 +310,18 @@ async fn surb_refills_should_track_consumption() -> anyhow::Result<()> {
          be judged on a session that is not carrying traffic",
         transfer.arrival_pct(),
     );
-    let allowed = (MAX_BURST_OVER_CONSUMPTION * consumption).max(BURST_FLOOR_FRACTION * budget);
     assert!(
-        peak <= allowed,
-        "SURB refill burst: {peak:.0} SURB/s in one second against {consumption:.0} SURB/s consumed \
-         (allowed {allowed:.0}, budget {budget:.0}) — the PID jumps to the budget whenever the level \
-         dips below target",
+        starved <= MAX_STARVED_SHARE,
+        "integral windup: output 0 while the level was > {STARVED_MARGIN:.0} below target in {:.1}% \
+         of the steady state (max {:.0}%) — the I term, wound negative by the last overshoot, holds \
+         the refill back until the deficit is large, then overshoots again",
+        starved * 100.0,
+        MAX_STARVED_SHARE * 100.0,
+    );
+    assert!(
+        fill_at_budget <= MAX_SECONDS_AT_BUDGET,
+        "initial fill requested the full {budget:.0} SURB/s budget for {fill_at_budget:.1} s \
+         (max {MAX_SECONDS_AT_BUDGET:.0} s) — the stall-at-connect",
     );
     assert!(
         at_budget <= MAX_SHARE_AT_BUDGET,
@@ -400,7 +434,10 @@ async fn warmed_outage_session(name: &str) -> anyhow::Result<WarmedSession> {
 fn require_degraded(trace: &Trace, budget: f64, name: &str) -> anyhow::Result<()> {
     anyhow::ensure!(
         trace.degraded_samples(budget) > 0,
-        "{name}: inconclusive — the balancer never entered degraded mode (no sample with level 0 at          the budget), so the return path was not reported silent and this run says nothing about          production during an outage. Check the log for `degraded=true` and `re-planned`.",
+        "{name}: inconclusive — the balancer never entered degraded mode (no sample with level 0 at \
+         the budget), so this run says nothing about production during an outage. With 1-hop return \
+         paths the planner logs `return-path relayer diversity collapsed … distinct_relayers=0` and \
+         degradation detection has nothing to corroborate; the 2026-10-07 run never reached it.",
     );
     Ok(())
 }
