@@ -800,6 +800,7 @@ async fn shaped_uplink_should_not_stall_downstream() -> anyhow::Result<()> {
             arm = name,
             uplink_mbit = mbit,
             arrival_pct = t.arrival_pct(),
+            ttfb_s = t.time_to_first_byte(),
             longest_stall_s = t.longest_stall(),
             p95_gap_s = t.inter_arrival_quantile(0.95),
             "{}",
@@ -815,12 +816,20 @@ async fn shaped_uplink_should_not_stall_downstream() -> anyhow::Result<()> {
         ctl.arrival_pct(),
         ctl.longest_stall(),
     );
+    // A stall that starts the transfer is the initial fill (2026-10-07: 5.1 s to first byte against
+    // 0.07 s for the control arm); one later on is a refill.
+    let prod_ttfb = prod.time_to_first_byte().unwrap_or_default();
+    let cause = if prod_ttfb >= prod.longest_stall() - 0.1 {
+        "the initial fill to target runs at the budget and queues the first data behind it"
+    } else {
+        "SURB refills congest the entry's own uplink"
+    };
     assert!(
         prod.arrival_pct() >= MIN_SHAPED_ARRIVAL_PCT
             && prod.longest_stall() <= MAX_SHAPED_STALL.as_secs_f64(),
         "with the client's SURB budget the downlink stalled on a {mbit} Mbit/s uplink: {:.1}% back, \
-         longest stall {:.1}s (control arm: {:.1}%, {:.1}s) — SURB refills congest the entry's own \
-         uplink",
+         longest stall {:.1}s, first byte after {prod_ttfb:.1}s (control arm: {:.1}%, {:.1}s) — \
+         {cause}",
         prod.arrival_pct(),
         prod.longest_stall(),
         ctl.arrival_pct(),
