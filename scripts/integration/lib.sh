@@ -21,6 +21,8 @@ it_env() {
   export BLOKLI_API_PORT="${BLOKLI_API_PORT:-8080}"
   export ANVIL_PORT="${ANVIL_PORT:-8545}"
   export CHAIN_DATA_DIR="${CHAIN_DATA_DIR:-/tmp/hopr-chain}"
+  grep -qa 'frozen-identities' "${HOPRD_LOCALCLUSTER_BIN}" 2>/dev/null && export HOPRD_FROZEN_IDENTITIES=1
+  return 0
 }
 
 # The PR whose `Requires:` lines name the rest of a breaking change-set; see README.
@@ -260,7 +262,7 @@ chain_up() {
   # anvil to a file, not the console. At --block-time 1 it narrates every block and every RPC
   # call: 4354 of 6973 lines in a two-scenario run came from anvil alone.
   echo "chain_up: starting anvil on ${rpc_url} (log: ${dir}/anvil.log)"
-  "${anvil}" --host 127.0.0.1 --port "${anvil_port}" --block-time 1 --accounts 10 --balance 10000 \
+  "${anvil}" --host 127.0.0.1 --port "${anvil_port}" --block-time 1 --mixed-mining --accounts 10 --balance 10000 \
     >"${dir}/anvil.log" 2>&1 &
   anvil_pid=$!
 

@@ -209,6 +209,8 @@ fn channel_funding_amount() -> String {
     "100 wxHOPR".to_string()
 }
 
+/// Every readiness check is a loopback HTTP call or a `status` read; a coarse interval only adds dead time.
+const LOCAL_POLL: Duration = Duration::from_millis(500);
 const CLUSTER_START_TIMEOUT: Duration = Duration::from_secs(600);
 const READYZ_TIMEOUT: Duration = Duration::from_secs(120);
 const PEER_DISCOVERY_TIMEOUT: Duration = Duration::from_secs(120);
@@ -590,6 +592,11 @@ async fn spawn_managed() -> anyhow::Result<ClusterHandle> {
         cmd.args(["--latency", &format!("config:{}", path.to_str().unwrap())]);
         tracing::info!(?path, "cluster will run with an artificial latency profile");
     }
+    // Fixed keys make bring-up idempotent against a chain kept alive across suites: nodes already
+    // funded, announced and channelled skip every transaction. Probed by lib.sh `it_env`.
+    if std::env::var_os("HOPRD_FROZEN_IDENTITIES").is_some() {
+        cmd.arg("--frozen-identities");
+    }
     cmd.args(["--chain-url", &chain_url]);
     cmd.env("HOPRD_USE_OPENTELEMETRY", "false");
     for (key, value) in REQUESTED_NODE_ENV
@@ -688,7 +695,7 @@ async fn wait_status_running(
             tokio::time::Instant::now() < deadline,
             "timeout ({timeout:?}) waiting for cluster 'running'"
         );
-        tokio::time::sleep(Duration::from_secs(3)).await;
+        tokio::time::sleep(LOCAL_POLL).await;
     }
 }
 
@@ -777,7 +784,7 @@ async fn await_nodes_ready() -> anyhow::Result<()> {
     let client = node_http_client();
     poll_cluster_until(
         READYZ_TIMEOUT,
-        Duration::from_secs(3),
+        LOCAL_POLL,
         "timeout waiting for cluster /readyz",
         |_i, port| {
             let client = client.clone();
@@ -799,7 +806,7 @@ async fn await_cluster_peers_discovered() -> anyhow::Result<()> {
     let expected = cluster_size() - 1;
     poll_cluster_until(
         PEER_DISCOVERY_TIMEOUT,
-        Duration::from_secs(3),
+        LOCAL_POLL,
         "timeout waiting for cluster peer discovery",
         |_i, port| {
             let client = client.clone();
@@ -828,7 +835,7 @@ async fn await_intracluster_channels_open() -> anyhow::Result<()> {
     let expected = cluster_size() - 1;
     poll_cluster_until(
         INTRACLUSTER_CHANNEL_TIMEOUT,
-        Duration::from_secs(5),
+        LOCAL_POLL,
         "timeout waiting for intracluster channels to open",
         |_i, port| {
             let client = client.clone();

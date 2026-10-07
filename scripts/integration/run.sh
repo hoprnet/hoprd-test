@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
-# Resolve versions, build hoprd + hoprd-localcluster + the blokli binary chain,
-# link edgli, and run the integration throughput test against a fresh flake-built
-# chain per scenario (no docker image).
+# Resolve versions, build hoprd + hoprd-localcluster + the blokli binary chain, link edgli,
+# and run every suite on one shared flake-built chain (no docker image).
 #
 # No stored state: the dispatching project supplies its rev, everything else resolves to the
 # head of its branch on LINE. The lines are NOT mixable; README has the branch table.
@@ -121,24 +120,25 @@ fi
 
 # ── Put the selected line's dependency set in place ──
 # Copied rather than `--manifest-path`: cargo insists on the name `Cargo.toml`.
-# Restored on exit so a later local cargo run is not silently on v5.
+# Restored on exit on BOTH lines: the edgli pin below rewrites the manifest and lock in place,
+# and a v4 run that left them dirty once got committed.
+MANIFEST_BACKUP="$(mktemp -d)"
+cp "${CRATE_CARGO}" "${MANIFEST_BACKUP}/Cargo.toml"
+cp "${CRATE_LOCK}" "${MANIFEST_BACKUP}/Cargo.lock"
+# shellcheck disable=SC2329  # invoked indirectly via the traps below
+restore_manifest() {
+  # Idempotent: the signal handler exits, firing the EXIT trap too.
+  [ -d "${MANIFEST_BACKUP}" ] || return 0
+  cp "${MANIFEST_BACKUP}/Cargo.toml" "${CRATE_CARGO}"
+  cp "${MANIFEST_BACKUP}/Cargo.lock" "${CRATE_LOCK}"
+  rm -rf "${MANIFEST_BACKUP}"
+}
+# Signals need their own trap, and the `exit` is load-bearing: a handler does not end
+# the script, so without it a cancelled job restores v4 then runs v5 suites against it.
+trap restore_manifest EXIT
+trap 'restore_manifest; exit 143' HUP INT TERM
 if [ "${LINE}" = "v5" ]; then
   echo "swapping in the v5 dependency set ..."
-  MANIFEST_BACKUP="$(mktemp -d)"
-  cp "${CRATE_CARGO}" "${MANIFEST_BACKUP}/Cargo.toml"
-  cp "${CRATE_LOCK}" "${MANIFEST_BACKUP}/Cargo.lock"
-  # shellcheck disable=SC2329  # invoked indirectly via the traps below
-  restore_manifest() {
-    # Idempotent: the signal handler exits, firing the EXIT trap too.
-    [ -d "${MANIFEST_BACKUP}" ] || return 0
-    cp "${MANIFEST_BACKUP}/Cargo.toml" "${CRATE_CARGO}"
-    cp "${MANIFEST_BACKUP}/Cargo.lock" "${CRATE_LOCK}"
-    rm -rf "${MANIFEST_BACKUP}"
-  }
-  # Signals need their own trap, and the `exit` is load-bearing: a handler does not end
-  # the script, so without it a cancelled job restores v4 then runs v5 suites against it.
-  trap restore_manifest EXIT
-  trap 'restore_manifest; exit 143' HUP INT TERM
   cp "${REPO_ROOT}/integration/Cargo.v5.toml" "${CRATE_CARGO}"
   cp "${REPO_ROOT}/integration/Cargo.v5.lock" "${CRATE_LOCK}"
 fi
@@ -205,18 +205,18 @@ if [ "${HOPRD_HOPRLIB_REV}" != "${EDGLI_HOPRLIB_REV}" ]; then
   echo "::warning::hoprd locks hoprnet ${HOPRD_HOPRLIB_REV:-unknown}, edge-client ${EDGLI_HOPRLIB_REV}; a wire change between them breaks every session" >&2
 fi
 
-# ── Run every localcluster suite, fresh chain per scenario ──
-# Everything that a local cluster can drive. `rotsee` is excluded because it needs a
-# funded Gnosis identity and a reachable public exit; `profiling` because it emits
-# traces rather than a verdict and needs its own build (--features prof, --profile
-# tracer, tokio_unstable).
-#
-# One run-binchain.sh call per test binary; it starts/stops bloklid+anvil per
-# scenario and reaps stray nodes in between. Suites are NOT short-circuited — a
-# failure in one still runs the rest, so a red run reports everything broken rather
-# than only the first thing.
+# ── Run every localcluster suite on one shared chain ──
+# `rotsee` needs a funded Gnosis identity; `profiling` emits traces, not a verdict.
+# Suites are NOT short-circuited, so a red run reports everything broken.
 BINCHAIN="$(dirname "${BASH_SOURCE[0]}")/run-binchain.sh"
 suite_rc=0
+
+# One chain for every suite: contract deploy + bloklid start happen once, and a localcluster with
+# frozen identities finds its nodes already funded, announced and channelled on it.
+it_env
+chain_start
+trap 'restore_manifest; chain_stop' EXIT
+export CHAIN_SHARED=1
 
 run_suite() { # target, then any scenarios to HOLD OUT of it
   local target="$1"
@@ -233,6 +233,8 @@ echo "running integration tests (binary chain) ..."
 run_suite integration
 # `return_path` is held out ENTIRELY: its scenarios assert an arrival ratio over an
 # unforced random relayer draw, so a red says nothing. Locally: `just return-path`.
+# Wiring it back in: run it LAST, after `chain_stop; chain_start`. Its 5-node cluster leaves nodes 3-4
+# announced and channelled but offline, and a later 3-node suite routes through them.
 # If it is ever wired back in, three of its five are the flaky ones — `spread` asserts a ratio on a
 # random draw, and the two survival scenarios miss their recovery deadline on some machines but not
 # others: `spread`, `common_mode_return_outage` and `a_symmetric_session_should_survive_relayer_loss`.

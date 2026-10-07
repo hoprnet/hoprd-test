@@ -32,7 +32,8 @@ Runner setup, secrets and the upstream gates are described in [`runner/README.md
 | `profiling.rs`                | tokio-console and Perfetto traces, no pass/fail result            | no      | `just profile`              |
 
 `return_path` is excluded from CI because its assertions depend on a random relayer choice, so a
-failure does not point to a bug. CI runs 3 scenarios on v4 and 11 on v5, each on a fresh chain.
+failure does not point to a bug. CI runs 3 scenarios on v4 and 11 on v5 on one chain per
+`run.sh` invocation, shared by every suite and warm with frozen identities after the first.
 
 Every scenario is `#[ignore]` because it needs external binaries. Thresholds are constants in
 the test files, and there are no settings to change. Shared code is in `integration/src/`:

@@ -49,17 +49,22 @@ if [ -n "${SCENARIOS_EXCEPT:-}" ]; then
 fi
 export SKIP_SCENARIOS="${SCENARIOS_EXCEPT:-}"
 
-trap chain_stop EXIT INT TERM
+# CHAIN_SHARED=1: the caller owns one chain for every suite (run.sh), so neither start nor stop it.
+[ "${CHAIN_SHARED:-0}" = 1 ] || trap chain_stop EXIT INT TERM
 
 rc=0
 for target in ${TARGETS}; do
-  echo "═══ ${target}${SCENARIOS:+ (${SCENARIOS})}: fresh chain ═══"
-  chain_start
+  if [ "${CHAIN_SHARED:-0}" = 1 ]; then
+    echo "═══ ${target}${SCENARIOS:+ (${SCENARIOS})}: shared chain ═══"
+  else
+    echo "═══ ${target}${SCENARIOS:+ (${SCENARIOS})}: fresh chain ═══"
+    chain_start
+  fi
   # shellcheck disable=SC2086  # SCENARIOS is a deliberate word-split list of libtest filters
   cargo_it "${target}" ${SCENARIOS:-} || rc=1
   # Reaped before the chain stops: the test process leaks its cluster on purpose
   # (integration/src/cluster.rs), so nothing else will clear it.
   reap_nodes
-  chain_stop
+  [ "${CHAIN_SHARED:-0}" = 1 ] || chain_stop
 done
 exit "${rc}"
