@@ -89,6 +89,39 @@ return-path *scenarios: build build-chain
     done
     exit "${rc}"
 
+# SURB self-congestion (binary chain): refill bursts, degraded-mode production pinned at the budget,
+# a dropped session's balancer outliving it, and -- with the entry uplink shaped -- the downlink
+# stalls of the 2026-09-24 incident. See integration/tests/surb_self_congestion.rs. Optional args =
+# test-name filters.
+#
+# One invocation PER SCENARIO, like `return-path`: two scenarios SIGSTOP cluster nodes. The shaped
+# scenario runs only when `scripts/shape-edge-uplink.sh up <mbit>` has been run (its
+# state file supplies EDGE_UPLINK_SHAPED_MBIT / EDGE_UPLINK_PORT); otherwise it is left out of the
+# default list, and fails with instructions if named explicitly.
+surb-congestion *scenarios: build build-chain
+    #!/usr/bin/env bash
+    set -euo pipefail
+    source scripts/integration/lib.sh
+    it_env
+    export TEST_TARGET=surb_self_congestion HOPRNET_SHELL='{{hoprnet}}'
+    state=/tmp/hopr-it-edge-uplink.env
+    if [ -f "${state}" ]; then
+      # shellcheck disable=SC1090
+      source "${state}"
+      export EDGE_UPLINK_SHAPED_MBIT EDGE_UPLINK_PORT
+    fi
+    scenarios='{{scenarios}}'
+    if [ -z "${scenarios}" ]; then
+      scenarios="$(list_scenarios surb_self_congestion)"
+      [ -n "${EDGE_UPLINK_SHAPED_MBIT:-}" ] ||
+        scenarios="${scenarios//shaped_uplink_should_not_stall_downstream/}"
+    fi
+    rc=0
+    for scenario in ${scenarios}; do
+      SCENARIOS="${scenario}" {{v5_deps}} bash scripts/integration/run-binchain.sh || rc=1
+    done
+    exit "${rc}"
+
 # Exit-origination repro (binary chain): does the exit keep originating packets when
 # one of its return paths can never be resolved? See integration/tests/exit_origination.rs.
 exit-origination: build build-chain
