@@ -36,6 +36,7 @@
 //! | [`dropping_a_session_should_stop_its_balancer`] | 5 nodes, SIGSTOP all but one relayer | 3 |
 //! | [`shaped_uplink_should_not_stall_downstream`] | 3 nodes + a shaped entry uplink (root) | the user-visible symptom |
 //! | [`degraded_mode_should_not_pin_surb_production_at_max`] | as 2, planner refresh slowed to 60 s | 2, via degraded mode |
+//! | [`shaped_outage_should_not_loop`] | 5 nodes, shaped entry uplink (root), relayers flapping | the loop: 1–3 feeding the symptom |
 //!
 //! The first three need no shaping: they read the balancer's own gauges and SURB counters (see
 //! [`hoprd_integration_test::balancer`]), which show the bursts and the pinning whether or not a link
@@ -110,13 +111,29 @@
 //! # Running them
 //!
 //! ```bash
-//! just surb-congestion                                       # the three unshaped scenarios
-//! sudo bash scripts/shape-edge-uplink.sh up 8    # then, for the fourth:
+//! just surb-congestion                                       # the unshaped scenarios
+//! sudo bash scripts/shape-edge-uplink.sh up 8                # 3-node cluster: entry on 19003
 //! just surb-congestion shaped_uplink_should_not_stall_downstream
+//! sudo bash scripts/shape-edge-uplink.sh down
+//! sudo bash scripts/shape-edge-uplink.sh up 8 19005          # 5-node cluster: entry on 19005
+//! just surb-congestion shaped_outage_should_not_loop
 //! sudo bash scripts/shape-edge-uplink.sh down
 //! ```
 //!
-//! One scenario per invocation — two of them SIGSTOP cluster nodes.
+//! One scenario per invocation — several of them SIGSTOP cluster nodes.
+//!
+//! # The loop (scenario 6)
+//!
+//! Scenario 4 (2026-10-07, 8 Mbit/s) stalled only once, at session start: 5.1 s to first byte
+//! against 0.07 s for the capped control arm — the initial fill queued the data behind it. With a
+//! healthy return path nothing re-triggered the flood afterwards. Scenario 6 adds the disturbance:
+//! after a 20 s warm-up (fill done, every return pair has delivered), three of four return
+//! relayers flap — 2 s SIGSTOPped, 1 s running — for 45 s. Their replies arrive late in bursts
+//! rather than never, so the planner keeps them as candidates while the SURBs routed through them
+//! go stale. Two loops can then close through the shaped uplink: stale SURBs → level correction →
+//! full-budget burst → queued replies → more stale SURBs; and late replies → degraded mode → 10 s
+//! at the budget → late replies again. Each arm runs the same outage; the capped control arm is
+//! the yardstick for the harm, and the count of separate full-budget episodes is the loop.
 
 use std::time::Duration;
 
@@ -847,6 +864,194 @@ async fn shaped_uplink_should_not_stall_downstream() -> anyhow::Result<()> {
         prod.longest_stall(),
         ctl.arrival_pct(),
         ctl.longest_stall(),
+    );
+    Ok(())
+}
+
+/// Warm-up before the relayers start flapping: long enough for every return pair to deliver once,
+/// so the detector treats their silence as "stopped working", and for the initial fill to finish.
+const FLAP_WARMUP: Duration = Duration::from_secs(20);
+
+/// How long the flapping lasts, and the data pumped through it.
+const FLAP_DURATION: Duration = Duration::from_secs(45);
+
+/// Each flap cycle: relayers stopped (replies wait in their sockets), then running (the backlog
+/// arrives late in a burst). "Late, not dead" — the incident's shape — without root.
+const FLAP_STOPPED: Duration = Duration::from_secs(2);
+const FLAP_RUNNING: Duration = Duration::from_secs(1);
+
+/// How much longer the production arm may stall than the control arm before the budget is blamed.
+const MAX_EXTRA_STALL: Duration = Duration::from_secs(2);
+
+/// How many percentage points of arrival the production arm may lose against the control arm.
+const MAX_ARRIVAL_DEFICIT_PCT: f64 = 5.0;
+
+/// Full-budget episodes allowed in one disturbance: one burst is a reaction, more is a loop.
+const MAX_BUDGET_EPISODES: usize = 1;
+
+/// One arm of scenario 6: warm a 0-hop-out / 1-hop-back session, then make all its return relayers
+/// but the least used one flap while pumping. Returns the transfer during the flapping and the
+/// balancer trace of that window.
+async fn flapping_arm(
+    env: &IntegrationEnv,
+    name: &str,
+    phase: u8,
+    cfg: SurbBalancerConfig,
+) -> anyhow::Result<(Transfer, Trace)> {
+    let (session, exit) = env
+        .open_unreliable_session_with_surbs(0, 1, Some(cfg))
+        .await?;
+    let candidates = env.relayer_candidates(exit)?;
+    anyhow::ensure!(
+        candidates.len() >= 2,
+        "{name}: need ≥2 return relayer candidates so one can stay up, got {}",
+        candidates.len()
+    );
+    let (mut rx, mut tx) = tokio::io::split(session);
+    let sampler = Sampler::start(SAMPLE_EVERY);
+
+    let forwarded_before = relayers::sample(&candidates).await;
+    let warmup = pump_halves(
+        &mut rx,
+        &mut tx,
+        &tagged_payload(WARMUP_PHASE, bytes_for(OFFERED_MBPS, FLAP_WARMUP)),
+        &format!("{name}-warmup"),
+        PUMP_TIMEOUT,
+        paced(WARMUP_PHASE, OFFERED_MBPS),
+    )
+    .await?;
+    anyhow::ensure!(
+        warmup.arrival_pct() > 50.0,
+        "{name}: warm-up only returned {:.1}% — the path was broken before the flapping",
+        warmup.arrival_pct(),
+    );
+    drain_until_quiet(&mut rx, DRAIN_QUIET, &format!("{name}-warmup")).await;
+    let spread = relayers::spread(&forwarded_before, &relayers::sample(&candidates).await);
+    let (victims, survivor) = freeze_all_but_least_used(&candidates, &spread);
+
+    let thawed = Thawed(&victims);
+    let flap_from = sampler.now();
+    let flap = async {
+        let until = tokio::time::Instant::now() + FLAP_DURATION;
+        let mut cycles = 0u32;
+        while tokio::time::Instant::now() < until {
+            for node in &victims {
+                node.pause()?;
+            }
+            tokio::time::sleep(FLAP_STOPPED).await;
+            for node in &victims {
+                node.resume()?;
+            }
+            tokio::time::sleep(FLAP_RUNNING).await;
+            cycles += 1;
+        }
+        anyhow::Ok(cycles)
+    };
+    let (transfer, cycles) = tokio::join!(
+        pump_halves(
+            &mut rx,
+            &mut tx,
+            &tagged_payload(phase, bytes_for(OFFERED_MBPS, FLAP_DURATION)),
+            name,
+            PUMP_TIMEOUT,
+            PumpOpts {
+                idle_budget: Some(FLAP_DURATION),
+                tail_grace: Some(Duration::from_secs(10)),
+                ..paced(phase, OFFERED_MBPS)
+            },
+        ),
+        flap,
+    );
+    let (transfer, cycles) = (transfer?, cycles?);
+    drop(thawed);
+    let flap_to = sampler.now();
+
+    // Close, not drop, so the next arm is not measured against this one's leftover balancer.
+    let _ = tx.shutdown().await;
+    drop(rx);
+    drop(tx);
+    tokio::time::sleep(Duration::from_secs(5)).await;
+    let trace = sampler.stop().await?;
+    trace.maybe_write_csv(&format!("shaped_outage_{name}"));
+    require_observable(&trace, name)?;
+    tracing::info!(
+        arm = name,
+        %survivor,
+        flapping = victims.len(),
+        cycles,
+        "{name}: return relayers flapped {}s stopped / {}s running",
+        FLAP_STOPPED.as_secs(),
+        FLAP_RUNNING.as_secs(),
+    );
+    Ok((transfer, trace.window(flap_from, flap_to)))
+}
+
+/// 6. The loop: on a shaped uplink, with the return relayers flapping (late, not dead), does the
+///    client's SURB budget keep returning to the maximum and hurt the data more than a capped
+///    budget does on the same link and the same outage?
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+#[ignore = "requires a shaped entry uplink (scripts/shape-edge-uplink.sh) + a chain"]
+async fn shaped_outage_should_not_loop() -> anyhow::Result<()> {
+    let size = request_cluster_size(OUTAGE_NODES);
+    anyhow::ensure!(size >= 3, "the shaped outage needs ≥3 nodes, got {size}");
+    let mbit = shaped_uplink_mbit()?;
+    let env = IntegrationEnv::setup().await?;
+    let (production, control) = shaped_arm_configs();
+
+    // Control first: if it leaks, it leaks at a sixth of the rate into the production arm.
+    let (ctl, ctl_trace) = flapping_arm(&env, "control", CONTROL_PHASE, control).await?;
+    let (prod, prod_trace) = flapping_arm(&env, "production", PRODUCTION_PHASE, production).await?;
+
+    let ctl_budget = control.max_surbs_per_sec as f64;
+    let budget = production.max_surbs_per_sec as f64;
+    for (name, t, trace, b) in [
+        ("control", &ctl, &ctl_trace, ctl_budget),
+        ("production", &prod, &prod_trace, budget),
+    ] {
+        tracing::info!(
+            arm = name,
+            uplink_mbit = mbit,
+            arrival_pct = t.arrival_pct(),
+            longest_stall_s = t.longest_stall(),
+            p95_gap_s = t.inter_arrival_quantile(0.95),
+            seconds_at_budget = trace.seconds_at_budget(b),
+            budget_episodes = trace.episodes_at_budget(b),
+            degraded_episodes = trace.degraded_episodes(b),
+            "{}",
+            trace.summary(),
+        );
+    }
+
+    anyhow::ensure!(
+        ctl.arrival_pct() > 50.0,
+        "shaped outage: inconclusive — the capped-budget control arm only got {:.1}% back, so the \
+         flapping itself broke the path and nothing can be attributed to the SURB budget",
+        ctl.arrival_pct(),
+    );
+
+    let episodes = prod_trace.episodes_at_budget(budget);
+    let degraded = prod_trace.degraded_episodes(budget);
+    let seconds = prod_trace.seconds_at_budget(budget);
+    // The user-visible harm, judged against the same outage at a capped budget.
+    assert!(
+        prod.longest_stall() <= ctl.longest_stall() + MAX_EXTRA_STALL.as_secs_f64()
+            && prod.arrival_pct() >= ctl.arrival_pct() - MAX_ARRIVAL_DEFICIT_PCT,
+        "with the client's SURB budget the flapping outage hurt the data more than at a capped budget \
+         on the same {mbit} Mbit/s uplink: {:.1}% back, longest stall {:.1}s (control: {:.1}%, \
+         {:.1}s). Production went to the {budget:.0} SURB/s budget {episodes} times ({seconds:.1}s, \
+         {degraded} of them degraded mode) — the flood queues the data and the replies behind it",
+        prod.arrival_pct(),
+        prod.longest_stall(),
+        ctl.arrival_pct(),
+        ctl.longest_stall(),
+    );
+    // The loop, even when the data survives it.
+    assert!(
+        episodes <= MAX_BUDGET_EPISODES,
+        "SURB production returned to the {budget:.0} SURB/s budget {episodes} times during one \
+         {}s outage ({seconds:.1}s in total, {degraded} of them degraded mode) — each correction or \
+         degraded episode feeds the congestion that causes the next",
+        FLAP_DURATION.as_secs(),
     );
     Ok(())
 }

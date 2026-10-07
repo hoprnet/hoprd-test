@@ -28,7 +28,7 @@ Runner setup, secrets and the upstream gates are described in [`runner/README.md
 | `pix_shapes.rs`               | PIX under end-user traffic shapes (needs `--pix-config`)          | v5 only | `LINE=v5 just pix-shapes`   |
 | `return_path.rs`              | reply spread over relayers, and survival when a relayer dies      | no      | `just return-path`          |
 | `upload_survival.rs`          | sustained upload; fails until hoprnet#8417 reaches the line       | no      | see `run.sh`                |
-| `surb_self_congestion.rs`     | SURB balancer bursts, outage, leak; stall on a shaped uplink      | no      | `just surb-congestion`      |
+| `surb_self_congestion.rs`     | SURB bursts, outage, leak; stall and loop on a shaped uplink      | no      | `just surb-congestion`      |
 | `rotsee.rs`                   | the same pump against a funded Rotsee identity (`EDGLI_ROTSEE_*`) | no      | `just rotsee`               |
 | `profiling.rs`                | tokio-console and Perfetto traces, no pass/fail result            | no      | `just profile`              |
 
