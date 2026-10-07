@@ -853,19 +853,14 @@ async fn await_edgli_channels_open(
     min_open: usize,
     timeout: Duration,
 ) -> anyhow::Result<()> {
-    poll_until(
-        timeout,
-        LOCAL_POLL,
-        "Edgli channel open",
-        || async {
-            let channels: Vec<ChannelEntry> = edgli.my_outgoing_channels().await?;
-            Ok(channels
-                .iter()
-                .filter(|c| c.status == ChannelStatus::Open)
-                .count()
-                >= min_open)
-        },
-    )
+    poll_until(timeout, LOCAL_POLL, "Edgli channel open", || async {
+        let channels: Vec<ChannelEntry> = edgli.my_outgoing_channels().await?;
+        Ok(channels
+            .iter()
+            .filter(|c| c.status == ChannelStatus::Open)
+            .count()
+            >= min_open)
+    })
     .await
 }
 
