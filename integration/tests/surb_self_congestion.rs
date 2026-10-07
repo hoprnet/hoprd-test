@@ -128,9 +128,9 @@
 //! against 0.07 s for the capped control arm — the initial fill queued the data behind it. With a
 //! healthy return path nothing re-triggered the flood afterwards. Scenario 6 adds the disturbance:
 //! after a 20 s warm-up (fill done, every return pair has delivered), three of four return
-//! relayers flap — 2 s SIGSTOPped, 1 s running — for 45 s. Their replies arrive late in bursts
-//! rather than never, so the planner keeps them as candidates while the SURBs routed through them
-//! go stale. Two loops can then close through the shaped uplink: stale SURBs → level correction →
+//! relayers flap — 6 s SIGSTOPped, 2 s running (`SURB_FLAP`) — for 45 s. A stop outlasts the
+//! entry's 2 s frame age, so to the session it is loss, while the relayers come back often enough
+//! for the planner to keep them as candidates and the SURBs routed through them go stale. Two loops can then close through the shaped uplink: stale SURBs → level correction →
 //! full-budget burst → queued replies → more stale SURBs; and late replies → degraded mode → 10 s
 //! at the budget → late replies again. Each arm runs the same outage; the capped control arm is
 //! the yardstick for the harm, and the count of separate full-budget episodes is the loop.
@@ -875,10 +875,30 @@ const FLAP_WARMUP: Duration = Duration::from_secs(20);
 /// How long the flapping lasts, and the data pumped through it.
 const FLAP_DURATION: Duration = Duration::from_secs(45);
 
-/// Each flap cycle: relayers stopped (replies wait in their sockets), then running (the backlog
-/// arrives late in a burst). "Late, not dead" — the incident's shape — without root.
-const FLAP_STOPPED: Duration = Duration::from_secs(2);
-const FLAP_RUNNING: Duration = Duration::from_secs(1);
+/// Each flap cycle: relayers stopped, then running. Stopped longer than the entry's 2 s
+/// `max_frame_age` and the detector's five silent 1 s flushes, so a stop is loss to the session
+/// and silence to the detector, while the relayers come back often enough to stay candidates.
+///
+/// The first run (2026-10-07) used 2 s / 1 s and passed: both arms got 100 % back with stalls of
+/// 2.1 s (one stop), no correction burst reached the budget and degraded mode never fired. Replies
+/// held for 2 s are merely late, which the session absorbs. Override with
+/// `SURB_FLAP=<stopped_s>/<running_s>` to sweep without recompiling.
+const FLAP_STOPPED: Duration = Duration::from_secs(6);
+const FLAP_RUNNING: Duration = Duration::from_secs(2);
+
+/// The flap cycle, from `SURB_FLAP` when set.
+fn flap_timing() -> anyhow::Result<(Duration, Duration)> {
+    let Ok(spec) = std::env::var("SURB_FLAP") else {
+        return Ok((FLAP_STOPPED, FLAP_RUNNING));
+    };
+    let parsed = spec.split_once('/').and_then(|(stopped, running)| {
+        Some((
+            Duration::from_secs_f64(stopped.trim().parse().ok()?),
+            Duration::from_secs_f64(running.trim().parse().ok()?),
+        ))
+    });
+    parsed.ok_or_else(|| anyhow::anyhow!("SURB_FLAP={spec:?}: expected <stopped_s>/<running_s>"))
+}
 
 /// How much longer the production arm may stall than the control arm before the budget is blamed.
 const MAX_EXTRA_STALL: Duration = Duration::from_secs(2);
@@ -929,7 +949,9 @@ async fn flapping_arm(
     let spread = relayers::spread(&forwarded_before, &relayers::sample(&candidates).await);
     let (victims, survivor) = freeze_all_but_least_used(&candidates, &spread);
 
+    let (stopped, running) = flap_timing()?;
     let thawed = Thawed(&victims);
+    let payload = tagged_payload(phase, bytes_for(OFFERED_MBPS, FLAP_DURATION));
     let flap_from = sampler.now();
     let flap = async {
         let until = tokio::time::Instant::now() + FLAP_DURATION;
@@ -938,11 +960,11 @@ async fn flapping_arm(
             for node in &victims {
                 node.pause()?;
             }
-            tokio::time::sleep(FLAP_STOPPED).await;
+            tokio::time::sleep(stopped).await;
             for node in &victims {
                 node.resume()?;
             }
-            tokio::time::sleep(FLAP_RUNNING).await;
+            tokio::time::sleep(running).await;
             cycles += 1;
         }
         anyhow::Ok(cycles)
@@ -951,12 +973,12 @@ async fn flapping_arm(
         pump_halves(
             &mut rx,
             &mut tx,
-            &tagged_payload(phase, bytes_for(OFFERED_MBPS, FLAP_DURATION)),
+            &payload,
             name,
             PUMP_TIMEOUT,
             PumpOpts {
                 idle_budget: Some(FLAP_DURATION),
-                tail_grace: Some(Duration::from_secs(10)),
+                tail_grace: Some(Duration::from_secs(10).max(2 * stopped)),
                 ..paced(phase, OFFERED_MBPS)
             },
         ),
@@ -979,9 +1001,9 @@ async fn flapping_arm(
         %survivor,
         flapping = victims.len(),
         cycles,
-        "{name}: return relayers flapped {}s stopped / {}s running",
-        FLAP_STOPPED.as_secs(),
-        FLAP_RUNNING.as_secs(),
+        "{name}: return relayers flapped {:.1}s stopped / {:.1}s running",
+        stopped.as_secs_f64(),
+        running.as_secs_f64(),
     );
     Ok((transfer, trace.window(flap_from, flap_to)))
 }
@@ -995,12 +1017,20 @@ async fn shaped_outage_should_not_loop() -> anyhow::Result<()> {
     let size = request_cluster_size(OUTAGE_NODES);
     anyhow::ensure!(size >= 3, "the shaped outage needs ≥3 nodes, got {size}");
     let mbit = shaped_uplink_mbit()?;
-    let env = IntegrationEnv::setup().await?;
     let (production, control) = shaped_arm_configs();
 
-    // Control first: if it leaks, it leaks at a sixth of the rate into the production arm.
-    let (ctl, ctl_trace) = flapping_arm(&env, "control", CONTROL_PHASE, control).await?;
-    let (prod, prod_trace) = flapping_arm(&env, "production", PRODUCTION_PHASE, production).await?;
+    // A fresh entry per arm: the planner's weights and re-plan cooldowns live in the entry, and the
+    // 2026-10-07 run showed the control arm's re-plan leaving the production arm's re-plans with
+    // nothing to move (`entries=0`), so it never reached degraded mode at all.
+    let (ctl, ctl_trace) = {
+        let env = IntegrationEnv::setup().await?;
+        flapping_arm(&env, "control", CONTROL_PHASE, control).await?
+    };
+    tokio::time::sleep(Duration::from_secs(5)).await;
+    let (prod, prod_trace) = {
+        let env = IntegrationEnv::setup().await?;
+        flapping_arm(&env, "production", PRODUCTION_PHASE, production).await?
+    };
 
     let ctl_budget = control.max_surbs_per_sec as f64;
     let budget = production.max_surbs_per_sec as f64;
