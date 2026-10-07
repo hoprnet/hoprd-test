@@ -128,12 +128,29 @@
 //! against 0.07 s for the capped control arm — the initial fill queued the data behind it. With a
 //! healthy return path nothing re-triggered the flood afterwards. Scenario 6 adds the disturbance:
 //! after a 20 s warm-up (fill done, every return pair has delivered), three of four return
-//! relayers flap — 6 s SIGSTOPped, 2 s running (`SURB_FLAP`) — for 45 s. A stop outlasts the
+//! relays are down 6 s and up 2 s, repeated, for 45 s. A stop outlasts the
 //! entry's 2 s frame age, so to the session it is loss, while the relayers come back often enough
 //! for the planner to keep them as candidates and the SURBs routed through them go stale. Two loops can then close through the shaped uplink: stale SURBs → level correction →
 //! full-budget burst → queued replies → more stale SURBs; and late replies → degraded mode → 10 s
 //! at the budget → late replies again. Each arm runs the same outage; the capped control arm is
 //! the yardstick for the harm, and the count of separate full-budget episodes is the loop.
+//!
+//! # Changing the relay outage
+//!
+//! Scenarios 2, 3, 4, 5 and 6 take return relays down by pausing their `hoprd` processes. Each has
+//! a default outage (S4: none); four environment variables override it without a rebuild — see
+//! [`hoprd_integration_test::outage`]:
+//!
+//! ```bash
+//! SURB_RELAY_OUTAGE=down|<down_s>/<up_s>|none   # whole outage, intermittent, or no outage
+//! SURB_RELAYS_DOWN=all-but-one|all|<n>          # which return relays go down
+//! SURB_LOAD_MBPS=1                              # data rate during the outage
+//! SURB_OUTAGE_SECS=30                           # how long it lasts
+//! ```
+//!
+//! With its defaults (2026-10-07) scenario 6 never reached the rate limit: at 0.25 MB/s the
+//! buffer-estimate corrections stay small. Scenario 2's conditions — relays down for the whole
+//! outage at 1 MB/s — are what reached it there.
 
 use std::time::Duration;
 
@@ -143,6 +160,7 @@ use hoprd_integration_test::{
     balancer::{STATE_ACTIVE, Sampler, Trace},
     cluster::{NodeInfo, request_cluster_size},
     env::{first_edge_p2p_port, gnosis_vpn_client_surb_config},
+    outage::{OutagePlan, Pattern, RelaysDown},
     pump::{
         PumpOpts, PumpOutcome, Shape, Transfer, drain_until_quiet, pace_for_rate_with_chunk,
         pump_halves, tagged_payload,
@@ -391,50 +409,22 @@ async fn surb_refills_should_track_consumption() -> anyhow::Result<()> {
 const SLOW_PLANNER_REFRESH: Duration = Duration::from_secs(60);
 
 /// What [`warmed_outage_session`] hands a scenario: the env (kept alive), the session halves, the
-/// relayers to freeze, the one left running, and the sampler already running since the warm-up.
+/// relays to take down, the ones left up, and the sampler already running since the warm-up.
 type WarmedSession = (
     IntegrationEnv,
     ReadHalf<HoprSession>,
     WriteHalf<HoprSession>,
     Vec<NodeInfo>,
-    Address,
+    Vec<Address>,
     Sampler,
 );
 
-/// Split the candidates into the relayers to freeze and the one to keep: the least used during the
-/// warm-up, so most of the return path goes silent while a re-plan still has somewhere to move.
-///
-/// Freezing every relayer looks like the stronger outage but triggers nothing: hopr-transport marks
-/// a session degraded only after a re-plan moved traffic, and with no relayer left none can.
-fn freeze_all_but_least_used(
-    candidates: &[NodeInfo],
-    spread: &relayers::RelayerSpread,
-) -> (Vec<NodeInfo>, Address) {
-    let count = |a: &Address| {
-        spread
-            .per_relayer
-            .iter()
-            .find(|(addr, _)| addr == a)
-            .map_or(0, |(_, n)| *n)
-    };
-    let survivor = candidates
-        .iter()
-        .min_by_key(|n| count(&n.address))
-        .map(|n| n.address)
-        .expect("candidates checked non-empty");
-    let victims = candidates
-        .iter()
-        .filter(|n| n.address != survivor)
-        .cloned()
-        .collect();
-    (victims, survivor)
-}
-
 /// Bring up the outage cluster, open a 0-hop-out / 1-hop-back session with the client's balancer,
-/// warm it up with the sampler running, and pick the relayers to freeze.
+/// warm it up with the sampler running, and pick the relays the plan takes down.
 async fn warmed_outage_session(
     name: &str,
     planner_refresh: Option<Duration>,
+    plan: &OutagePlan,
 ) -> anyhow::Result<WarmedSession> {
     let size = request_cluster_size(OUTAGE_NODES);
     anyhow::ensure!(size >= 3, "outage scenarios need ≥3 nodes, got {size}");
@@ -451,7 +441,7 @@ async fn warmed_outage_session(
     let candidates = env.relayer_candidates(exit)?;
     anyhow::ensure!(
         candidates.len() >= 2,
-        "{name}: need ≥2 return relayer candidates so one can stay up, got {}",
+        "{name}: need ≥2 return relay candidates, got {}",
         candidates.len()
     );
     let (mut rx, mut tx) = tokio::io::split(session);
@@ -478,14 +468,15 @@ async fn warmed_outage_session(
     );
     drain_until_quiet(&mut rx, DRAIN_QUIET, "warm-up").await;
     let spread = relayers::spread(&forwarded_before, &relayers::sample(&candidates).await);
-    let (victims, survivor) = freeze_all_but_least_used(&candidates, &spread);
+    let (down, up) = plan.pick(&candidates, &spread);
+    anyhow::ensure!(!down.is_empty(), "{name}: the outage takes no relay down");
     tracing::info!(
-        %survivor,
-        frozen = victims.len(),
-        "return relayers during warm-up: {}",
+        ?up,
+        down = down.len(),
+        "return relays during warm-up: {}",
         spread.summary()
     );
-    Ok((env, rx, tx, victims, survivor, sampler))
+    Ok((env, rx, tx, down, up, sampler))
 }
 
 /// Most of the outage's offered data may still arrive before the outage counts as one: above this,
@@ -527,29 +518,31 @@ async fn outage_scenario(
     slow_planner: Option<Duration>,
 ) -> anyhow::Result<()> {
     let cfg = gnosis_vpn_client_surb_config();
-    let (_env, mut rx, mut tx, victims, survivor, sampler) =
-        warmed_outage_session(name, slow_planner).await?;
+    let default = OutagePlan {
+        pattern: Pattern::Down,
+        relays: RelaysDown::AllButOne,
+        load_mbps: OUTAGE_MBPS,
+        duration: OUTAGE_DURATION,
+    };
+    let plan = OutagePlan::configure(Some(default), default)?
+        .ok_or_else(|| anyhow::anyhow!("{name}: SURB_RELAY_OUTAGE=none leaves nothing to test"))?;
+    let (_env, mut rx, mut tx, down, up, sampler) =
+        warmed_outage_session(name, slow_planner, &plan).await?;
     let pre_outage = sampler.now();
 
-    // Freeze *into* a heavy load rather than before it: the dead pairs must keep receiving fresh
-    // SURBs for the detector to see them fall silent (see `OUTAGE_MBPS`).
-    let thawed = Thawed(&victims);
+    // Start the outage *into* a running load rather than before it: the dead pairs must keep
+    // receiving fresh SURBs for the detector to see them fall silent (see `OUTAGE_MBPS`).
+    let thawed = Thawed(&down);
     let payload = tagged_payload(
         OUTAGE_PHASE,
-        bytes_for(OUTAGE_MBPS, PRE_FREEZE + OUTAGE_DURATION),
+        bytes_for(plan.load_mbps, PRE_FREEZE + plan.duration),
     );
-    let freeze = async {
+    let outage = async {
         tokio::time::sleep(PRE_FREEZE).await;
-        for node in &victims {
-            node.pause()?;
-        }
-        tracing::info!(
-            frozen = victims.len(),
-            %survivor,
-            load_mbps = OUTAGE_MBPS,
-            "return relayers frozen but one, under load — outage begins"
-        );
-        anyhow::Ok(sampler.now())
+        tracing::info!(?up, "outage begins: {}", plan.describe());
+        let started = sampler.now();
+        plan.run(&down).await?;
+        anyhow::Ok(started)
     };
     // The entry keeps sending; little comes back until a re-plan moves the return path onto the
     // survivor.
@@ -561,12 +554,12 @@ async fn outage_scenario(
             "outage",
             PUMP_TIMEOUT,
             PumpOpts {
-                idle_budget: Some(OUTAGE_DURATION),
-                tail_grace: Some(OUTAGE_DURATION),
-                ..paced(OUTAGE_PHASE, OUTAGE_MBPS)
+                idle_budget: Some(plan.duration),
+                tail_grace: Some(plan.longest_down().max(Duration::from_secs(10))),
+                ..paced(OUTAGE_PHASE, plan.load_mbps)
             },
         ),
-        freeze,
+        outage,
     );
     let (during, frozen_at) = (during?, frozen_at?);
     let outage_end = sampler.now();
@@ -643,28 +636,50 @@ async fn outage_scenario(
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 #[ignore = "requires hoprd/hoprd-localcluster binaries + a chain"]
 async fn dropping_a_session_should_stop_its_balancer() -> anyhow::Result<()> {
-    let (_env, mut rx, mut tx, victims, _survivor, sampler) =
-        warmed_outage_session("drop", None).await?;
-
-    // Freeze the return path first, so a surviving balancer is loud (degraded mode at the budget)
-    // rather than idle above target. The lifecycle-state assertion below catches an idle leak too.
-    let thawed = Thawed(&victims);
-    for node in &victims {
-        node.pause()?;
-    }
-    let _ = pump_halves(
-        &mut rx,
-        &mut tx,
-        &tagged_payload(OUTAGE_PHASE, bytes_for(OFFERED_MBPS, DETECTION_GRACE * 2)),
-        "drop-before",
-        PUMP_TIMEOUT,
-        PumpOpts {
-            idle_budget: Some(DETECTION_GRACE * 2),
-            tail_grace: Some(Duration::from_secs(1)),
-            ..paced(OUTAGE_PHASE, OFFERED_MBPS)
-        },
-    )
-    .await?;
+    let default = OutagePlan {
+        pattern: Pattern::Down,
+        relays: RelaysDown::AllButOne,
+        load_mbps: OFFERED_MBPS,
+        duration: DETECTION_GRACE * 2,
+    };
+    // The outage makes a surviving balancer loud (degraded mode at the rate limit) rather than
+    // idle above target. The lifecycle-state assertion below catches an idle leak too, so
+    // `SURB_RELAY_OUTAGE=none` is allowed here.
+    let plan = OutagePlan::configure(Some(default), default)?;
+    let (_env, mut rx, mut tx, down, _up, sampler) =
+        warmed_outage_session("drop", None, &plan.unwrap_or(default)).await?;
+    let down = if plan.is_some() { down } else { Vec::new() };
+    let thawed = Thawed(&down);
+    let (load, before_drop_for) = plan.map_or((OFFERED_MBPS, default.duration), |p| {
+        (p.load_mbps, p.duration)
+    });
+    let outage = async {
+        match plan {
+            Some(plan) => {
+                tracing::info!("outage before the drop: {}", plan.describe());
+                plan.run(&down).await.map(|_| ())
+            }
+            None => Ok(()),
+        }
+    };
+    let payload = tagged_payload(OUTAGE_PHASE, bytes_for(load, before_drop_for));
+    let (pumped, outage) = tokio::join!(
+        pump_halves(
+            &mut rx,
+            &mut tx,
+            &payload,
+            "drop-before",
+            PUMP_TIMEOUT,
+            PumpOpts {
+                idle_budget: Some(before_drop_for),
+                tail_grace: Some(Duration::from_secs(1)),
+                ..paced(OUTAGE_PHASE, load)
+            },
+        ),
+        outage,
+    );
+    pumped?;
+    outage?;
 
     // Drop both halves without `shutdown()`: the session handle goes away and nothing tells the
     // session manager.
@@ -726,27 +741,66 @@ const CONTROL_SURB_UPSTREAM_BITS: u64 = 2_000_000;
 /// How long each arm pumps.
 const ARM_DURATION: Duration = Duration::from_secs(60);
 
-/// Open one arm, pump it, close it, and require its balancer to go quiet before the next arm.
+/// When scenario 4 runs with a relay outage (`SURB_RELAY_OUTAGE` set), how far into each run the
+/// outage starts: after the initial fill, so the two effects are not mixed.
+const SHAPED_OUTAGE_START: Duration = Duration::from_secs(20);
+
+/// Open one run, pump it (with the relay outage, if any), close it, and require its balancer to go
+/// quiet before the next run.
 async fn shaped_arm(
     env: &IntegrationEnv,
     name: &str,
     phase: u8,
     cfg: SurbBalancerConfig,
+    plan: Option<OutagePlan>,
 ) -> anyhow::Result<(Transfer, Trace)> {
-    let (session, _exit) = env
+    let (session, exit) = env
         .open_unreliable_session_with_surbs(1, 1, Some(cfg))
         .await?;
+    let candidates = env.relayer_candidates(exit)?;
     let (mut rx, mut tx) = tokio::io::split(session);
     let sampler = Sampler::start(SAMPLE_EVERY);
-    let transfer = pump_halves(
-        &mut rx,
-        &mut tx,
-        &tagged_payload(phase, bytes_for(OFFERED_MBPS, ARM_DURATION)),
-        name,
-        PUMP_TIMEOUT,
-        paced(phase, OFFERED_MBPS),
-    )
-    .await?;
+    let load = plan.map_or(OFFERED_MBPS, |p| p.load_mbps);
+    let forwarded_before = relayers::sample(&candidates).await;
+    let outage = async {
+        let Some(plan) = plan else {
+            return anyhow::Ok(());
+        };
+        tokio::time::sleep(SHAPED_OUTAGE_START).await;
+        let spread = relayers::spread(&forwarded_before, &relayers::sample(&candidates).await);
+        let (down, up) = plan.pick(&candidates, &spread);
+        anyhow::ensure!(!down.is_empty(), "{name}: the outage takes no relay down");
+        tracing::info!(?up, "{name}: outage begins: {}", plan.describe());
+        // Resumes the relays even if this future is dropped half-way.
+        let _thawed = Thawed(&down);
+        plan.run(&down).await?;
+        Ok(())
+    };
+    let payload = tagged_payload(phase, bytes_for(load, ARM_DURATION));
+    let (transfer, outage) = tokio::join!(
+        pump_halves(
+            &mut rx,
+            &mut tx,
+            &payload,
+            name,
+            PUMP_TIMEOUT,
+            PumpOpts {
+                // Unchanged from `paced` without an outage; long enough to outlast one with it.
+                idle_budget: Some(
+                    plan.map_or(Duration::ZERO, |p| p.duration)
+                        .max(Duration::from_secs(20)),
+                ),
+                tail_grace: Some(
+                    plan.map_or(Duration::ZERO, |p| p.longest_down())
+                        .max(Duration::from_secs(10)),
+                ),
+                ..paced(phase, load)
+            },
+        ),
+        outage,
+    );
+    let transfer = transfer?;
+    outage?;
     // Close, not drop, so the next arm is not measured against this one's leftover balancer.
     let _ = tx.shutdown().await;
     drop(rx);
@@ -766,7 +820,7 @@ async fn shaped_arm(
 
 /// The entry uplink's shaped rate, after checking the shaper sits on this binary's entry port and
 /// leaves headroom over the data. Call after any `request_cluster_size`: the port depends on it.
-fn shaped_uplink_mbit() -> anyhow::Result<f64> {
+fn shaped_uplink_mbit(data_mbps: f64) -> anyhow::Result<f64> {
     let mbit: f64 = std::env::var("EDGE_UPLINK_SHAPED_MBIT")
         .ok()
         .and_then(|v| v.parse().ok())
@@ -789,7 +843,7 @@ fn shaped_uplink_mbit() -> anyhow::Result<f64> {
          with that port",
         first_edge_p2p_port(),
     );
-    let data_mbit = OFFERED_MBPS * 8.0;
+    let data_mbit = data_mbps * 8.0;
     anyhow::ensure!(
         mbit >= 2.0 * data_mbit,
         "a {mbit} Mbit/s uplink leaves no headroom over the {data_mbit} Mbit/s of data; shape it to \
@@ -815,13 +869,25 @@ fn shaped_arm_configs() -> (SurbBalancerConfig, SurbBalancerConfig) {
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 #[ignore = "requires a shaped entry uplink (scripts/shape-edge-uplink.sh) + a chain"]
 async fn shaped_uplink_should_not_stall_downstream() -> anyhow::Result<()> {
-    let mbit = shaped_uplink_mbit()?;
+    let template = OutagePlan {
+        pattern: Pattern::Down,
+        relays: RelaysDown::AllButOne,
+        load_mbps: OFFERED_MBPS,
+        duration: Duration::from_secs(20),
+    };
+    // No outage unless asked for: by default the scenario measures the uplink alone.
+    let plan = OutagePlan::configure(None, template)?;
+    let mbit = shaped_uplink_mbit(plan.map_or(OFFERED_MBPS, |p| p.load_mbps))?;
     let env = IntegrationEnv::setup().await?;
     let (production, control) = shaped_arm_configs();
+    if let Some(plan) = plan {
+        tracing::info!("shaped uplink with a relay outage: {}", plan.describe());
+    }
 
     // Control first: if it leaks, it leaks at a sixth of the rate into the production arm.
-    let (ctl, ctl_trace) = shaped_arm(&env, "control", CONTROL_PHASE, control).await?;
-    let (prod, prod_trace) = shaped_arm(&env, "production", PRODUCTION_PHASE, production).await?;
+    let (ctl, ctl_trace) = shaped_arm(&env, "control", CONTROL_PHASE, control, plan).await?;
+    let (prod, prod_trace) =
+        shaped_arm(&env, "production", PRODUCTION_PHASE, production, plan).await?;
     for (name, t, trace) in [
         ("control", &ctl, &ctl_trace),
         ("production", &prod, &prod_trace),
@@ -872,33 +938,15 @@ async fn shaped_uplink_should_not_stall_downstream() -> anyhow::Result<()> {
 /// so the detector treats their silence as "stopped working", and for the initial fill to finish.
 const FLAP_WARMUP: Duration = Duration::from_secs(20);
 
-/// How long the flapping lasts, and the data pumped through it.
+/// Default outage length for scenario 6.
 const FLAP_DURATION: Duration = Duration::from_secs(45);
 
-/// Each flap cycle: relayers stopped, then running. Stopped longer than the entry's 2 s
-/// `max_frame_age` and the detector's five silent 1 s flushes, so a stop is loss to the session
-/// and silence to the detector, while the relayers come back often enough to stay candidates.
-///
-/// The first run (2026-10-07) used 2 s / 1 s and passed: both arms got 100 % back with stalls of
-/// 2.1 s (one stop), no correction burst reached the budget and degraded mode never fired. Replies
-/// held for 2 s are merely late, which the session absorbs. Override with
-/// `SURB_FLAP=<stopped_s>/<running_s>` to sweep without recompiling.
-const FLAP_STOPPED: Duration = Duration::from_secs(6);
-const FLAP_RUNNING: Duration = Duration::from_secs(2);
-
-/// The flap cycle, from `SURB_FLAP` when set.
-fn flap_timing() -> anyhow::Result<(Duration, Duration)> {
-    let Ok(spec) = std::env::var("SURB_FLAP") else {
-        return Ok((FLAP_STOPPED, FLAP_RUNNING));
-    };
-    let parsed = spec.split_once('/').and_then(|(stopped, running)| {
-        Some((
-            Duration::from_secs_f64(stopped.trim().parse().ok()?),
-            Duration::from_secs_f64(running.trim().parse().ok()?),
-        ))
-    });
-    parsed.ok_or_else(|| anyhow::anyhow!("SURB_FLAP={spec:?}: expected <stopped_s>/<running_s>"))
-}
+/// Default for scenario 6: relays down longer than the entry's 2 s `max_frame_age` and the
+/// detector's five silent 1 s flushes, so each down period is loss to the session and silence to
+/// the detector, while the relays come back often enough to stay path candidates. 2 s / 1 s
+/// (2026-10-07) was only delay: both runs got everything back.
+const FLAP_DOWN: Duration = Duration::from_secs(6);
+const FLAP_UP: Duration = Duration::from_secs(2);
 
 /// How much longer the production arm may stall than the control arm before the budget is blamed.
 const MAX_EXTRA_STALL: Duration = Duration::from_secs(2);
@@ -909,14 +957,14 @@ const MAX_ARRIVAL_DEFICIT_PCT: f64 = 5.0;
 /// Full-budget episodes allowed in one disturbance: one burst is a reaction, more is a loop.
 const MAX_BUDGET_EPISODES: usize = 1;
 
-/// One arm of scenario 6: warm a 0-hop-out / 1-hop-back session, then make all its return relayers
-/// but the least used one flap while pumping. Returns the transfer during the flapping and the
-/// balancer trace of that window.
+/// One run of scenario 6: warm a 0-hop-out / 1-hop-back session, then run the relay outage while
+/// pumping. Returns the transfer during the outage and the balancer trace of that window.
 async fn flapping_arm(
     env: &IntegrationEnv,
     name: &str,
     phase: u8,
     cfg: SurbBalancerConfig,
+    plan: OutagePlan,
 ) -> anyhow::Result<(Transfer, Trace)> {
     let (session, exit) = env
         .open_unreliable_session_with_surbs(0, 1, Some(cfg))
@@ -924,7 +972,7 @@ async fn flapping_arm(
     let candidates = env.relayer_candidates(exit)?;
     anyhow::ensure!(
         candidates.len() >= 2,
-        "{name}: need ≥2 return relayer candidates so one can stay up, got {}",
+        "{name}: need ≥2 return relayer candidates, got {}",
         candidates.len()
     );
     let (mut rx, mut tx) = tokio::io::split(session);
@@ -947,29 +995,13 @@ async fn flapping_arm(
     );
     drain_until_quiet(&mut rx, DRAIN_QUIET, &format!("{name}-warmup")).await;
     let spread = relayers::spread(&forwarded_before, &relayers::sample(&candidates).await);
-    let (victims, survivor) = freeze_all_but_least_used(&candidates, &spread);
+    let (down, up) = plan.pick(&candidates, &spread);
+    anyhow::ensure!(!down.is_empty(), "{name}: the outage takes no relay down");
 
-    let (stopped, running) = flap_timing()?;
-    let thawed = Thawed(&victims);
-    let payload = tagged_payload(phase, bytes_for(OFFERED_MBPS, FLAP_DURATION));
-    let flap_from = sampler.now();
-    let flap = async {
-        let until = tokio::time::Instant::now() + FLAP_DURATION;
-        let mut cycles = 0u32;
-        while tokio::time::Instant::now() < until {
-            for node in &victims {
-                node.pause()?;
-            }
-            tokio::time::sleep(stopped).await;
-            for node in &victims {
-                node.resume()?;
-            }
-            tokio::time::sleep(running).await;
-            cycles += 1;
-        }
-        anyhow::Ok(cycles)
-    };
-    let (transfer, cycles) = tokio::join!(
+    let thawed = Thawed(&down);
+    let payload = tagged_payload(phase, bytes_for(plan.load_mbps, plan.duration));
+    let outage_from = sampler.now();
+    let (transfer, periods) = tokio::join!(
         pump_halves(
             &mut rx,
             &mut tx,
@@ -977,16 +1009,16 @@ async fn flapping_arm(
             name,
             PUMP_TIMEOUT,
             PumpOpts {
-                idle_budget: Some(FLAP_DURATION),
-                tail_grace: Some(Duration::from_secs(10).max(2 * stopped)),
-                ..paced(phase, OFFERED_MBPS)
+                idle_budget: Some(plan.duration),
+                tail_grace: Some(plan.longest_down().max(Duration::from_secs(10))),
+                ..paced(phase, plan.load_mbps)
             },
         ),
-        flap,
+        plan.run(&down),
     );
-    let (transfer, cycles) = (transfer?, cycles?);
+    let (transfer, periods) = (transfer?, periods?);
     drop(thawed);
-    let flap_to = sampler.now();
+    let outage_to = sampler.now();
 
     // Close, not drop, so the next arm is not measured against this one's leftover balancer.
     let _ = tx.shutdown().await;
@@ -998,17 +1030,16 @@ async fn flapping_arm(
     require_observable(&trace, name)?;
     tracing::info!(
         arm = name,
-        %survivor,
-        flapping = victims.len(),
-        cycles,
-        "{name}: return relayers flapped {:.1}s stopped / {:.1}s running",
-        stopped.as_secs_f64(),
-        running.as_secs_f64(),
+        ?up,
+        down = down.len(),
+        down_periods = periods,
+        "{name}: {}",
+        plan.describe(),
     );
-    Ok((transfer, trace.window(flap_from, flap_to)))
+    Ok((transfer, trace.window(outage_from, outage_to)))
 }
 
-/// 6. The loop: on a shaped uplink, with the return relayers flapping (late, not dead), does the
+/// 6. The feedback loop: on a shaped uplink, with return relays going down intermittently, does the
 ///    client's SURB budget keep returning to the maximum and hurt the data more than a capped
 ///    budget does on the same link and the same outage?
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
@@ -1016,20 +1047,33 @@ async fn flapping_arm(
 async fn shaped_outage_should_not_loop() -> anyhow::Result<()> {
     let size = request_cluster_size(OUTAGE_NODES);
     anyhow::ensure!(size >= 3, "the shaped outage needs ≥3 nodes, got {size}");
-    let mbit = shaped_uplink_mbit()?;
+    let default = OutagePlan {
+        pattern: Pattern::Intermittent {
+            down: FLAP_DOWN,
+            up: FLAP_UP,
+        },
+        relays: RelaysDown::AllButOne,
+        load_mbps: OFFERED_MBPS,
+        duration: FLAP_DURATION,
+    };
+    let plan = OutagePlan::configure(Some(default), default)?.ok_or_else(|| {
+        anyhow::anyhow!("shaped outage: SURB_RELAY_OUTAGE=none leaves nothing to test")
+    })?;
+    let mbit = shaped_uplink_mbit(plan.load_mbps)?;
     let (production, control) = shaped_arm_configs();
+    tracing::info!(uplink_mbit = mbit, "shaped outage: {}", plan.describe());
 
     // A fresh entry per arm: the planner's weights and re-plan cooldowns live in the entry, and the
     // 2026-10-07 run showed the control arm's re-plan leaving the production arm's re-plans with
     // nothing to move (`entries=0`), so it never reached degraded mode at all.
     let (ctl, ctl_trace) = {
         let env = IntegrationEnv::setup().await?;
-        flapping_arm(&env, "control", CONTROL_PHASE, control).await?
+        flapping_arm(&env, "control", CONTROL_PHASE, control, plan).await?
     };
     tokio::time::sleep(Duration::from_secs(5)).await;
     let (prod, prod_trace) = {
         let env = IntegrationEnv::setup().await?;
-        flapping_arm(&env, "production", PRODUCTION_PHASE, production).await?
+        flapping_arm(&env, "production", PRODUCTION_PHASE, production, plan).await?
     };
 
     let ctl_budget = control.max_surbs_per_sec as f64;
@@ -1052,36 +1096,38 @@ async fn shaped_outage_should_not_loop() -> anyhow::Result<()> {
         );
     }
 
-    anyhow::ensure!(
-        ctl.arrival_pct() > 50.0,
-        "shaped outage: inconclusive — the capped-budget control arm only got {:.1}% back, so the \
-         flapping itself broke the path and nothing can be attributed to the SURB budget",
-        ctl.arrival_pct(),
-    );
-
     let episodes = prod_trace.episodes_at_budget(budget);
     let degraded = prod_trace.degraded_episodes(budget);
     let seconds = prod_trace.seconds_at_budget(budget);
-    // The user-visible harm, judged against the same outage at a capped budget.
-    assert!(
-        prod.longest_stall() <= ctl.longest_stall() + MAX_EXTRA_STALL.as_secs_f64()
-            && prod.arrival_pct() >= ctl.arrival_pct() - MAX_ARRIVAL_DEFICIT_PCT,
-        "with the client's SURB budget the flapping outage hurt the data more than at a capped budget \
+    // The user-visible harm, judged against the same outage at a capped budget — only when the
+    // control arm still carried data; an outage that takes everything down leaves only the loop
+    // check below.
+    if ctl.arrival_pct() <= 50.0 {
+        tracing::warn!(
+            control_arrival_pct = ctl.arrival_pct(),
+            "shaped outage: the outage itself broke the path; harm is not compared, only the loop"
+        );
+    } else {
+        assert!(
+            prod.longest_stall() <= ctl.longest_stall() + MAX_EXTRA_STALL.as_secs_f64()
+                && prod.arrival_pct() >= ctl.arrival_pct() - MAX_ARRIVAL_DEFICIT_PCT,
+            "with the client's SURB budget the flapping outage hurt the data more than at a capped budget \
          on the same {mbit} Mbit/s uplink: {:.1}% back, longest stall {:.1}s (control: {:.1}%, \
          {:.1}s). Production went to the {budget:.0} SURB/s budget {episodes} times ({seconds:.1}s, \
          {degraded} of them degraded mode) — the flood queues the data and the replies behind it",
-        prod.arrival_pct(),
-        prod.longest_stall(),
-        ctl.arrival_pct(),
-        ctl.longest_stall(),
-    );
+            prod.arrival_pct(),
+            prod.longest_stall(),
+            ctl.arrival_pct(),
+            ctl.longest_stall(),
+        );
+    }
     // The loop, even when the data survives it.
     assert!(
         episodes <= MAX_BUDGET_EPISODES,
         "SURB production returned to the {budget:.0} SURB/s budget {episodes} times during one \
          {}s outage ({seconds:.1}s in total, {degraded} of them degraded mode) — each correction or \
          degraded episode feeds the congestion that causes the next",
-        FLAP_DURATION.as_secs(),
+        plan.duration.as_secs(),
     );
     Ok(())
 }
