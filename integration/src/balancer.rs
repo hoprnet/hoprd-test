@@ -23,6 +23,7 @@
 //! | [`BUFFER_TARGET`] | gauge | the setpoint (`target`) |
 //! | [`SURBS_PRODUCED`] | counter | SURBs handed to the sender, keep-alive and organic (`produced`) |
 //! | [`SURBS_CONSUMED`] | counter | reply packets received, one SURB each (`consumed`) |
+//! | [`LIFETIME_STATE`] | gauge | the session's lifecycle: Active=0, Closing=1, Closed=2 |
 //!
 //! The gauges exist only when `hopr-transport-session` is built with `telemetry` (edgli's
 //! `telemetry` feature turns it on) and only once a balancer has ticked. Absence is reported as
@@ -47,6 +48,14 @@ pub const BUFFER_TARGET: &str = "hopr_surb_balancer_current_buffer_target";
 pub const SURBS_PRODUCED: &str = "hopr_session_surb_produced_total";
 /// Reply packets received (each consumed one SURB at the counterparty).
 pub const SURBS_CONSUMED: &str = "hopr_session_surb_consumed_total";
+/// Session lifecycle state as the session manager sees it: Active=0, Closing=1, Closed=2.
+///
+/// What tells a session that is really gone from one whose handle was dropped while the manager
+/// (and its balancer) carry on: the latter stays Active.
+pub const LIFETIME_STATE: &str = "hopr_session_lifetime_state";
+
+/// [`LIFETIME_STATE`]'s value for a live session.
+pub const STATE_ACTIVE: f64 = 0.0;
 
 /// One session's balancer state at one instant. Every field is `None` when its family is absent.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
@@ -56,6 +65,8 @@ pub struct BalancerReading {
     pub output: Option<f64>,
     pub produced: Option<u64>,
     pub consumed: Option<u64>,
+    /// [`LIFETIME_STATE`], as reported by the session manager.
+    pub state: Option<f64>,
 }
 
 /// Every session's reading at one instant, keyed by the opaque `session_id` label.
@@ -82,6 +93,7 @@ pub fn parse(text: &str) -> Reading {
             BUFFER_TARGET,
             SURBS_PRODUCED,
             SURBS_CONSUMED,
+            LIFETIME_STATE,
         ]
         .contains(&name)
         {
@@ -103,6 +115,7 @@ pub fn parse(text: &str) -> Reading {
             BUFFER_TARGET => entry.target = Some(value),
             SURBS_PRODUCED => entry.produced = Some(value.max(0.0) as u64),
             SURBS_CONSUMED => entry.consumed = Some(value.max(0.0) as u64),
+            LIFETIME_STATE => entry.state = Some(value),
             _ => {}
         }
     }
@@ -275,6 +288,42 @@ impl Trace {
         Some(outputs.iter().filter(|&&o| o <= 0.0).count() as f64 / outputs.len() as f64)
     }
 
+    /// The session's lifecycle state at the last sample, `None` when the family is absent.
+    pub fn last_state(&self) -> Option<f64> {
+        self.samples.iter().rev().find_map(|s| s.reading.state)
+    }
+
+    /// Samples in which the controller had overwritten its level with 0 and was producing at
+    /// ≥95 % of `budget` — the signature of degraded mode (`sustain_on_return_path_loss`) in the
+    /// current controller, which is not exported as a metric of its own.
+    pub fn degraded_samples(&self, budget: f64) -> usize {
+        self.samples
+            .iter()
+            .filter(|s| {
+                s.reading.level == Some(0.0) && s.reading.output.is_some_and(|o| o >= 0.95 * budget)
+            })
+            .count()
+    }
+
+    /// Seconds spent with the control output at ≥95 % of `budget` (sample count × median spacing).
+    pub fn seconds_at_budget(&self, budget: f64) -> f64 {
+        let n = self
+            .samples
+            .iter()
+            .filter(|s| s.reading.output.is_some_and(|o| o >= 0.95 * budget))
+            .count();
+        let mut gaps: Vec<f64> = self
+            .samples
+            .windows(2)
+            .map(|w| (w[1].at - w[0].at).as_secs_f64())
+            .collect();
+        if gaps.is_empty() {
+            return 0.0;
+        }
+        gaps.sort_by(f64::total_cmp);
+        n as f64 * gaps[gaps.len() / 2]
+    }
+
     /// One line for the run log.
     pub fn summary(&self) -> String {
         if !self.observable() {
@@ -392,6 +441,8 @@ hopr_surb_balancer_current_buffer_estimate{session_id="a"} 0
 hopr_surb_balancer_current_buffer_target{session_id="a"} 9803
 hopr_session_surb_produced_total{session_id="a"} 120000
 hopr_session_surb_consumed_total{session_id="a"} 40000
+hopr_session_lifetime_state{session_id="a"} 0
+hopr_session_lifetime_state{session_id="b"} 2
 hopr_session_frame_timeout_ms{session_id="a"} 800
 hopr_packets_count{type="forwarded"} 5
 "#;
@@ -409,6 +460,8 @@ hopr_packets_count{type="forwarded"} 5
         assert_eq!(a.target, Some(9803.0));
         assert_eq!(a.produced, Some(120_000));
         assert_eq!(a.consumed, Some(40_000));
+        assert_eq!(a.state, Some(STATE_ACTIVE));
+        assert_eq!(r.0["b"].state, Some(2.0));
         assert_eq!(r.0["b"].output, Some(0.0));
         assert_eq!(
             r.0["b"].produced, None,
@@ -427,6 +480,7 @@ hopr_packets_count{type="forwarded"} 5
                 output: Some(output),
                 produced: Some(produced),
                 consumed: Some(consumed),
+                state: Some(STATE_ACTIVE),
             },
         );
         Reading(m)
@@ -452,6 +506,13 @@ hopr_packets_count{type="forwarded"} 5
         assert!(peak > 4500.0, "peak {peak}");
         assert!((t.share_output_at_least(4750.0).unwrap() - 10.0 / 101.0).abs() < 1e-9);
         assert!((t.consume_rate().unwrap() - 100.0).abs() < 1e-9);
+        assert!((t.seconds_at_budget(5000.0) - 1.0).abs() < 1e-6);
+        assert_eq!(
+            t.degraded_samples(5000.0),
+            10,
+            "level 0 at the budget reads as degraded"
+        );
+        assert_eq!(t.last_state(), Some(STATE_ACTIVE));
     }
 
     #[test]
