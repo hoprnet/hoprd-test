@@ -144,7 +144,8 @@ Gate on the channel status the exit reports, not on a sleep.
 ### S4 — Stale SURB backlog drains before a path change takes effect · **not implemented**
 
 _Isolates:_ #8328 FIFO vs LIFO pop order — the "a return-path change only takes effect
-after ~10 MB of stale backlog is consumed" half of the incident.
+after ~10 MB of stale backlog is consumed" half of the incident. v4 only: hoprnet#8473 made v5
+FIFO-only.
 
 _Setup:_ provision a large SURB buffer and let it fill (the session config already asks for
 a production-scale 10 MB / `always_max_out_surbs`), quiesce the reply stream so the backlog
