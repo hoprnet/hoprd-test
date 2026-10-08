@@ -718,6 +718,11 @@ async fn boot_edgli(
         }
     }
     extra_strategies.apply(&mut strat_cfg);
+    // Since edge-client#200, release/4.1 returns a `ReactorHandle` that carries the abort handle
+    // next to the strategy state; the v5 line (edge-client main) still returns the handle itself.
+    #[cfg(not(feature = "v5"))]
+    let reactor = edgli.run_reactor_from_cfg(strat_cfg)?.abort_handle;
+    #[cfg(feature = "v5")]
     let reactor = edgli.run_reactor_from_cfg(strat_cfg)?;
 
     // Require one channel *beyond* any pre-existing genesis channels, so the gate proves the
