@@ -126,12 +126,18 @@ if [ -n "${GITHUB_ENV:-}" ]; then
   } >>"${GITHUB_ENV}"
 fi
 
-# A merge-queue line reuses the green of a run with the same fingerprint, usually the PR's
-# `run-integration` run. The toolchain is left out on purpose: it is unpinned, so every run would miss.
-fingerprint_inputs="${LINE} $(git -C "${REPO_ROOT}" rev-parse 'HEAD^{tree}') ${HOPRD_SHA} ${EDGLI_SHA} ${BLOKLI_SHA}"
-IT_FINGERPRINT="$(sha256sum <<<"${fingerprint_inputs}" | cut -c1-16)"
-echo "  fingerprint  = ${IT_FINGERPRINT} (${fingerprint_inputs})"
-if [ "${GITHUB_EVENT_NAME:-}" = merge_group ]; then
+# A gating run reuses the green of a run with the same fingerprint, usually the PR's
+# `run-integration` run. Upstreams count by tree: their queue candidate is a new commit
+# with the PR head's tree. The toolchain is left out: it is unpinned, so every run would miss.
+tree_of() { gh api "repos/hoprnet/$1/commits/$2" --jq .commit.tree.sha 2>/dev/null || true; }
+upstream_trees="$(tree_of hoprd "${HOPRD_SHA}") $(tree_of edge-client "${EDGLI_SHA}") $(tree_of blokli "${BLOKLI_SHA}")"
+fingerprint_inputs="${LINE} $(git -C "${REPO_ROOT}" rev-parse 'HEAD^{tree}') ${upstream_trees}"
+IT_FINGERPRINT=""
+if [[ ${upstream_trees} =~ ^[0-9a-f]{40}\ [0-9a-f]{40}\ [0-9a-f]{40}$ ]]; then
+  IT_FINGERPRINT="$(sha256sum <<<"${fingerprint_inputs}" | cut -c1-16)"
+fi
+echo "  fingerprint  = ${IT_FINGERPRINT:-none} (${fingerprint_inputs})"
+if [ -n "${IT_FINGERPRINT}" ] && [[ ${GITHUB_EVENT_NAME:-} =~ ^(merge_group|repository_dispatch)$ ]]; then
   # Same-repo heads only: a fork PR runs its own workflow and could upload the marker untested.
   repo_id="$(gh api "repos/${GITHUB_REPOSITORY}" --jq .id 2>/dev/null || true)"
   passed_run="$(gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts?name=it-pass-${IT_FINGERPRINT}" \
@@ -143,7 +149,7 @@ if [ "${GITHUB_EVENT_NAME:-}" = merge_group ]; then
     exit 0
   fi
 fi
-if [ -n "${GITHUB_ENV:-}" ]; then
+if [ -n "${GITHUB_ENV:-}" ] && [ -n "${IT_FINGERPRINT}" ]; then
   echo "IT_FINGERPRINT=${IT_FINGERPRINT}" >>"${GITHUB_ENV}"
   echo "${fingerprint_inputs}" >"${REPO_ROOT}/it-pass.txt"
 fi
