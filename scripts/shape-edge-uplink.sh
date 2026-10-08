@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # Shape the in-process entry's (edgli's) uplink, so the entry's own link is the bottleneck the way
-# a laptop's Wi-Fi or home uplink is. Used by `surb_self_congestion::shaped_uplink_should_not_stall_downstream`.
+# a laptop's Wi-Fi or home uplink is. The SURB packets the entry sends then compete with its data
+# for that uplink, which is what the incident of 2026-09-24 looked like. Used by the two shaped
+# `surb_self_congestion` scenarios (`shaped_uplink_should_not_stall_downstream`,
+# `shaped_outage_should_not_loop`); they run 5 nodes, so pass port 19005.
 #
 # The whole cluster runs on loopback, so shaping the interface would slow every node. Only packets
 # whose UDP *source* port is edgli's P2P port are shaped: that is everything the entry sends (data,

@@ -112,11 +112,8 @@
 //!
 //! ```bash
 //! just surb-congestion                                       # the unshaped scenarios
-//! sudo bash scripts/shape-edge-uplink.sh up 8                # 3-node cluster: entry on 19003
-//! just surb-congestion shaped_uplink_should_not_stall_downstream
-//! sudo bash scripts/shape-edge-uplink.sh down
-//! sudo bash scripts/shape-edge-uplink.sh up 8 19005          # 5-node cluster: entry on 19005
-//! just surb-congestion shaped_outage_should_not_loop
+//! sudo bash scripts/shape-edge-uplink.sh up 16 19005         # 5-node cluster: entry on 19005
+//! just surb-congestion shaped_uplink_should_not_stall_downstream shaped_outage_should_not_loop
 //! sudo bash scripts/shape-edge-uplink.sh down
 //! ```
 //!
@@ -261,8 +258,10 @@ const AFTER_DROP: Duration = Duration::from_secs(15);
 /// SURBs a dropped session may still produce after [`DROP_GRACE`] — in-flight writes, not a loop.
 const MAX_SURBS_AFTER_DROP: u64 = 50;
 
-/// Nodes for the outage scenarios: 0-hop out / 1-hop back needs more than one return candidate.
-const OUTAGE_NODES: usize = 5;
+/// Nodes for every scenario. One size for all, so `just surb-congestion` can run them on one
+/// chain with frozen identities (a smaller cluster must not follow a bigger one on the same
+/// chain), and 0-hop out / 1-hop back needs more than one return candidate.
+const CLUSTER_NODES: usize = 5;
 
 /// Resumes paused relayers on drop, so an early return cannot leave SIGSTOPped `hoprd`s holding
 /// their ports (they ignore SIGTERM until continued). Same as `return_path.rs`'s guard.
@@ -310,6 +309,7 @@ fn require_observable(trace: &Trace, name: &str) -> anyhow::Result<()> {
 #[ignore = "requires hoprd/hoprd-localcluster binaries + a chain"]
 async fn surb_refills_should_track_consumption() -> anyhow::Result<()> {
     let cfg = gnosis_vpn_client_surb_config();
+    request_cluster_size(CLUSTER_NODES);
     let env = IntegrationEnv::setup().await?;
     // Sample from before the session exists, so the initial fill is in the trace too.
     let sampler = Sampler::start(SAMPLE_EVERY);
@@ -426,7 +426,7 @@ async fn warmed_outage_session(
     planner_refresh: Option<Duration>,
     plan: &OutagePlan,
 ) -> anyhow::Result<WarmedSession> {
-    let size = request_cluster_size(OUTAGE_NODES);
+    let size = request_cluster_size(CLUSTER_NODES);
     anyhow::ensure!(size >= 3, "outage scenarios need ≥3 nodes, got {size}");
     let env = match planner_refresh {
         Some(period) => IntegrationEnv::setup_with_planner_refresh(period).await?,
@@ -882,6 +882,8 @@ fn shaped_arm_configs() -> (SurbBalancerConfig, SurbBalancerConfig) {
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 #[ignore = "requires a shaped entry uplink (scripts/shape-edge-uplink.sh) + a chain"]
 async fn shaped_uplink_should_not_stall_downstream() -> anyhow::Result<()> {
+    // Before `shaped_uplink_mbit`: the entry's port, which the shaper must match, depends on it.
+    request_cluster_size(CLUSTER_NODES);
     let template = OutagePlan {
         pattern: Pattern::Down,
         relays: RelaysDown::AllButOne,
@@ -1104,7 +1106,7 @@ async fn flapping_arm(
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 #[ignore = "requires a shaped entry uplink (scripts/shape-edge-uplink.sh) + a chain"]
 async fn shaped_outage_should_not_loop() -> anyhow::Result<()> {
-    let size = request_cluster_size(OUTAGE_NODES);
+    let size = request_cluster_size(CLUSTER_NODES);
     anyhow::ensure!(size >= 3, "the shaped outage needs ≥3 nodes, got {size}");
     let default = OutagePlan {
         pattern: Pattern::Intermittent {

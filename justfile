@@ -98,10 +98,11 @@ return-path *scenarios: build build-chain
 # stalls of the 2026-09-24 incident. See integration/tests/surb_self_congestion.rs. Optional args =
 # test-name filters.
 #
-# One invocation PER SCENARIO, like `return-path`: most scenarios pause cluster nodes. The shaped
-# scenario runs only when `scripts/shape-edge-uplink.sh up <mbit>` has been run (its
-# state file supplies EDGE_UPLINK_SHAPED_MBIT / EDGE_UPLINK_PORT); otherwise it is left out of the
-# default list, and fails with instructions if named explicitly.
+# One invocation PER SCENARIO, like `return-path`: most scenarios pause cluster nodes. All of them
+# run 5 nodes, so they share one chain and the frozen identities stay warm across them. The two
+# shaped scenarios run only when `scripts/shape-edge-uplink.sh up <mbit> 19005` has been run (its
+# state file supplies EDGE_UPLINK_SHAPED_MBIT / EDGE_UPLINK_PORT); otherwise they are left out of
+# the default list, and fail with instructions if named explicitly.
 surb-congestion *scenarios: build build-chain
     #!/usr/bin/env bash
     set -euo pipefail
@@ -117,9 +118,14 @@ surb-congestion *scenarios: build build-chain
     scenarios='{{scenarios}}'
     if [ -z "${scenarios}" ]; then
       scenarios="$(list_scenarios surb_self_congestion)"
-      [ -n "${EDGE_UPLINK_SHAPED_MBIT:-}" ] ||
+      if [ -z "${EDGE_UPLINK_SHAPED_MBIT:-}" ]; then
         scenarios="${scenarios//shaped_uplink_should_not_stall_downstream/}"
+        scenarios="${scenarios//shaped_outage_should_not_loop/}"
+      fi
     fi
+    chain_start
+    trap chain_stop EXIT
+    export CHAIN_SHARED=1
     rc=0
     for scenario in ${scenarios}; do
       SCENARIOS="${scenario}" {{v5_deps}} bash scripts/integration/run-binchain.sh || rc=1
