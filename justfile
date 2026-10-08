@@ -113,7 +113,7 @@ surb-congestion *scenarios: build build-chain
     if [ -f "${state}" ]; then
       # shellcheck disable=SC1090
       source "${state}"
-      export EDGE_UPLINK_SHAPED_MBIT EDGE_UPLINK_PORT
+      export EDGE_UPLINK_SHAPED_MBIT EDGE_UPLINK_PORT EDGE_UPLINK_PORT_LAST
     fi
     scenarios='{{scenarios}}'
     if [ -z "${scenarios}" ]; then
