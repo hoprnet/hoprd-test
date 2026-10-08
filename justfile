@@ -98,7 +98,7 @@ return-path *scenarios: build build-chain
 # stalls of the 2026-09-24 incident. See integration/tests/surb_self_congestion.rs. Optional args =
 # test-name filters.
 #
-# One invocation PER SCENARIO, like `return-path`: two scenarios SIGSTOP cluster nodes. The shaped
+# One invocation PER SCENARIO, like `return-path`: most scenarios pause cluster nodes. The shaped
 # scenario runs only when `scripts/shape-edge-uplink.sh up <mbit>` has been run (its
 # state file supplies EDGE_UPLINK_SHAPED_MBIT / EDGE_UPLINK_PORT); otherwise it is left out of the
 # default list, and fails with instructions if named explicitly.

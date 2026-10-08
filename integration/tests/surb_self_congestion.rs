@@ -304,8 +304,8 @@ fn require_observable(trace: &Trace, name: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// 1. A steady, modest stream: does SURB production follow consumption, or swing between nothing
-///    and the full budget?
+/// 1. A bursty stream: does SURB production follow consumption, or swing between nothing and the
+///    full budget?
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 #[ignore = "requires hoprd/hoprd-localcluster binaries + a chain"]
 async fn surb_refills_should_track_consumption() -> anyhow::Result<()> {
