@@ -37,7 +37,20 @@ use crate::{
 /// always released by the time the next binds.
 fn edge_p2p_port() -> u16 {
     static BOOTS: std::sync::atomic::AtomicU16 = std::sync::atomic::AtomicU16::new(0);
-    P2P_PORT_BASE + cluster_size() as u16 + BOOTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    let port = P2P_PORT_BASE
+        + cluster_size() as u16
+        + BOOTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    LAST_EDGE_PORT.store(port, std::sync::atomic::Ordering::Relaxed);
+    port
+}
+
+static LAST_EDGE_PORT: std::sync::atomic::AtomicU16 = std::sync::atomic::AtomicU16::new(0);
+
+/// The P2P port of the `edgli` booted most recently by this test binary, or 0 before the first
+/// boot. A scenario that shapes the entry's uplink by source port checks it after each setup: every
+/// boot takes a new port, so a shaper covering only the first one leaves later entries unshaped.
+pub fn last_edge_p2p_port() -> u16 {
+    LAST_EDGE_PORT.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 /// The P2P port the *first* `edgli` booted by this test binary listens on.

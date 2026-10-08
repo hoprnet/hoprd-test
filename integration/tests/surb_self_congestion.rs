@@ -156,7 +156,7 @@ use hoprd_integration_test::{
     Address, HoprSession, IntegrationEnv,
     balancer::{STATE_ACTIVE, Sampler, Trace},
     cluster::{NodeInfo, request_cluster_size},
-    env::{first_edge_p2p_port, gnosis_vpn_client_surb_config},
+    env::{first_edge_p2p_port, gnosis_vpn_client_surb_config, last_edge_p2p_port},
     outage::{OutagePlan, Pattern, RelaysDown},
     pump::{
         PumpOpts, PumpOutcome, Shape, Transfer, drain_until_quiet, pace_for_rate_with_chunk,
@@ -846,15 +846,17 @@ fn shaped_uplink_mbit(data_mbps: f64) -> anyhow::Result<f64> {
                 first_edge_p2p_port(),
             )
         })?;
-    let port: u16 = std::env::var("EDGE_UPLINK_PORT")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or_default();
+    let (first, last) = shaped_ports();
     anyhow::ensure!(
-        port == first_edge_p2p_port(),
-        "the shaper is on port {port} but this binary's edgli will listen on {} — re-run the shaper \
-         with that port",
+        first == first_edge_p2p_port(),
+        "the shaper starts at port {first} but this binary's first edgli will listen on {} — re-run \
+         the shaper with that port",
         first_edge_p2p_port(),
+    );
+    anyhow::ensure!(
+        last > first,
+        "the shaper covers only port {first}, but every entry this binary boots takes the next \
+         port — re-run the shaper (it now covers a range of ports by default)",
     );
     let data_mbit = data_mbps * 8.0;
     anyhow::ensure!(
@@ -864,6 +866,26 @@ fn shaped_uplink_mbit(data_mbps: f64) -> anyhow::Result<f64> {
         2.0 * data_mbit,
     );
     Ok(mbit)
+}
+
+/// The shaped source ports, first and last (inclusive), from the shaper's state file.
+fn shaped_ports() -> (u16, u16) {
+    let read = |name: &str| std::env::var(name).ok().and_then(|v| v.parse::<u16>().ok());
+    let first = read("EDGE_UPLINK_PORT").unwrap_or_default();
+    (first, read("EDGE_UPLINK_PORT_LAST").unwrap_or(first))
+}
+
+/// Check that the entry booted last — the one this run is about to measure — sends through the
+/// shaper. Every boot takes the next port, so a run with a fresh entry is on a new port.
+fn require_shaped_entry(name: &str) -> anyhow::Result<()> {
+    let port = last_edge_p2p_port();
+    let (first, last) = shaped_ports();
+    anyhow::ensure!(
+        (first..=last).contains(&port),
+        "{name}: the entry listens on port {port}, outside the shaped ports {first}–{last}, so its \
+         uplink is not limited — re-run the shaper with more ports",
+    );
+    Ok(())
 }
 
 /// The client's balancer config, and the same capped to a sixth of its SURB upstream.
@@ -894,6 +916,7 @@ async fn shaped_uplink_should_not_stall_downstream() -> anyhow::Result<()> {
     let plan = OutagePlan::configure(None, template)?;
     let mbit = shaped_uplink_mbit(plan.map_or(OFFERED_MBPS, |p| p.load_mbps))?;
     let env = IntegrationEnv::setup().await?;
+    require_shaped_entry("shaped uplink")?;
     let (production, control) = shaped_arm_configs();
     if let Some(plan) = plan {
         tracing::info!("shaped uplink with a relay outage: {}", plan.describe());
@@ -1015,6 +1038,8 @@ async fn flapping_arm(
     plan: OutagePlan,
     keep_up: Option<&[Address]>,
 ) -> anyhow::Result<(Transfer, Trace, Vec<Address>)> {
+    // Each run gets a fresh entry on the next port: make sure the shaper covers it too.
+    require_shaped_entry(name)?;
     let (session, exit) = env
         .open_unreliable_session_with_surbs(0, 1, Some(cfg))
         .await?;
@@ -1145,7 +1170,15 @@ async fn shaped_outage_should_not_loop() -> anyhow::Result<()> {
         tokio::time::sleep(Duration::from_secs(5)).await;
         let (ctl, ctl_trace, _) = {
             let env = IntegrationEnv::setup().await?;
-            flapping_arm(&env, "control", CONTROL_PHASE, control, plan, Some(&prod_up)).await?
+            flapping_arm(
+                &env,
+                "control",
+                CONTROL_PHASE,
+                control,
+                plan,
+                Some(&prod_up),
+            )
+            .await?
         };
         ((ctl, ctl_trace), (prod, prod_trace))
     } else {
@@ -1156,8 +1189,15 @@ async fn shaped_outage_should_not_loop() -> anyhow::Result<()> {
         tokio::time::sleep(Duration::from_secs(5)).await;
         let (prod, prod_trace, _) = {
             let env = IntegrationEnv::setup().await?;
-            flapping_arm(&env, "production", PRODUCTION_PHASE, production, plan, Some(&ctl_up))
-                .await?
+            flapping_arm(
+                &env,
+                "production",
+                PRODUCTION_PHASE,
+                production,
+                plan,
+                Some(&ctl_up),
+            )
+            .await?
         };
         ((ctl, ctl_trace), (prod, prod_trace))
     };
