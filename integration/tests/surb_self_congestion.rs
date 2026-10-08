@@ -753,7 +753,8 @@ async fn shaped_arm(
     phase: u8,
     cfg: SurbBalancerConfig,
     plan: Option<OutagePlan>,
-) -> anyhow::Result<(Transfer, Trace)> {
+    keep_up: Option<&[Address]>,
+) -> anyhow::Result<(Transfer, Trace, Vec<Address>)> {
     let (session, exit) = env
         .open_unreliable_session_with_surbs(1, 1, Some(cfg))
         .await?;
@@ -764,17 +765,29 @@ async fn shaped_arm(
     let forwarded_before = relayers::sample(&candidates).await;
     let outage = async {
         let Some(plan) = plan else {
-            return anyhow::Ok(());
+            return anyhow::Ok(Vec::new());
         };
         tokio::time::sleep(SHAPED_OUTAGE_START).await;
         let spread = relayers::spread(&forwarded_before, &relayers::sample(&candidates).await);
-        let (down, up) = plan.pick(&candidates, &spread);
+        let (down, up) = match keep_up {
+            // Keep the same relays up as in the first run, so the two runs differ only in the
+            // SURB rate limit and not in which path survives the outage.
+            Some(keep) => (
+                candidates
+                    .iter()
+                    .filter(|n| !keep.contains(&n.address))
+                    .cloned()
+                    .collect::<Vec<_>>(),
+                keep.to_vec(),
+            ),
+            None => plan.pick(&candidates, &spread),
+        };
         anyhow::ensure!(!down.is_empty(), "{name}: the outage takes no relay down");
         tracing::info!(?up, "{name}: outage begins: {}", plan.describe());
         // Resumes the relays even if this future is dropped half-way.
         let _thawed = Thawed(&down);
         plan.run(&down).await?;
-        Ok(())
+        Ok(up)
     };
     let payload = tagged_payload(phase, bytes_for(load, ARM_DURATION));
     let (transfer, outage) = tokio::join!(
@@ -800,7 +813,7 @@ async fn shaped_arm(
         outage,
     );
     let transfer = transfer?;
-    outage?;
+    let up = outage?;
     // Close, not drop, so the next arm is not measured against this one's leftover balancer.
     let _ = tx.shutdown().await;
     drop(rx);
@@ -815,7 +828,7 @@ async fn shaped_arm(
         "{name}: the closed session kept minting ({leftover} SURBs in its last 3 s), so the arms \
          cannot be isolated — see dropping_a_session_should_stop_its_balancer",
     );
-    Ok((transfer, trace))
+    Ok((transfer, trace, up))
 }
 
 /// The entry uplink's shaped rate, after checking the shaper sits on this binary's entry port and
@@ -885,9 +898,17 @@ async fn shaped_uplink_should_not_stall_downstream() -> anyhow::Result<()> {
     }
 
     // Control first: if it leaks, it leaks at a sixth of the rate into the production arm.
-    let (ctl, ctl_trace) = shaped_arm(&env, "control", CONTROL_PHASE, control, plan).await?;
-    let (prod, prod_trace) =
-        shaped_arm(&env, "production", PRODUCTION_PHASE, production, plan).await?;
+    let (ctl, ctl_trace, ctl_up) =
+        shaped_arm(&env, "control", CONTROL_PHASE, control, plan, None).await?;
+    let (prod, prod_trace, _) = shaped_arm(
+        &env,
+        "production",
+        PRODUCTION_PHASE,
+        production,
+        plan,
+        Some(&ctl_up),
+    )
+    .await?;
     for (name, t, trace) in [
         ("control", &ctl, &ctl_trace),
         ("production", &prod, &prod_trace),
@@ -902,6 +923,31 @@ async fn shaped_uplink_should_not_stall_downstream() -> anyhow::Result<()> {
             "{}",
             trace.after(FILL_GRACE).summary(),
         );
+    }
+
+    // With an outage, fixed limits cannot be met by any run: compare the run with the full SURB
+    // rate limit against the control run under the same outage instead.
+    if let Some(plan) = plan {
+        anyhow::ensure!(
+            ctl.arrival_pct() > 50.0,
+            "inconclusive: the outage itself broke the path in the control run ({:.1}% arrived)",
+            ctl.arrival_pct(),
+        );
+        // A stall as long as the outage comes from the outage itself, not from the SURB rate.
+        let allowed_stall = ctl.longest_stall().max(plan.longest_down().as_secs_f64())
+            + MAX_SHAPED_STALL.as_secs_f64();
+        assert!(
+            prod.longest_stall() <= allowed_stall
+                && prod.arrival_pct() >= ctl.arrival_pct() - MAX_ARRIVAL_DEFICIT_PCT,
+            "on the same {mbit} Mbit/s uplink and the same outage, the session with the full SURB \
+             rate limit lost more data than the one with the lower limit: {:.1}% arrived, longest \
+             stall {:.1}s (allowed {allowed_stall:.1}s; lower limit: {:.1}%, {:.1}s)",
+            prod.arrival_pct(),
+            prod.longest_stall(),
+            ctl.arrival_pct(),
+            ctl.longest_stall(),
+        );
+        return Ok(());
     }
 
     anyhow::ensure!(
@@ -965,7 +1011,8 @@ async fn flapping_arm(
     phase: u8,
     cfg: SurbBalancerConfig,
     plan: OutagePlan,
-) -> anyhow::Result<(Transfer, Trace)> {
+    keep_up: Option<&[Address]>,
+) -> anyhow::Result<(Transfer, Trace, Vec<Address>)> {
     let (session, exit) = env
         .open_unreliable_session_with_surbs(0, 1, Some(cfg))
         .await?;
@@ -995,7 +1042,19 @@ async fn flapping_arm(
     );
     drain_until_quiet(&mut rx, DRAIN_QUIET, &format!("{name}-warmup")).await;
     let spread = relayers::spread(&forwarded_before, &relayers::sample(&candidates).await);
-    let (down, up) = plan.pick(&candidates, &spread);
+    let (down, up) = match keep_up {
+        // Keep the same relays up as in the first run, so the two runs differ only in the SURB
+        // rate limit and not in which return path survives the outage.
+        Some(keep) => (
+            candidates
+                .iter()
+                .filter(|n| !keep.contains(&n.address))
+                .cloned()
+                .collect::<Vec<_>>(),
+            keep.to_vec(),
+        ),
+        None => plan.pick(&candidates, &spread),
+    };
     anyhow::ensure!(!down.is_empty(), "{name}: the outage takes no relay down");
 
     let thawed = Thawed(&down);
@@ -1036,7 +1095,7 @@ async fn flapping_arm(
         "{name}: {}",
         plan.describe(),
     );
-    Ok((transfer, trace.window(outage_from, outage_to)))
+    Ok((transfer, trace.window(outage_from, outage_to), up))
 }
 
 /// 6. The feedback loop: on a shaped uplink, with return relays going down intermittently, does the
@@ -1066,14 +1125,39 @@ async fn shaped_outage_should_not_loop() -> anyhow::Result<()> {
     // A fresh entry per arm: the planner's weights and re-plan cooldowns live in the entry, and the
     // 2026-10-07 run showed the control arm's re-plan leaving the production arm's re-plans with
     // nothing to move (`entries=0`), so it never reached degraded mode at all.
-    let (ctl, ctl_trace) = {
-        let env = IntegrationEnv::setup().await?;
-        flapping_arm(&env, "control", CONTROL_PHASE, control, plan).await?
+    // `SURB_RUN_ORDER=full-first` runs the full rate limit first, to tell an effect of the rate
+    // limit apart from an effect of running second on relays that were just paused and resumed.
+    let full_first = match std::env::var("SURB_RUN_ORDER").as_deref() {
+        Err(_) | Ok("") | Ok("control-first") => false,
+        Ok("full-first") => true,
+        Ok(other) => anyhow::bail!(
+            "SURB_RUN_ORDER={other}: expected `control-first` (default) or `full-first`"
+        ),
     };
-    tokio::time::sleep(Duration::from_secs(5)).await;
-    let (prod, prod_trace) = {
-        let env = IntegrationEnv::setup().await?;
-        flapping_arm(&env, "production", PRODUCTION_PHASE, production, plan).await?
+    tracing::info!(full_first, "shaped outage: run order");
+    let ((ctl, ctl_trace), (prod, prod_trace)) = if full_first {
+        let (prod, prod_trace, prod_up) = {
+            let env = IntegrationEnv::setup().await?;
+            flapping_arm(&env, "production", PRODUCTION_PHASE, production, plan, None).await?
+        };
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        let (ctl, ctl_trace, _) = {
+            let env = IntegrationEnv::setup().await?;
+            flapping_arm(&env, "control", CONTROL_PHASE, control, plan, Some(&prod_up)).await?
+        };
+        ((ctl, ctl_trace), (prod, prod_trace))
+    } else {
+        let (ctl, ctl_trace, ctl_up) = {
+            let env = IntegrationEnv::setup().await?;
+            flapping_arm(&env, "control", CONTROL_PHASE, control, plan, None).await?
+        };
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        let (prod, prod_trace, _) = {
+            let env = IntegrationEnv::setup().await?;
+            flapping_arm(&env, "production", PRODUCTION_PHASE, production, plan, Some(&ctl_up))
+                .await?
+        };
+        ((ctl, ctl_trace), (prod, prod_trace))
     };
 
     let ctl_budget = control.max_surbs_per_sec as f64;
@@ -1108,13 +1192,18 @@ async fn shaped_outage_should_not_loop() -> anyhow::Result<()> {
             "shaped outage: the outage itself broke the path; harm is not compared, only the loop"
         );
     } else {
+        // A stall as long as one down period comes from the outage itself, in both runs, so it
+        // is not counted as harm; only a stall longer than both is.
+        let allowed_stall = ctl.longest_stall().max(plan.longest_down().as_secs_f64())
+            + MAX_EXTRA_STALL.as_secs_f64();
         assert!(
-            prod.longest_stall() <= ctl.longest_stall() + MAX_EXTRA_STALL.as_secs_f64()
+            prod.longest_stall() <= allowed_stall
                 && prod.arrival_pct() >= ctl.arrival_pct() - MAX_ARRIVAL_DEFICIT_PCT,
-            "with the client's SURB budget the flapping outage hurt the data more than at a capped budget \
-         on the same {mbit} Mbit/s uplink: {:.1}% back, longest stall {:.1}s (control: {:.1}%, \
-         {:.1}s). Production went to the {budget:.0} SURB/s budget {episodes} times ({seconds:.1}s, \
-         {degraded} of them degraded mode) — the flood queues the data and the replies behind it",
+            "on the same {mbit} Mbit/s uplink and the same outage, the session with the full SURB \
+             rate limit lost more data than the one with the lower limit: {:.1}% arrived, longest \
+             stall {:.1}s (allowed {allowed_stall:.1}s; lower limit: {:.1}%, {:.1}s). SURB output \
+             reached the {budget:.0} SURB/s rate limit {episodes} times ({seconds:.1}s, \
+             {degraded} of them in degraded mode); the extra SURB packets delay the data on the uplink",
             prod.arrival_pct(),
             prod.longest_stall(),
             ctl.arrival_pct(),
