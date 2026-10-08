@@ -83,6 +83,10 @@ return-path *scenarios: build build-chain
     export TEST_TARGET=return_path HOPRNET_SHELL='{{hoprnet}}'
     scenarios='{{scenarios}}'
     [ -n "${scenarios}" ] || scenarios="$(list_scenarios return_path)"
+    # One chain for every scenario: all run 5 nodes, so frozen identities stay warm across them.
+    chain_start
+    trap chain_stop EXIT
+    export CHAIN_SHARED=1
     rc=0
     for scenario in ${scenarios}; do
       SCENARIOS="${scenario}" {{v5_deps}} bash scripts/integration/run-binchain.sh || rc=1

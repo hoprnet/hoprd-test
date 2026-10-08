@@ -32,6 +32,7 @@
           programs.taplo.enable = true;
           programs.yamlfmt.enable = true;
           programs.prettier.enable = true;
+          programs.rustfmt.enable = true;
 
           settings.global.excludes = [
             "*.lock"

@@ -321,8 +321,8 @@ in-flight run rather than cancelling it.
 
 ### What the gate runs
 
-Every scenario whose verdict is trustworthy, on every run — 3 on v4, 5 on v5, each with
-its own fresh chain, ~17 min of test time on v4 (~35 min including build):
+Every scenario whose verdict is trustworthy, on every run — 3 on v4, 5 on v5, on one chain
+shared by every suite, ~17 min of test time on v4 (~35 min including build):
 
 | Suite              | Scenarios                                  | Line |
 | ------------------ | ------------------------------------------ | ---- |
