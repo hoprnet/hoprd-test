@@ -97,6 +97,13 @@ No versions are stored. The project that triggered the run supplies its rev, and
 is the current head of its branch on the line. `run.sh` builds hoprd, localcluster and the blokli
 chain, pins `edgli`, runs each suite, and reports failures to Zulip with the versions that ran.
 
+A green run records a fingerprint per line. The fingerprint covers the tests tree and the hoprd,
+edge-client and blokli trees (trees, not commits: an upstream queue candidate is a new commit with
+the PR head's tree). When a merge queue, this repo's or an upstream's dispatch, sees a fingerprint
+that already passed in a run of the last 7 days, it skips that line. Usually that earlier run is the
+PR's `run-integration` run. If main or any upstream branch moved, the queue batched other PRs, or a
+companion PR merged, the fingerprint changes and the line runs again.
+
 ### How edgli gets pinned
 
 `scripts/integration/lib.sh pin_line_deps` resolves the edge-client ref: a companion PR head if
