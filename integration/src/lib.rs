@@ -16,9 +16,15 @@
 //!   `HOPRD_CHAIN_URL` (a chain from `scripts/integration/lib.sh chain_up`).
 //! - **External**: set `HOPRD_CLUSTER_DATA_DIR` (+ `HOPRD_LOCALCLUSTER_BIN`).
 
+// Ungated for the same reason as `pix`: the trace arithmetic is plain code with unit tests that
+// should run in the default `cargo test --lib`.
+pub mod balancer;
 pub mod cluster;
 pub mod env;
 pub mod origination;
+// Ungated: the outage plan is parsing and selection with unit tests for the default
+// `cargo test --lib`; only `run` needs a unix cluster.
+pub mod outage;
 // Ungated on purpose, though only `tests/pix.rs` drives it: the balance and counter readers are
 // plain parsers, and gating them would keep the subtlest logic in this crate — absent-vs-zero,
 // whole-multiple reconciliation — out of the v4 `cargo test --lib` that CI runs. Only the parts

@@ -37,7 +37,55 @@ use crate::{
 /// always released by the time the next binds.
 fn edge_p2p_port() -> u16 {
     static BOOTS: std::sync::atomic::AtomicU16 = std::sync::atomic::AtomicU16::new(0);
-    P2P_PORT_BASE + cluster_size() as u16 + BOOTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    let port = P2P_PORT_BASE
+        + cluster_size() as u16
+        + BOOTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    LAST_EDGE_PORT.store(port, std::sync::atomic::Ordering::Relaxed);
+    port
+}
+
+static LAST_EDGE_PORT: std::sync::atomic::AtomicU16 = std::sync::atomic::AtomicU16::new(0);
+
+/// The P2P port of the `edgli` booted most recently by this test binary, or 0 before the first
+/// boot. A scenario that shapes the entry's uplink by source port checks it after each setup: every
+/// boot takes a new port, so a shaper covering only the first one leaves later entries unshaped.
+pub fn last_edge_p2p_port() -> u16 {
+    LAST_EDGE_PORT.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// The P2P port the *first* `edgli` booted by this test binary listens on.
+///
+/// Every later boot takes the next port (see [`edge_p2p_port`]). A scenario that shapes the entry's
+/// uplink by source port (`scripts/shape-edge-uplink.sh`) boots one `edgli` and checks the shaper
+/// was pointed at this port, so a shaper aimed at the wrong port cannot read as a pass.
+pub fn first_edge_p2p_port() -> u16 {
+    P2P_PORT_BASE + cluster_size() as u16
+}
+
+/// The SURB balancer of `gnosis_vpn-client`'s main (WG) data session, as the throughput tests run
+/// it: 10 MB response buffer, 16 Mb/s SURB upstream, every other field at its default.
+///
+/// `to_surb_balancer_config` in gnosis_vpn-lib derives `target_surb_buffer_size` and
+/// `max_surbs_per_sec` from the same formulas, but since v0.96.0 it also sets
+/// `sustain_on_return_path_loss: true` (GNO-713). That field turns a return-path outage into
+/// production pinned at `max_surbs_per_sec`, so it stays off here to keep the existing scenarios'
+/// baseline unchanged; [`gnosis_vpn_client_surb_config`] is the faithful copy.
+pub fn gnosis_main_surb_config() -> SurbBalancerConfig {
+    SurbBalancerConfig {
+        target_surb_buffer_size: 10_000_000 / SESSION_MTU as u64,
+        max_surbs_per_sec: 16_000_000 / (8 * SURB_SIZE as u64),
+        ..SurbBalancerConfig::default()
+    }
+}
+
+/// The main-session SURB balancer exactly as `gnosis_vpn-client` v0.96.x ships it:
+/// [`gnosis_main_surb_config`] plus `sustain_on_return_path_loss: true`, as printed in v0.96.0 and
+/// v0.96.3 client logs.
+pub fn gnosis_vpn_client_surb_config() -> SurbBalancerConfig {
+    SurbBalancerConfig {
+        sustain_on_return_path_loss: true,
+        ..gnosis_main_surb_config()
+    }
 }
 
 /// Strategies appended to the channel-lifecycle one `default_strategy_cfg` yields.
@@ -157,6 +205,24 @@ impl IntegrationEnv {
     /// Bring up the local cluster, boot Edgli on the pre-funded extra identity, start
     /// the channel strategy, and wait until at least one outgoing channel is open.
     pub async fn setup() -> anyhow::Result<Self> {
+        Self::setup_tuned(NetTuning::local()).await
+    }
+
+    /// As [`Self::setup`], but the entry's path planner re-weights its cached paths only every
+    /// `period` (default 5 s, cache TTL 10 s).
+    ///
+    /// Re-weighting reads the same SURB round-trip telemetry as the return-path degradation
+    /// detector and, in a small cluster with a healthy alternative relayer, moves minting off a
+    /// dead relayer within one refresh — before the detector's five silent flushes. Slowing it
+    /// models a network where the alternatives look no better, so the detector gets to act.
+    pub async fn setup_with_planner_refresh(period: Duration) -> anyhow::Result<Self> {
+        let mut tuning = NetTuning::local();
+        tuning.path_planner.refresh_period = period;
+        tuning.path_planner.cache_ttl = tuning.path_planner.cache_ttl.max(2 * period);
+        Self::setup_tuned(tuning).await
+    }
+
+    async fn setup_tuned(tuning: NetTuning) -> anyhow::Result<Self> {
         let cluster = cluster::bring_up_shared().await?;
         let summary = cluster.summary.clone();
         let extra = summary.extras[0].clone();
@@ -164,7 +230,7 @@ impl IntegrationEnv {
         let (edgli, reactor) = boot_edgli(
             &summary.blokli_url,
             &extra,
-            &NetTuning::local(),
+            &tuning,
             cluster_size(),
             ExtraStrategies::default(),
         )
@@ -352,6 +418,26 @@ impl IntegrationEnv {
         return_hops: usize,
         balance_surbs: bool,
     ) -> anyhow::Result<(HoprSession, Address)> {
+        self.open_unreliable_session_with_surbs(
+            forward_hops,
+            return_hops,
+            balance_surbs.then(gnosis_main_surb_config),
+        )
+        .await
+    }
+
+    /// As [`Self::open_unreliable_session_paths`], but with the entry-side SURB balancer stated in
+    /// full (`None` disables it), so a scenario can run the exact balancer a client ships — see
+    /// [`gnosis_vpn_client_surb_config`] — or vary one field of it.
+    ///
+    /// Bypasses the PIX redirect of [`Self::open_unreliable_session_paths`] on purpose: a scenario
+    /// that names its balancer is measuring that balancer, not PIX.
+    pub async fn open_unreliable_session_with_surbs(
+        &self,
+        forward_hops: usize,
+        return_hops: usize,
+        surb_management: Option<SurbBalancerConfig>,
+    ) -> anyhow::Result<(HoprSession, Address)> {
         let dest = self.dest_for(forward_hops)?;
         let (session, _) = self
             .edgli
@@ -370,22 +456,8 @@ impl IntegrationEnv {
                     always_max_out_surbs: true,
                     // gnosis documents `true` as 2 SURBs per packet and `false` as 1.
                     #[cfg(feature = "v5")]
-                    max_surbs_per_data_packet: if balance_surbs { 2 } else { 1 },
-                    surb_management: balance_surbs.then_some(SurbBalancerConfig {
-                        // gnosis main: 10 MB response buffer, 16 Mb/s SURB upstream.
-                        target_surb_buffer_size: 10_000_000 / SESSION_MTU as u64,
-                        max_surbs_per_sec: 16_000_000 / (8 * SURB_SIZE as u64),
-                        // Everything else stays at the default, because that is what the client
-                        // does: `to_surb_balancer_config` in gnosis_vpn-lib sets exactly these two
-                        // fields from the same formulas and then `..Default::default()`.
-                        //
-                        // In particular `sustain_on_return_path_loss` is left off. It was set here
-                        // once, on the reasoning that a lost return relayer reads as a well-stocked
-                        // exit because consumption is only observed when a reply gets home. That may
-                        // be true, but no client sets it, so a scenario that did was measuring a
-                        // configuration nobody runs.
-                        ..SurbBalancerConfig::default()
-                    }),
+                    max_surbs_per_data_packet: if surb_management.is_some() { 2 } else { 1 },
+                    surb_management,
                     ..Default::default()
                 },
             )
@@ -659,6 +731,11 @@ async fn boot_edgli(
         }
     }
     extra_strategies.apply(&mut strat_cfg);
+    // Since edge-client#200, release/4.1 returns a `ReactorHandle` that carries the abort handle
+    // next to the strategy state; the v5 line (edge-client main) still returns the handle itself.
+    #[cfg(not(feature = "v5"))]
+    let reactor = edgli.run_reactor_from_cfg(strat_cfg)?.abort_handle;
+    #[cfg(feature = "v5")]
     let reactor = edgli.run_reactor_from_cfg(strat_cfg)?;
     // edge-client release/4.1 wraps the handle in `ReactorHandle` (#200); main does not yet.
     #[cfg(not(feature = "v5"))]

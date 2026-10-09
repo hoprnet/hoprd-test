@@ -93,6 +93,45 @@ return-path *scenarios: build build-chain
     done
     exit "${rc}"
 
+# SURB self-congestion (binary chain): refill bursts, degraded-mode production pinned at the budget,
+# a dropped session's balancer outliving it, and -- with the entry uplink shaped -- the downlink
+# stalls of the 2026-09-24 incident. See integration/tests/surb_self_congestion.rs. Optional args =
+# test-name filters.
+#
+# One invocation PER SCENARIO, like `return-path`: most scenarios pause cluster nodes. All of them
+# run 5 nodes, so they share one chain and the frozen identities stay warm across them. The two
+# shaped scenarios run only when `scripts/shape-edge-uplink.sh up <mbit> 19005` has been run (its
+# state file supplies EDGE_UPLINK_SHAPED_MBIT / EDGE_UPLINK_PORT); otherwise they are left out of
+# the default list, and fail with instructions if named explicitly.
+surb-congestion *scenarios: build build-chain
+    #!/usr/bin/env bash
+    set -euo pipefail
+    source scripts/integration/lib.sh
+    it_env
+    export TEST_TARGET=surb_self_congestion HOPRNET_SHELL='{{hoprnet}}'
+    state=/tmp/hopr-it-edge-uplink.env
+    if [ -f "${state}" ]; then
+      # shellcheck disable=SC1090
+      source "${state}"
+      export EDGE_UPLINK_SHAPED_MBIT EDGE_UPLINK_PORT EDGE_UPLINK_PORT_LAST
+    fi
+    scenarios='{{scenarios}}'
+    if [ -z "${scenarios}" ]; then
+      scenarios="$(list_scenarios surb_self_congestion)"
+      if [ -z "${EDGE_UPLINK_SHAPED_MBIT:-}" ]; then
+        scenarios="${scenarios//shaped_uplink_should_not_stall_downstream/}"
+        scenarios="${scenarios//shaped_outage_should_not_loop/}"
+      fi
+    fi
+    chain_start
+    trap chain_stop EXIT
+    export CHAIN_SHARED=1
+    rc=0
+    for scenario in ${scenarios}; do
+      SCENARIOS="${scenario}" {{v5_deps}} bash scripts/integration/run-binchain.sh || rc=1
+    done
+    exit "${rc}"
+
 # Exit-origination repro (binary chain): does the exit keep originating packets when
 # one of its return paths can never be resolved? See integration/tests/exit_origination.rs.
 exit-origination: build build-chain
